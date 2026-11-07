@@ -28,6 +28,24 @@ DATA_DIRECTORIES = (
 )
 
 
+def _handoff_container_pipes() -> None:
+    """Let the non-root Supervisor reopen Docker stdout/stderr via ``/dev/fd``.
+
+    Container runtimes normally create these descriptors for the configured
+    process user.  During the root-only fresh-volume bootstrap they can instead
+    be root-owned anonymous pipes.  Only pipe descriptors are changed: regular
+    files supplied through shell redirection are intentionally never touched.
+    """
+
+    for descriptor in (1, 2):
+        try:
+            descriptor_mode = os.fstat(descriptor).st_mode
+        except OSError:
+            continue
+        if stat.S_ISFIFO(descriptor_mode):
+            os.fchown(descriptor, APP_UID, APP_GID)
+
+
 def _ensure_real_directory(path: Path, *, may_change_owner: bool) -> None:
     """Create and own one directory without following a volume-provided symlink."""
 
@@ -59,6 +77,7 @@ def main() -> None:
         )
 
     if may_change_owner:
+        _handoff_container_pipes()
         os.setgroups([])
         os.setgid(APP_GID)
         os.setuid(APP_UID)
