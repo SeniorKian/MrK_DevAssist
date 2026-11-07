@@ -166,13 +166,14 @@ jobs:
           python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
           python -m pip download --no-deps --dest /tmp/pypi-online
           --index-url http://mrk-ci:3141/root/pypi/+simple/
+          --trusted-host mrk-ci
           sampleproject==4.0.0
       - run: >-
           docker run --rm --network mrk-ci-online
           --mount type=bind,source=${{ github.workspace }}/tests/e2e/pypi-clients.sh,target=/test.sh,readonly
           python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
           /bin/sh /test.sh
-          http://mrk-ci:3141/root/pypi/+simple/
+          http://mrk-ci:3141/root/pypi/+simple/ mrk-ci
       - name: Bounded control-plane load gate
         run: >-
           docker run --rm --network mrk-ci-online
@@ -200,7 +201,7 @@ jobs:
           python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
           python -m pip download --no-deps --dest /tmp/pypi-offline
           --index-url http://mrk-ci:3141/root/pypi/+simple/
-          --retries 0 --timeout 10 sampleproject==4.0.0
+          --trusted-host mrk-ci --retries 0 --timeout 10 sampleproject==4.0.0
       - if: always()
         continue-on-error: true
         run: docker logs mrk-ci
