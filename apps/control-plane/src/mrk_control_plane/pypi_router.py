@@ -62,6 +62,17 @@ class RouterSettings:
 
     @classmethod
     def from_env(cls) -> RouterSettings:
+        environment = os.getenv("MRK_ENV", "development").strip().lower()
+        configured_data_dir = os.getenv("MRK_DATA_DIR", "").strip()
+        data_dir = (
+            Path(configured_data_dir).resolve()
+            if configured_data_dir
+            else (
+                Path("/data")
+                if environment == "production"
+                else (Path.cwd() / ".data").resolve()
+            )
+        )
         primary = _normalized_simple_url(
             os.getenv("MRK_PYPI_PRIMARY_UPSTREAM", "https://pypi.org/simple/")
         )
@@ -89,16 +100,16 @@ class RouterSettings:
             offline_file=Path(
                 os.getenv(
                     "MRK_PYPI_OFFLINE_FILE",
-                    "/data/control-plane/pypi-offline",
+                    str(data_dir / "control-plane" / "pypi-offline"),
                 )
             ).resolve(),
             config_file=Path(
                 os.getenv(
                     "MRK_UPSTREAM_CONFIG_FILE",
-                    "/data/control-plane/upstreams.json",
+                    str(data_dir / "control-plane" / "upstreams.json"),
                 )
             ).resolve(),
-            data_dir=Path(os.getenv("MRK_DATA_DIR", "/data")).resolve(),
+            data_dir=data_dir,
             connect_timeout=float(os.getenv("MRK_PYPI_ROUTER_CONNECT_TIMEOUT", "3")),
             read_timeout=float(os.getenv("MRK_PYPI_ROUTER_READ_TIMEOUT", "90")),
             failure_threshold=int(os.getenv("MRK_PYPI_ROUTER_FAILURE_THRESHOLD", "2")),

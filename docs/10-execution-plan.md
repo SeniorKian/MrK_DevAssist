@@ -261,7 +261,7 @@ API و UI skeleton قابل build، Docker Appliance skeleton با یک bind mou
 - mutation npm فقط process Verdaccio را از socket محلی Supervisor reload می‌کند؛ offline mode با حذف proxyها واقعاً cache/private-only است.
 - ویرایش نام/URL/priority/timeout/enabled و حذف با typed confirmation در API و پنل کامل است؛ حذف یا غیرفعال‌سازی آخرین upstream فعال فقط پس از ورود صریح ecosystem به offline mode مجاز است.
 - migration `20261107_0003` روی rehearsal تا `0001` downgrade و دوباره تا head upgrade شد و داده Owner حفظ شد.
-- build TypeScript، ۵۱ تست کامل backend و Ruff همگی موفق‌اند.
+- build TypeScript، ۵۲ تست کامل backend و Ruff همگی موفق‌اند.
 
 ## Gate 7 — Package/Cache Admin
 
@@ -288,7 +288,7 @@ API و UI skeleton قابل build، Docker Appliance skeleton با یک bind mou
 - یک package واقعی npm publish و یک wheel واقعی PyPI upload شد؛ هر موتور متوقف و با همان storage دوباره اجرا شد و دریافت با cache خالی client و بدون هیچ upstream خارجی موفق بود.
 - catalog کنترل‌پلین هر دو artifact واقعی را با ecosystemهای `npm` و `pypi` کشف کرد.
 - harness در CI به job مستقل `engine-e2e` اضافه شد و build image به موفقیت آن وابسته است؛ diagnostics شکست نیز artifact می‌شود.
-- ۵۱ تست backend، Ruff، release validator، inventory مجوز ۵۶۱ dependency و migration rehearsal همگی پاس هستند.
+- ۵۲ تست backend، Ruff، release validator، inventory مجوز ۵۶۱ dependency و migration rehearsal همگی پاس هستند.
 - اعتبارسنجی نهایی داخل image تک‌کانتینری در job `image-build` موجود است و اجرای محلی مجدد آن به daemon Docker وابسته است؛ این مورد blocker Gate 10 است، نه Gate 7.
 
 ## Gate 8 — Operations Visibility
@@ -355,7 +355,7 @@ API و UI skeleton قابل build، Docker Appliance skeleton با یک bind mou
 - First Time Setup بدون رمز یا کد از پیش‌ساخته، فقط هنگام خالی بودن جدول کاربران فعال است و ساخت Owner با claim یکتای دیتابیسی اتمیک شده است.
 - ثبت‌نام عمومی پیش‌فرض بسته و از پنل Access Control قابل فعال/غیرفعال‌سازی است؛ نقش ثبت‌نام عمومی به‌صورت fail-closed فقط `viewer` است.
 - UI احراز هویت دوزبانه و RTL بازطراحی و feature panelها lazy-loaded شدند؛ build اصلی از حدود ۶۳۵KB به حدود ۴۰۷KB کاهش یافت.
-- ۵۱ تست کامل Python، Ruff، build TypeScript و smoke واقعی PGlite موفق‌اند.
+- ۵۲ تست کامل Python، Ruff، build TypeScript و smoke واقعی PGlite موفق‌اند.
 
 ### گزارش میانی Gate 10 — 2026-11-07
 
@@ -366,9 +366,9 @@ API و UI skeleton قابل build، Docker Appliance skeleton با یک bind mou
 - load محلی ۳۰ ثانیه‌ای با ۳۶٬۴۴۸ request، نرخ ۱٬۲۱۴٫۶۲ درخواست/ثانیه، p95 برابر ۸٫۲۱۱ms و error rate برابر ۰٫۰۰۰۰۲۷ پاس شد.
 - downgrade/upgrade `20261107_0003 → 0001 → 0003` داده Owner را حفظ کرد؛ restore آفلاین PGlite نیز با head فعلی پاس شده است.
 - موتور Docker Desktop محلی به `docker version` پاسخ نداد؛ build واقعی image بدون restart یا دست‌کاری daemon باز مانده است. هیچ deploy روی Dokploy انجام نشده است.
-- Starlette TestClient به `httpx2 2.16.0` منتقل شد و ۵۱ تست بدون deprecation warning پاس شدند؛ `httpx 0.28.1` فقط برای درخواست‌های runtime باقی مانده است.
+- Starlette TestClient به `httpx2 2.16.0` منتقل شد و ۵۲ تست بدون deprecation warning پاس شدند؛ `httpx 0.28.1` فقط برای درخواست‌های runtime باقی مانده است.
 - برای profile سخت‌گیرانه، کلید AES credentialهای upstream می‌تواند از فایل secret خارجی ۳۲‌بایتی و فقط‌خواندنی خوانده شود؛ نبود/خرابی فایل fail-closed است و برنامه آن را ایجاد یا overwrite نمی‌کند.
-- مسیر پیش‌فرض داده در production همچنان `/data` است، اما اجرای source/development بدون env از `.data` داخل workspace استفاده می‌کند تا import و تست روی runner غیرroot به filesystem ریشه نیاز نداشته باشد.
+- مسیر پیش‌فرض داده در production برای control plane و PyPI router همچنان `/data` است، اما اجرای source/development بدون env از `.data` داخل workspace استفاده می‌کند تا import و تست روی runner غیرroot به filesystem ریشه نیاز نداشته باشد.
 
 ## قالب گزارش بعد از هر Gate
 

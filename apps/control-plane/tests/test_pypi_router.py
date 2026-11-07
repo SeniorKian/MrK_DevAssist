@@ -26,6 +26,25 @@ from mrk_control_plane.pypi_router import (
 from mrk_control_plane.secret_store import SecretStore
 
 
+def test_router_development_defaults_are_workspace_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MRK_ENV", "development")
+    for name in (
+        "MRK_DATA_DIR",
+        "MRK_PYPI_OFFLINE_FILE",
+        "MRK_UPSTREAM_CONFIG_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = RouterSettings.from_env()
+
+    assert settings.data_dir == tmp_path / ".data"
+    assert settings.offline_file == tmp_path / ".data/control-plane/pypi-offline"
+    assert settings.config_file == tmp_path / ".data/control-plane/upstreams.json"
+
+
 def _settings(tmp_path: Path) -> RouterSettings:
     return RouterSettings(
         upstreams=(
