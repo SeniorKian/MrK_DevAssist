@@ -1,0 +1,13 @@
+{
+  "name": "mrk-verdaccio-runtime",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pinned Verdaccio runtime for the MRK appliance",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "verdaccio": "6.11.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

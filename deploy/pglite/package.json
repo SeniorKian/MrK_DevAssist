@@ -1,0 +1,14 @@
+{
+  "name": "@mrk/embedded-database",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pinned PGlite runtime for the single-node MRK appliance",
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@electric-sql/pglite-socket": "0.2.11"
+  },
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
+  }
+}

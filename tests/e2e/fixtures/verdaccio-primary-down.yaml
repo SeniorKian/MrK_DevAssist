@@ -1,0 +1,40 @@
+storage: /data/npm/storage
+auth:
+  htpasswd:
+    file: /data/npm/auth/htpasswd
+    max_users: -1
+uplinks:
+  primary_down:
+    url: http://127.0.0.1:9/
+    timeout: 500ms
+    max_fails: 1
+    fail_timeout: 1m
+    cache: true
+  liara:
+    url: https://package-mirror.liara.ir/repository/npm/
+    timeout: 10s
+    max_fails: 1
+    fail_timeout: 1m
+    cache: true
+    strict_ssl: true
+packages:
+  '@*/*':
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+    proxy: primary_down liara
+  '**':
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+    proxy: primary_down liara
+web:
+  enable: false
+security:
+  api:
+    legacy: false
+listen: 0.0.0.0:4873
+log:
+  type: stdout
+  format: json
+  level: http

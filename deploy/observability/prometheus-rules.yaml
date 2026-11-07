@@ -1,0 +1,48 @@
+groups:
+  - name: mrk-package-mirror
+    interval: 30s
+    rules:
+      - alert: MrkPackageMirrorDown
+        expr: up{job="mrk-package-mirror"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: MRK Package Mirror is unreachable
+          runbook: docs/18-operations-runbooks.md#service-down
+
+      - alert: MrkRegistryUnavailable
+        expr: mrk_component_ready{component=~"npm_registry|pypi_registry"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A configured package registry is not ready
+          runbook: docs/18-operations-runbooks.md#registry-unavailable
+
+      - alert: MrkStoragePressure
+        expr: mrk_storage_bytes{state="used"} / mrk_storage_bytes{state="total"} > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mirror storage usage is above 85 percent
+          runbook: docs/18-operations-runbooks.md#storage-pressure
+
+      - alert: MrkOfflineModeEnabled
+        expr: mrk_offline_mode == 1
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: A registry has remained in cache-only mode
+          runbook: docs/18-operations-runbooks.md#offline-mode
+
+      - alert: MrkFailedJobsPresent
+        expr: mrk_tasks_total{state="failed"} > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: One or more operational jobs need review
+          runbook: docs/18-operations-runbooks.md#failed-jobs

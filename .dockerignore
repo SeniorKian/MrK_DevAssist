@@ -1,0 +1,13 @@
+.git
+.github
+.data
+.env
+.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/node_modules
+apps/admin-ui/dist
+docs
+work
+*.log

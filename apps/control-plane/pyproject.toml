@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mrk-control-plane"
+version = "0.1.0"
+description = "Management control plane for the MRK package mirror appliance"
+requires-python = ">=3.13"
+dependencies = [
+  "argon2-cffi==25.1.0",
+  "cryptography==50.0.2",
+  "SQLAlchemy==2.1.8",
+  "alembic==1.20.1",
+  "psycopg[binary]==3.3.8",
+  "fastapi==0.162.0",
+  "httpx==0.28.1",
+  "uvicorn[standard]==0.54.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx==0.28.1",
+  "httpx2==2.16.0",
+  "pytest==9.2.0",
+  "ruff==0.14.3",
+]
+
+[project.scripts]
+mrk-control-plane = "mrk_control_plane.main:run"
+mrk-pypi-router = "mrk_control_plane.pypi_router:run"
+mrk-restore = "mrk_control_plane.restore:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mrk_control_plane"]

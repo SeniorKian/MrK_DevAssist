@@ -1,0 +1,77 @@
+name: Scheduled soak test
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: Bounded soak duration in seconds (60-3600)
+        required: false
+        default: "600"
+  schedule:
+    - cron: "17 2 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  appliance-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SOAK_DURATION: ${{ inputs.duration_seconds || '600' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/appliance/Dockerfile
+          push: false
+          load: true
+          tags: mrk/package-mirror:soak
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=soak
+            SOURCE_URL=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker volume create mrk-soak-data
+      - run: docker network create mrk-soak-network
+      - name: Start hardened appliance
+        run: >-
+          docker run --detach --name mrk-soak --network mrk-soak-network
+          --read-only --tmpfs /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+          --cap-drop ALL --security-opt no-new-privileges:true
+          --mount source=mrk-soak-data,target=/data mrk/package-mirror:soak
+      - name: Wait for readiness
+        run: >-
+          docker exec --env MRK_HEALTHCHECK_ATTEMPTS=30 mrk-soak
+          python -m mrk_control_plane.healthcheck
+      - name: Run bounded keep-alive soak
+        run: >-
+          docker run --rm --network mrk-soak-network
+          --mount type=bind,source=${{ github.workspace }}/scripts/load_probe.py,target=/load_probe.py,readonly
+          python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
+          python /load_probe.py --url http://mrk-soak:8080/health/live
+          --duration "$SOAK_DURATION" --concurrency 16
+          --max-error-rate 0.001 --max-p95-ms 500
+      - name: Verify readiness after soak
+        run: >-
+          docker exec --env MRK_HEALTHCHECK_ATTEMPTS=3 mrk-soak
+          python -m mrk_control_plane.healthcheck
+      - if: always()
+        continue-on-error: true
+        run: docker logs mrk-soak
+      - if: always()
+        continue-on-error: true
+        run: docker rm --force mrk-soak
+      - if: always()
+        continue-on-error: true
+        run: docker network rm mrk-soak-network
+      - if: always()
+        continue-on-error: true
+        run: docker volume rm mrk-soak-data

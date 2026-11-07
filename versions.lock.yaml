@@ -1,0 +1,97 @@
+schema_version: 1
+reviewed_at: 2026-11-07
+policy:
+  allow_latest_tags: false
+  allow_prereleases: false
+  require_digest_before_production: true
+
+components:
+  python:
+    version: "3.13.18"
+    image: "python:3.13-slim-bookworm"
+    digest: "sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72"
+  node:
+    version: "24.18.0"
+    image: "node:24.18.0-bookworm-slim"
+    digest: "sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+  fastapi:
+    version: "0.162.0"
+    source: "https://github.com/fastapi/fastapi"
+  cryptography:
+    version: "50.0.2"
+    source: "https://github.com/pyca/cryptography"
+    note: "Stable PyCA release used for AES-256-GCM backup encryption and Scrypt KDF."
+  sqlalchemy:
+    version: "2.1.8"
+    source: "https://github.com/sqlalchemy/sqlalchemy"
+    note: "Shared control-plane ORM; embedded PGlite and external PostgreSQL use the same repositories."
+  alembic:
+    version: "1.20.1"
+    source: "https://github.com/sqlalchemy/alembic"
+    note: "Versioned schema migrations for current and future service modules."
+  psycopg:
+    version: "3.3.8"
+    source: "https://github.com/psycopg/psycopg"
+    note: "PostgreSQL 3 driver used by both embedded PGlite and external PostgreSQL modes."
+  pglite:
+    version: "0.5.8"
+    source: "https://github.com/electric-sql/pglite"
+    note: "Embedded single-node PostgreSQL mode; data persists below /data/database/pglite."
+  pglite_socket:
+    version: "0.2.11"
+    source: "https://github.com/electric-sql/pglite"
+    note: "Loopback-only PostgreSQL wire bridge. External PostgreSQL is recommended for HA."
+  uvicorn:
+    version: "0.54.0"
+    source: "https://github.com/encode/uvicorn"
+  supervisor:
+    version: "4.3.0"
+    source: "https://github.com/Supervisor/supervisor"
+  verdaccio:
+    version: "6.11.1"
+    source: "https://github.com/verdaccio/verdaccio"
+    note: "Maintenance line selected while Verdaccio 7 adoption is reviewed."
+  devpi_server:
+    version: "6.21.0"
+    source: "https://github.com/devpi/devpi"
+  devpi_web:
+    version: "5.2.0"
+    source: "https://github.com/devpi/devpi"
+  devpi_client:
+    version: "7.3.0"
+    source: "https://github.com/devpi/devpi"
+    note: "Runtime bootstrap client used only over the container loopback interface."
+  uv:
+    version: "0.13.7"
+    source: "https://github.com/astral-sh/uv"
+    note: "CI compatibility client only; not installed in the appliance runtime."
+  poetry:
+    version: "2.5.1"
+    source: "https://github.com/python-poetry/poetry"
+    note: "CI compatibility client only; not installed in the appliance runtime."
+  react:
+    version: "19.2.9"
+    source: "https://github.com/facebook/react"
+  material_ui:
+    version: "7.3.11"
+    source: "https://github.com/mui/material-ui"
+  vite:
+    version: "8.3.6"
+    source: "https://github.com/vitejs/vite"
+  vite_react_plugin:
+    version: "6.2.1"
+    source: "https://github.com/vitejs/vite-plugin-react"
+  typescript:
+    version: "7.0.2"
+    source: "https://github.com/microsoft/TypeScript"
+  pytest:
+    version: "9.2.0"
+    source: "https://github.com/pytest-dev/pytest"
+  httpx:
+    version: "0.28.1"
+    source: "https://github.com/encode/httpx"
+  httpx2:
+    version: "2.16.0"
+    source: "https://github.com/encode/httpx"
+    note: "TestClient transport required by Starlette; runtime upstream requests remain on httpx 0.28.1."
+

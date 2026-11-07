@@ -1,0 +1,53 @@
+storage: /data/npm/storage
+
+auth:
+  htpasswd:
+    file: /data/npm/auth/htpasswd
+    max_users: -1
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    timeout: 7s
+    maxage: 5m
+    fail_timeout: 2m
+    max_fails: 1
+    cache: true
+    strict_ssl: true
+  liara:
+    url: https://package-mirror.liara.ir/repository/npm/
+    timeout: 7s
+    maxage: 5m
+    fail_timeout: 2m
+    max_fails: 1
+    cache: true
+    strict_ssl: true
+
+packages:
+  '@*/*':
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+    proxy: npmjs liara
+  '**':
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+    proxy: npmjs liara
+
+web:
+  enable: false
+
+security:
+  api:
+    legacy: false
+
+server:
+  keepAliveTimeout: 60
+
+listen: 0.0.0.0:4873
+
+log:
+  type: stdout
+  format: json
+  level: info

@@ -1,0 +1,56 @@
+services:
+  mrk-mirror:
+    image: ${MRK_IMAGE:?Set MRK_IMAGE to an immutable ghcr.io image digest}
+    pull_policy: always
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      MRK_ENV: production
+      MRK_DATA_DIR: /data
+      MRK_UPSTREAM_SECRET_KEY_FILE: ${MRK_UPSTREAM_SECRET_KEY_FILE:-}
+      MRK_LOG_LEVEL: ${MRK_LOG_LEVEL:-INFO}
+      MRK_ADMIN_UI_DIR: /opt/mrk/admin-ui
+      MRK_CORS_ORIGINS: ${MRK_CORS_ORIGINS:-https://packages.example.com}
+      MRK_TRUSTED_HOSTS: ${MRK_TRUSTED_HOSTS:-packages.example.com}
+      MRK_NPM_ENABLED: "true"
+      MRK_NPM_HEALTH_PORT: "4873"
+      MRK_PYPI_ENABLED: "true"
+      MRK_PYPI_HEALTH_PORT: "3141"
+      MRK_PYPI_BOOTSTRAP_STATE_FILE: /data/pypi/auth/upstream-configured
+      MRK_PYPI_OUTSIDE_URL: ${MRK_PYPI_OUTSIDE_URL:-https://pypi.example.com}
+      MRK_PYPI_UPSTREAM_URL: http://127.0.0.1:3142/simple/
+      MRK_PYPI_PRIMARY_UPSTREAM: ${MRK_PYPI_PRIMARY_UPSTREAM:-https://pypi.org/simple/}
+      MRK_PYPI_FALLBACK_UPSTREAM: ${MRK_PYPI_FALLBACK_UPSTREAM:-https://package-mirror.liara.ir/repository/pypi/simple/}
+      MRK_PYPI_ROUTER_PORT: "3142"
+      MRK_PYPI_ROUTER_HEALTH_HOST: 127.0.0.1
+      MRK_PYPI_ROUTER_READ_TIMEOUT: ${MRK_PYPI_ROUTER_READ_TIMEOUT:-90}
+      MRK_PYPI_REQUEST_TIMEOUT: ${MRK_PYPI_REQUEST_TIMEOUT:-90}
+      MRK_AUTH_COOKIE_SECURE: ${MRK_AUTH_COOKIE_SECURE:-true}
+      MRK_SESSION_TTL_SECONDS: ${MRK_SESSION_TTL_SECONDS:-28800}
+    volumes:
+      - /opt/mirrors/pypi:/data
+    expose:
+      - "8080"
+      - "4873"
+      - "3141"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "python", "-m", "mrk_control_plane.healthcheck"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

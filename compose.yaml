@@ -1,0 +1,49 @@
+services:
+  mrk-mirror:
+    build:
+      context: .
+      dockerfile: deploy/appliance/Dockerfile
+    image: mrk/package-mirror:dev
+    restart: unless-stopped
+    environment:
+      MRK_ENV: development
+      MRK_DATA_DIR: /data
+      MRK_UPSTREAM_SECRET_KEY_FILE: ${MRK_UPSTREAM_SECRET_KEY_FILE:-}
+      MRK_LOG_LEVEL: INFO
+      MRK_CORS_ORIGINS: http://localhost:8080
+      MRK_TRUSTED_HOSTS: localhost,127.0.0.1
+      MRK_ADMIN_UI_DIR: /opt/mrk/admin-ui
+      MRK_NPM_ENABLED: "true"
+      MRK_NPM_HEALTH_PORT: "4873"
+    volumes:
+      - ${MRK_HOST_DATA_PATH:-/opt/mirrors/pypi}:/data
+    ports:
+      - "127.0.0.1:${MRK_ADMIN_PORT:-8080}:8080"
+      - "127.0.0.1:${MRK_NPM_PORT:-4873}:4873"
+      - "127.0.0.1:${MRK_PYPI_PORT:-3141}:3141"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    stop_grace_period: 45s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - mrk_control_plane.healthcheck
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
