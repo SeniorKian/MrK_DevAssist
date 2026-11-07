@@ -46,4 +46,4 @@ def test_data_initializer_rejects_non_directory(tmp_path: Path) -> None:
     invalid_path = tmp_path / "not-a-directory"
     invalid_path.write_text("invalid", encoding="utf-8")
     with pytest.raises(RuntimeError, match="refusing non-directory"):
-        entrypoint._ensure_real_directory(invalid_path, may_change_owner=True)
+        entrypoint._ensure_real_directory(invalid_path)
