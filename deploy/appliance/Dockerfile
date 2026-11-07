@@ -32,6 +32,7 @@ ARG SOURCE_URL="unknown"
 
 LABEL org.opencontainers.image.title="MRK Package Mirror" \
       org.opencontainers.image.description="Single-container npm and PyPI mirror appliance" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="$SOURCE_URL" \
       org.opencontainers.image.revision="$VCS_REF" \
       org.opencontainers.image.created="$BUILD_DATE"
@@ -67,6 +68,7 @@ RUN groupadd --gid 10001 mrk \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mrk
 
 WORKDIR /opt/mrk
+COPY LICENSE /opt/mrk/LICENSE
 COPY apps/control-plane/pyproject.toml /tmp/control-plane/pyproject.toml
 COPY apps/control-plane/src /tmp/control-plane/src
 RUN --mount=type=cache,target=/root/.cache/pip \

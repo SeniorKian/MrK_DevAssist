@@ -19,6 +19,7 @@ def main() -> int:
         (root / "deploy/appliance/compose.production.yaml").read_text(encoding="utf-8")
     )
     versions = (root / "versions.lock.yaml").read_text(encoding="utf-8")
+    license_text = (root / "LICENSE").read_text(encoding="utf-8")
     publish = (root / ".github/workflows/publish-image.yml").read_text(encoding="utf-8")
     first_time_sources = "\n".join(
         path.read_text(encoding="utf-8")
@@ -41,6 +42,18 @@ def main() -> int:
     _require(
         "TO_BE_RESOLVED" not in versions,
         "versions.lock.yaml contains an unresolved release value",
+        failures,
+    )
+    _require(
+        license_text.startswith("MIT License\n")
+        and "Copyright (c) 2026 Mohammad Kiani" in license_text,
+        "the owner-approved MIT LICENSE is missing or changed",
+        failures,
+    )
+    _require(
+        'org.opencontainers.image.licenses="MIT"' in dockerfile
+        and "COPY LICENSE /opt/mrk/LICENSE" in dockerfile,
+        "the image must retain MIT license metadata and text",
         failures,
     )
     _require(

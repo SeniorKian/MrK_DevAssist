@@ -343,7 +343,7 @@ API و UI skeleton قابل build، Docker Appliance skeleton با یک bind mou
 - [x] SBOM/signature/vulnerability scan در CI
 - [ ] load و soak test — load محلی پاس؛ اجرای scheduled CI باقی است
 - [x] upgrade/rollback rehearsal ایزوله
-- [ ] final license review — dependencyها پاس؛ license خود پروژه نیازمند تصمیم مالک
+- [x] final license review — dependencyها پاس و license پروژه MIT از commit اولیه مالک حفظ شد
 - [x] go-live checklist آماده
 
 ### گزارش میانی معماری Control Plane — 2026-11-07
@@ -362,7 +362,7 @@ API و UI skeleton قابل build، Docker Appliance skeleton با یک bind mou
 - base imageهای Node و Python با digest چندمعماری رسمی pin شدند و `TO_BE_RESOLVED` حذف شد.
 - production Compose credential قدیمی bootstrap ندارد؛ release validator، Compose syntax و YAML workflowها موفق‌اند.
 - CI و release workflow اکنون license artifact، migration rehearsal و load gate دارند؛ workflow هفتگی/دستی soak نیز اضافه شد.
-- inventory کامل ۵۶۱ dependency runtime/lockfile با override نسخه‌محور legacy، صفر finding دارد. تصمیم license عمومی خود MRK هنوز با مالک است.
+- inventory کامل ۵۶۱ dependency runtime/lockfile با override نسخه‌محور legacy، صفر finding دارد. پروژه طبق فایل `LICENSE` موجود در commit اولیه مالک تحت MIT منتشر می‌شود.
 - load محلی ۳۰ ثانیه‌ای با ۳۶٬۴۴۸ request، نرخ ۱٬۲۱۴٫۶۲ درخواست/ثانیه، p95 برابر ۸٫۲۱۱ms و error rate برابر ۰٫۰۰۰۰۲۷ پاس شد.
 - downgrade/upgrade `20261107_0003 → 0001 → 0003` داده Owner را حفظ کرد؛ restore آفلاین PGlite نیز با head فعلی پاس شده است.
 - موتور Docker Desktop محلی به `docker version` پاسخ نداد؛ build واقعی image بدون restart یا دست‌کاری daemon باز مانده است. هیچ deploy روی Dokploy انجام نشده است.

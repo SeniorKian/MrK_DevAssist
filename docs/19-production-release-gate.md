@@ -63,8 +63,9 @@ Base imageهای resolveشده در 2026-11-07:
 - fontهای Inter و Vazirmatn تحت OFL-1.1 هستند؛
 - Repoze/Pyramid/Supervisor از license مشتق BSD و Zope packages از ZPL-2.1 استفاده می‌کنند.
 
-خود پروژه هنوز license عمومی انتخاب‌شده ندارد؛ تا تصمیم مالک، repository و GHCR باید private/All
-Rights Reserved تلقی شوند. public open-source release بدون انتخاب و افزودن LICENSE مجاز نیست.
+خود پروژه طبق فایل `LICENSE` موجود در commit اولیه مالک تحت MIT است. notice و متن کامل MIT باید در
+source distribution، image metadata و release artifact حفظ شود؛ licenseهای dependencyها نیز در
+گزارش ۵۶۱ پکیجی جداگانه همراه release نگه‌داری می‌شوند.
 
 ## Load and soak
 
