@@ -47,7 +47,7 @@ def _handoff_container_pipes() -> None:
             os.fchown(descriptor, APP_UID, APP_GID)
 
 
-def _ensure_real_directory(path: Path) -> None:
+def _ensure_real_directory(path: Path, *, set_mode: bool = True) -> None:
     """Create one directory without following a volume-provided symlink."""
 
     try:
@@ -59,7 +59,8 @@ def _ensure_real_directory(path: Path) -> None:
     if not stat.S_ISDIR(mode):
         raise RuntimeError(f"refusing non-directory appliance data path: {path}")
 
-    path.chmod(0o750, follow_symlinks=False)
+    if set_mode:
+        path.chmod(0o750, follow_symlinks=False)
 
 
 def main(arguments: list[str] | None = None) -> None:
@@ -72,14 +73,15 @@ def main(arguments: list[str] | None = None) -> None:
         raise RuntimeError(f"appliance must start as root or uid {APP_UID}, got {effective_uid}")
 
     may_change_owner = effective_uid == 0
+    prepare_only = active_arguments == ["--prepare-only"]
     data_paths = (DATA_ROOT,) + tuple(DATA_ROOT / item for item in DATA_DIRECTORIES)
     for data_path in data_paths:
-        _ensure_real_directory(data_path)
+        _ensure_real_directory(data_path, set_mode=not prepare_only)
     if may_change_owner:
         for data_path in reversed(data_paths):
             os.chown(data_path, APP_UID, APP_GID, follow_symlinks=False)
 
-    if active_arguments == ["--prepare-only"]:
+    if prepare_only:
         if not may_change_owner:
             raise RuntimeError("--prepare-only requires root with only the CHOWN capability")
         return
