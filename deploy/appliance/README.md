@@ -15,9 +15,11 @@ the fixed application subdirectories and never changes host ownership. A standal
 without that user override may start as root only long enough to initialize an empty `/data`
 mount; the entrypoint performs a non-recursive ownership fix on the fixed directory layout,
 drops permanently to UID/GID `10001`, and only then starts Supervisor and network services.
-Automated environments can instead run `/opt/mrk/entrypoint.py --prepare-only` in a one-shot
-container with only `CAP_CHOWN`, then start the appliance with `--user 10001:10001`, all
-capabilities dropped, and `no-new-privileges`; the soak workflow continuously verifies this path.
+Automated environments can instead run `/opt/mrk/entrypoint.py --prepare-only` in a networkless,
+read-only one-shot container with only `CAP_CHOWN` and `CAP_DAC_OVERRIDE`, then remove it and start
+the appliance with `--user 10001:10001`, all capabilities dropped, and `no-new-privileges`; the
+soak workflow continuously verifies this path. The bootstrap capabilities never reach Supervisor
+or a network-facing process.
 
 Gate 3 contains the control plane, built admin shell, Verdaccio, devpi, and Supervisor. Fresh devpi
 data is initialized with persistent secrets and an authenticated loopback-only bootstrap. Existing
