@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from pathlib import Path
 
 APP_UID = 10001
@@ -63,7 +64,11 @@ def _ensure_real_directory(path: Path, *, may_change_owner: bool) -> None:
     path.chmod(0o750, follow_symlinks=False)
 
 
-def main() -> None:
+def main(arguments: list[str] | None = None) -> None:
+    active_arguments = sys.argv[1:] if arguments is None else arguments
+    if active_arguments not in ([], ["--prepare-only"]):
+        raise RuntimeError("entrypoint accepts only the optional --prepare-only argument")
+
     effective_uid = os.geteuid()
     if effective_uid not in {0, APP_UID}:
         raise RuntimeError(f"appliance must start as root or uid {APP_UID}, got {effective_uid}")
@@ -75,6 +80,11 @@ def main() -> None:
             DATA_ROOT / relative_path,
             may_change_owner=may_change_owner,
         )
+
+    if active_arguments == ["--prepare-only"]:
+        if not may_change_owner:
+            raise RuntimeError("--prepare-only requires root with only the CHOWN capability")
+        return
 
     if may_change_owner:
         _handoff_container_pipes()

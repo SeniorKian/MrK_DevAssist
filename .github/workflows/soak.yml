@@ -41,9 +41,17 @@ jobs:
           cache-to: type=gha,mode=max
       - run: docker volume create mrk-soak-data
       - run: docker network create mrk-soak-network
+      - name: Prepare data volume with minimum bootstrap capability
+        run: >-
+          docker run --rm --read-only
+          --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges:true
+          --mount source=mrk-soak-data,target=/data
+          --entrypoint python mrk/package-mirror:soak
+          /opt/mrk/entrypoint.py --prepare-only
       - name: Start hardened appliance
         run: >-
           docker run --detach --name mrk-soak --network mrk-soak-network
+          --user 10001:10001
           --read-only --tmpfs /tmp:size=64m,mode=1777,noexec,nosuid,nodev
           --cap-drop ALL --security-opt no-new-privileges:true
           --mount source=mrk-soak-data,target=/data mrk/package-mirror:soak
