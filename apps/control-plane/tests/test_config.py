@@ -19,6 +19,25 @@ def test_test_settings_use_requested_data_directory(tmp_path: Path) -> None:
     assert settings.environment == "test"
 
 
+def test_development_default_data_directory_is_workspace_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MRK_ENV", "development")
+    monkeypatch.delenv("MRK_DATA_DIR", raising=False)
+
+    assert Settings.from_env().data_dir == tmp_path / ".data"
+
+
+def test_production_default_data_directory_remains_volume_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MRK_ENV", "production")
+    monkeypatch.delenv("MRK_DATA_DIR", raising=False)
+
+    assert Settings.from_env().data_dir == Path("/data")
+
+
 def test_npm_health_host_must_be_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MRK_NPM_HEALTH_HOST", "192.0.2.10")
 

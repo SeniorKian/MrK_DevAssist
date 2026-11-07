@@ -68,6 +68,7 @@ class Settings:
         pypi_router_health_host = os.getenv(
             "MRK_PYPI_ROUTER_HEALTH_HOST", "127.0.0.1"
         ).strip()
+        configured_data_dir = os.getenv("MRK_DATA_DIR", "").strip()
 
         if environment not in ALLOWED_ENVIRONMENTS:
             raise ValueError("MRK_ENV must be development, test, or production")
@@ -108,7 +109,15 @@ class Settings:
 
         return cls(
             environment=environment,
-            data_dir=Path(os.getenv("MRK_DATA_DIR", "/data")).resolve(),
+            data_dir=(
+                Path(configured_data_dir).resolve()
+                if configured_data_dir
+                else (
+                    Path("/data")
+                    if environment == "production"
+                    else (Path.cwd() / ".data").resolve()
+                )
+            ),
             database_url=os.getenv("MRK_DATABASE_URL", "").strip() or None,
             log_level=log_level,
             cors_origins=cors_origins,
