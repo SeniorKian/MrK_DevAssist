@@ -38,7 +38,9 @@ EXPRESSION_WORDS = {"AND", "OR", "WITH"}
 LICENSE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]*")
 RUNTIME_IMAGE_REQUIREMENTS = (
     "supervisor==4.3.0",
-    "setuptools==80.9.0",
+    "setuptools==81.0.0",
+    "msgpack==1.2.4",
+    "urllib3==2.8.0",
     "devpi-server==6.21.0",
     "devpi-web==5.2.0",
     "devpi-client==7.3.0",

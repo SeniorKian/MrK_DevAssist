@@ -10,7 +10,7 @@ client state و cache فقط زیر `/data/pypi` قرار می‌گیرند؛ ro
 - devpi-server `6.21.0`
 - devpi-web `5.2.0`
 - devpi-client `7.3.0` برای bootstrap داخلی
-- setuptools `80.9.0` برای سازگاری devpi/pyramid
+- setuptools `81.0.0` (بالاترین سری سازگار با devpi/pyramid) با vendorهای اصلاح‌شده‌ی jaraco.context 6.1.0 و wheel 0.46.3
 
 هیچ prerelease یا tag شناور در runtime استفاده نشده است.
 

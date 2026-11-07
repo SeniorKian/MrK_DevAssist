@@ -53,7 +53,7 @@ Base imageهای resolveشده در 2026-11-07:
 
 `scripts/check_licenses.py` closure کامل dependencyهای Python image و هر سه lockfile npm را بررسی
 می‌کند. overrideهای legacy فقط برای `(canonical-name, exact-version)` هستند تا upgrade بدون review
-شکست بخورد. گزارش فعلی ۵۶۱ پکیج و صفر finding دارد.
+شکست بخورد. گزارش فعلی ۵۶۲ پکیج و صفر finding دارد.
 
 موارد مهم عملیاتی:
 
@@ -64,9 +64,15 @@ Base imageهای resolveشده در 2026-11-07:
 - `uvloop 0.23.0` فقط روی Linux وارد closure می‌شود؛ metadata wheel مقدار مبهم دارد و override دقیق نسخه پس از بررسی هر دو فایل رسمی `LICENSE-MIT` و `LICENSE-APACHE` ثبت شده است؛
 - Repoze/Pyramid/Supervisor از license مشتق BSD و Zope packages از ZPL-2.1 استفاده می‌کنند.
 
+در image runtime، `setuptools 81.0.0`، `msgpack 1.2.4` و `urllib3 2.8.0` صریح pin شده‌اند؛
+سری 81 بالاترین نسخه سازگار با constraintهای devpi 6.21/Pyramid 2.1 است و wheel آن
+`jaraco.context 6.1.0` و `wheel 0.46.3` اصلاح‌شده را vendor می‌کند.
+`pip`، `wheel` و bundle قدیمی `ensurepip` پس از نصب حذف می‌شوند چون runtime به build tooling نیاز ندارد؛
+این کنترل CVEهای قابل‌رفع build شماره 42388001344 را بدون ignore/VEX دورزننده برطرف می‌کند.
+
 خود پروژه طبق فایل `LICENSE` موجود در commit اولیه مالک تحت MIT است. notice و متن کامل MIT باید در
 source distribution، image metadata و release artifact حفظ شود؛ licenseهای dependencyها نیز در
-گزارش ۵۶۱ پکیجی جداگانه همراه release نگه‌داری می‌شوند.
+گزارش ۵۶۲ پکیجی جداگانه همراه release نگه‌داری می‌شوند.
 
 ## Load and soak
 

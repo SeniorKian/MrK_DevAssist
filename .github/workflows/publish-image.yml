@@ -28,7 +28,7 @@ jobs:
           cache-dependency-path: apps/control-plane/pyproject.toml
       - run: python -m pip install -e "./apps/control-plane[dev]"
       - run: >-
-          python -m pip install supervisor==4.3.0 setuptools==80.9.0
+          python -m pip install supervisor==4.3.0 setuptools==81.0.0
           devpi-server==6.21.0 devpi-web==5.2.0 devpi-client==7.3.0
       - uses: pypa/gh-action-pip-audit@v1.1.0
         with:

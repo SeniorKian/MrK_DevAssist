@@ -288,7 +288,7 @@ API و UI skeleton قابل build، Docker Appliance skeleton با یک bind mou
 - یک package واقعی npm publish و یک wheel واقعی PyPI upload شد؛ هر موتور متوقف و با همان storage دوباره اجرا شد و دریافت با cache خالی client و بدون هیچ upstream خارجی موفق بود.
 - catalog کنترل‌پلین هر دو artifact واقعی را با ecosystemهای `npm` و `pypi` کشف کرد.
 - harness در CI به job مستقل `engine-e2e` اضافه شد و build image به موفقیت آن وابسته است؛ diagnostics شکست نیز artifact می‌شود.
-- ۵۲ تست backend، Ruff، release validator، inventory مجوز ۵۶۱ dependency و migration rehearsal همگی پاس هستند.
+- ۵۲ تست backend، Ruff، release validator، inventory مجوز ۵۶۲ dependency و migration rehearsal همگی پاس هستند.
 - اعتبارسنجی نهایی داخل image تک‌کانتینری در job `image-build` موجود است و اجرای محلی مجدد آن به daemon Docker وابسته است؛ این مورد blocker Gate 10 است، نه Gate 7.
 
 ## Gate 8 — Operations Visibility
@@ -362,7 +362,7 @@ API و UI skeleton قابل build، Docker Appliance skeleton با یک bind mou
 - base imageهای Node و Python با digest چندمعماری رسمی pin شدند و `TO_BE_RESOLVED` حذف شد.
 - production Compose credential قدیمی bootstrap ندارد؛ release validator، Compose syntax و YAML workflowها موفق‌اند.
 - CI و release workflow اکنون license artifact، migration rehearsal و load gate دارند؛ workflow هفتگی/دستی soak نیز اضافه شد.
-- inventory کامل ۵۶۱ dependency runtime/lockfile با override نسخه‌محور legacy، صفر finding دارد. پروژه طبق فایل `LICENSE` موجود در commit اولیه مالک تحت MIT منتشر می‌شود.
+- inventory کامل ۵۶۲ dependency runtime/lockfile با override نسخه‌محور legacy، صفر finding دارد. پروژه طبق فایل `LICENSE` موجود در commit اولیه مالک تحت MIT منتشر می‌شود.
 - load محلی ۳۰ ثانیه‌ای با ۳۶٬۴۴۸ request، نرخ ۱٬۲۱۴٫۶۲ درخواست/ثانیه، p95 برابر ۸٫۲۱۱ms و error rate برابر ۰٫۰۰۰۰۲۷ پاس شد.
 - downgrade/upgrade `20261107_0003 → 0001 → 0003` داده Owner را حفظ کرد؛ restore آفلاین PGlite نیز با head فعلی پاس شده است.
 - موتور Docker Desktop محلی به `docker version` پاسخ نداد؛ build واقعی image بدون restart یا دست‌کاری daemon باز مانده است. هیچ deploy روی Dokploy انجام نشده است.

@@ -73,8 +73,11 @@ COPY apps/control-plane/pyproject.toml /tmp/control-plane/pyproject.toml
 COPY apps/control-plane/src /tmp/control-plane/src
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install /tmp/control-plane supervisor==4.3.0 \
-      setuptools==80.9.0 devpi-server==6.21.0 devpi-web==5.2.0 devpi-client==7.3.0 \
-    && rm -rf /tmp/control-plane
+      setuptools==81.0.0 msgpack==1.2.4 urllib3==2.8.0 \
+      devpi-server==6.21.0 devpi-web==5.2.0 devpi-client==7.3.0 \
+    && python -c "import msgpack, setuptools, urllib3; assert msgpack.version == (1, 2, 4); assert setuptools.__version__ == '81.0.0'; assert urllib3.__version__ == '2.8.0'" \
+    && python -m pip uninstall --yes pip wheel \
+    && rm -rf /tmp/control-plane /usr/local/lib/python3.13/ensurepip
 
 COPY --from=verdaccio-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=verdaccio-builder /opt/verdaccio /opt/verdaccio
