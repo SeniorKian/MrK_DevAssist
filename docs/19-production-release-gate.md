@@ -61,6 +61,7 @@ Base imageهای resolveشده در 2026-11-07:
 - `docutils` شامل اجزای Public Domain، BSD و GPL است و SBOM/license artifact باید همراه release
   نگه‌داری شود؛
 - fontهای Inter و Vazirmatn تحت OFL-1.1 هستند؛
+- `uvloop 0.23.0` فقط روی Linux وارد closure می‌شود؛ metadata wheel مقدار مبهم دارد و override دقیق نسخه پس از بررسی هر دو فایل رسمی `LICENSE-MIT` و `LICENSE-APACHE` ثبت شده است؛
 - Repoze/Pyramid/Supervisor از license مشتق BSD و Zope packages از ZPL-2.1 استفاده می‌کنند.
 
 خود پروژه طبق فایل `LICENSE` موجود در commit اولیه مالک تحت MIT است. notice و متن کامل MIT باید در

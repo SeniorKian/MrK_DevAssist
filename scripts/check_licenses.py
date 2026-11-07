@@ -71,6 +71,9 @@ PYTHON_LICENSE_OVERRIDES = {
     ("repoze-lru", "0.8"): "LicenseRef-Repoze-BSD-derived",
     ("supervisor", "4.3.0"): "LicenseRef-Repoze-BSD-derived",
     ("translationstring", "1.4"): "LicenseRef-Repoze-BSD-derived",
+    # PyPI wheel metadata exposes the placeholder "License" on Linux, while
+    # the exact v0.23.0 source tag contains both LICENSE-MIT and LICENSE-APACHE.
+    ("uvloop", "0.23.0"): "MIT OR Apache-2.0",
     ("venusian", "3.1.1"): "LicenseRef-Repoze-BSD-derived",
     ("waitress", "3.0.2"): "ZPL-2.1",
     ("whoosh", "2.7.4"): "BSD-2-Clause",
