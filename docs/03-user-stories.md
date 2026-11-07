@@ -26,6 +26,78 @@ Evidence: test/report/ADR reference
 - Story بدون Acceptance Criteria و owner وارد Sprint نمی‌شود.
 - عملیات مخرب همیشه confirmation، permission و audit می‌خواهند.
 
+## سابقه تحویل Release 0.1 — 2026-11-07
+
+فقط Storyهای زیر تمام معیارهای پذیرش نسخه compact رجیستری را پاس کرده‌اند. Storyهای فهرست‌نشده
+همچنان `Planned` یا `Partial` هستند و صرف وجود زیرساخت مشترک به معنی تکمیل آن‌ها نیست.
+
+| Story | Status | Completed | Release/Gate | Evidence |
+|---|---|---|---|---|
+| US-001 | Done | 2026-11-07 | Gate 0 | `docs/08-repository-selection-scorecard.md` |
+| US-002 | Done | 2026-11-07 | Gate 10 | digest pins، lockfileها و `scripts/validate_release.py` |
+| US-005 | Done | 2026-11-07 | Gate 1 | `compose.yaml` و smoke محلی |
+| US-010 | Done | 2026-11-07 | Gate 5 | `test_auth.py` و `docs/17-gate5-identity-access.md` |
+| US-011 | Done | 2026-11-07 | Gate 5 | permission matrix و تست RBAC |
+| US-012 | Done | 2026-11-07 | Gate 5 | User CRUD، revoke session و audit tests |
+| US-013 | Done | 2026-11-07 | Gate 5 | token create/list/revoke و scope/expiry tests |
+| US-020 | Done | 2026-11-07 | Gate 6 | Upstream CRUD API/UI و `test_upstream_admin.py` |
+| US-021 | Done | 2026-11-07 | Gate 6 | SSRF-safe probe و health history |
+| US-022 | Done | 2026-11-07 | Gate 6 | priority validation و runtime config generation |
+| US-023 | Done | 2026-11-07 | Gate 4 | failover E2E و `test_pypi_router.py` |
+| US-024 | Done | 2026-11-07 | Gate 4 | circuit threshold/cooldown tests |
+| US-025 | Done | 2026-11-07 | Gate 6 | block/unblock API/UI و audit |
+| US-026 | Done | 2026-11-07 | Gate 4 | explicit offline mode و internal-network E2E |
+| US-027 | Done | 2026-11-07 | Gate 6 | encrypted secret store و credential redaction tests |
+| US-030 | Done | 2026-11-07 | Gate 2 | Verdaccio client online/offline E2E |
+| US-033 | Done | 2026-11-07 | Gate 7 | publish/restart/download واقعی در `e2e_local_engines.py` |
+| US-040 | Done | 2026-11-07 | Gate 3 | pip online/offline image E2E |
+| US-042 | Done | 2026-11-07 | Gate 4 | PyPI primary/fallback chaos tests |
+| US-043 | Done | 2026-11-07 | Gate 7 | devpi wheel upload/restart/download E2E |
+| US-046 | Done | 2026-11-07 | Gate 7 | prefetch task API/UI و task tests |
+| US-050 | Done | 2026-11-07 | Gate 7 | unified npm/PyPI catalog و search tests |
+| US-052 | Done | 2026-11-07 | Gate 7 | purge preview، confirmation، task و audit |
+| US-053 | Done | 2026-11-07 | Gate 7 | revalidate task و checksum path |
+| US-054 | Done | 2026-11-07 | Gate 7 | persistent pin policy و cleanup exclusion |
+| US-056 | Done | 2026-11-07 | Gate 7 | quarantine reason/policy و cleanup exclusion |
+| US-060 | Done | 2026-11-07 | Gate 8 | responsive live overview dashboard |
+| US-061 | Done | 2026-11-07 | Gate 8 | persisted upstream health timeline |
+| US-062 | Done | 2026-11-07 | Gate 8 | authenticated Prometheus metrics |
+| US-064 | Done | 2026-11-07 | Gate 8 | filesystem/storage/process health status |
+| US-065 | Done | 2026-11-07 | Gate 8 | manual synthetic upstream probe |
+| US-070 | Done | 2026-11-07 | Gate 8 | persistent task list API/UI |
+| US-071 | Done | 2026-11-07 | Gate 8 | cancel/retry state-machine tests |
+| US-072 | Done | 2026-11-07 | Gate 8 | structured JSON log و secret redaction tests |
+| US-073 | Done | 2026-11-07 | Gate 8 | RBAC audit log و safe CSV export |
+| US-074 | Done | 2026-11-07 | Gate 8 | correlation ID middleware/log/audit tests |
+| US-080 | Done | 2026-11-07 | Gate 9 | real `/data` capacity dashboard |
+| US-081 | Done | 2026-11-07 | Gate 9 | threshold validation و Prometheus alert rules |
+| US-083 | Done | 2026-11-07 | Gate 9 | SHA-256/SQLite integrity job tests |
+| US-090 | Done | 2026-11-07 | Gate 9 | AES-256-GCM backup manifest |
+| US-092 | Done | 2026-11-07 | Gate 9 | isolated AEAD/hash/path validation |
+| US-093 | Done | 2026-11-07 | Gate 9 | offline guarded restore CLI و PGlite rehearsal |
+| US-100 | Done | 2026-11-07 | Gate 10 | local/external upstream key abstraction tests |
+| US-101 | Done | 2026-11-07 | Gate 4 | artifact SHA-256 verification before exposure |
+| US-102 | Done | 2026-11-07 | Gate 4 | DNS/IP/redirect/host SSRF enforcement tests |
+| US-103 | Done | 2026-11-07 | Gate 5 | login throttling و bounded auth failures |
+| US-104 | Done | 2026-11-07 | Gate 5 | security headers، trusted hosts و CORS validation |
+| US-105 | Done | 2026-11-07 | Gate 10 | Trivy، audit، SBOM/provenance workflow و license gate |
+| US-110 | Done | 2026-11-07 | Gate 5 | desktop/tablet/mobile responsive UI review |
+| US-111 | Done | 2026-11-07 | Gate 5 | فارسی/English، RTL/LTR و Vazirmatn/Inter |
+| US-112 | Done | 2026-11-07 | Gate 5 | persisted light/dark theme |
+| US-113 | Done | 2026-11-07 | Gate 6 | exact-name confirmation و last-upstream guard |
+| US-114 | Done | 2026-11-07 | Gate 8 | contextual runbook/help links |
+| US-120 | Done | 2026-11-07 | Gate 5 | versioned `/api/v1` contract |
+| US-122 | Done | 2026-11-07 | Gate 8 | protected `/metrics` endpoint و rules |
+| US-130 | Done | 2026-11-07 | Gate 10 | immutable-image production Compose |
+| US-131 | Done | 2026-11-07 | Gate 5 | atomic First-Time Owner setup |
+| US-134 | Done | 2026-11-07 | Gate 4 | audited per-ecosystem offline maintenance mode |
+| US-135 | Done | 2026-11-07 | Gate 8 | redacted in-memory Support Bundle |
+| US-140 | Done | 2026-11-07 | Gate 7 | 55 pytest + real-engine contract/E2E suite |
+| US-141 | Done | 2026-11-07 | Gate 10 | npm/PyPI empty-client-cache offline E2E |
+| US-142 | Done | 2026-11-07 | Gate 4 | DNS/connect/read/5xx failover chaos tests |
+| US-143 | Done | 2026-11-07 | Gate 10 | bounded load gate و GitHub-hosted soak |
+| US-144 | Done | 2026-11-07 | Gate 10 | Alembic downgrade/upgrade + data preservation |
+
 ## Epic E01 — Source Governance و Bootstrap
 
 ### US-001 — ثبت کاندیدای upstream — P0

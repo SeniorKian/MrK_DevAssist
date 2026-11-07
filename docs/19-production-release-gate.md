@@ -86,8 +86,16 @@ source distribution، image metadata و release artifact حفظ شود؛ license
 - نتیجه `passed=true`.
 
 CI هر image را ۲۰ ثانیه load-test می‌کند و workflow هفتگی/دستی `soak.yml` آن را ۱۰ دقیقه با
-concurrency=16 اجرا و readiness قبل و بعد را بررسی می‌کند. موفقیت اولین اجرای GitHub-hosted این
-workflow هنوز برای release candidate الزامی است.
+concurrency=16 اجرا و readiness قبل و بعد را بررسی می‌کند.
+
+شواهد GitHub-hosted در 2026-11-07:
+
+- CI نهایی Run `42392764617`: تمام source gateها، Trivy، clientهای آنلاین، load، restart روی
+  network داخلی و دریافت آفلاین npm/PyPI موفق؛
+- Soak نهایی Run `42392784697`: مدت `600.003s`، تعداد `4,198,497` درخواست،
+  `6,997.47 req/s`، error rate برابر `0`، p95 برابر `4.185ms` و readiness پس از Soak موفق؛
+- bootstrap آزمایشی بدون شبکه و با capabilityهای موقت `CHOWN`/`DAC_OVERRIDE` انجام شد؛ container
+  اصلی با UID/GID `10001`، `cap_drop: ALL` و `no-new-privileges` اجرا شد.
 
 ## Upgrade and rollback rehearsal
 
