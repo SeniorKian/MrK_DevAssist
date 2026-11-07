@@ -152,6 +152,8 @@ jobs:
       - run: docker network create mrk-ci-online
       - run: >-
           docker run --detach --name mrk-ci --network mrk-ci-online --read-only
+          --env MRK_TRUSTED_HOSTS=mrk-ci,127.0.0.1,localhost
+          --env MRK_LOG_LEVEL=WARNING
           --tmpfs /tmp:size=64m,mode=1777 --mount source=mrk-ci-data,target=/data
           mrk/package-mirror:ci
       - run: >-
@@ -186,6 +188,8 @@ jobs:
       - run: docker network create --internal mrk-ci-offline
       - run: >-
           docker run --detach --name mrk-ci --network mrk-ci-offline --read-only
+          --env MRK_TRUSTED_HOSTS=mrk-ci,127.0.0.1,localhost
+          --env MRK_LOG_LEVEL=WARNING
           --tmpfs /tmp:size=64m,mode=1777 --mount source=mrk-ci-data,target=/data
           mrk/package-mirror:ci
       - run: >-

@@ -52,6 +52,8 @@ jobs:
         run: >-
           docker run --detach --name mrk-soak --network mrk-soak-network
           --user 10001:10001
+          --env MRK_TRUSTED_HOSTS=mrk-soak,127.0.0.1,localhost
+          --env MRK_LOG_LEVEL=WARNING
           --read-only --tmpfs /tmp:size=64m,mode=1777,noexec,nosuid,nodev
           --cap-drop ALL --security-opt no-new-privileges:true
           --mount source=mrk-soak-data,target=/data mrk/package-mirror:soak
