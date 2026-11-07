@@ -17,6 +17,7 @@ from mrk_control_plane.pypi_router import (
     _expected_sha256,
     _fetch_page,
     _normalized_simple_url,
+    _response_headers,
     _rewrite_project_page,
     _spool_verified_artifact,
     _upstream_request_headers,
@@ -85,6 +86,24 @@ def test_project_page_rewrites_artifacts_and_preserves_hash() -> None:
     assert _artifact_links(
         "https://pypi.example/simple/demo/", source
     ) == {"demo-1.0.whl": "https://files.example/packages/demo-1.0.whl#sha256=abc"}
+
+
+def test_decoded_page_never_forwards_upstream_content_length() -> None:
+    response = httpx.Response(
+        200,
+        content=b"decompressed response body",
+        headers={
+            "content-length": "3",
+            "content-type": "text/html",
+            "etag": '"safe"',
+        },
+        request=httpx.Request("GET", "https://pypi.example/simple/"),
+    )
+
+    assert _response_headers(response) == {
+        "content-type": "text/html",
+        "etag": '"safe"',
+    }
 
 
 def test_circuit_opens_after_threshold(tmp_path: Path) -> None:

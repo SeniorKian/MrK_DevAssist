@@ -26,7 +26,6 @@ LOGGER = logging.getLogger(__name__)
 HREF_PATTERN = re.compile(r"(?i)(href\s*=\s*[\"'])([^\"']+)([\"'])")
 FORWARDED_HEADERS = (
     "content-type",
-    "content-length",
     "etag",
     "last-modified",
     "x-pypi-last-serial",
@@ -511,7 +510,6 @@ def create_router_app(settings: RouterSettings | None = None) -> FastAPI:
         page_url = urljoin(upstream.simple_url, f"{quote(project, safe='')}/")
         rewritten = _rewrite_project_page(project, page_url, response.text)
         headers = _response_headers(response)
-        headers.pop("content-length", None)
         return HTMLResponse(rewritten, headers=headers)
 
     @app.get("/files/{project}/{filename:path}", include_in_schema=False)
