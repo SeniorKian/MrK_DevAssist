@@ -87,14 +87,14 @@ COPY deploy/verdaccio/config.yaml /opt/mrk/verdaccio/config.yaml
 COPY deploy/appliance/supervisord.conf /opt/mrk/supervisord.conf
 COPY deploy/appliance/devpi-start.sh /opt/mrk/devpi-start.sh
 COPY deploy/appliance/devpi-configure.sh /opt/mrk/devpi-configure.sh
+COPY deploy/appliance/entrypoint.py /opt/mrk/entrypoint.py
 RUN mkdir -p /data \
     && chown -R 10001:10001 /data /opt/mrk
 
-USER 10001:10001
 EXPOSE 8080 4873 3141
 VOLUME ["/data"]
 
 HEALTHCHECK --interval=30s --timeout=8s --start-period=20s --retries=3 \
   CMD ["python", "-m", "mrk_control_plane.healthcheck"]
 
-ENTRYPOINT ["supervisord", "-c", "/opt/mrk/supervisord.conf"]
+ENTRYPOINT ["python", "/opt/mrk/entrypoint.py"]

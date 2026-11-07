@@ -10,7 +10,11 @@
 - ports `8080`, `4873`, and `3141` are reserved for admin, npm, and PyPI.
 
 Before Linux deployment, provision the host directory with ownership `10001:10001` and mode
-`0700`. The entrypoint does not run as root and will not silently change host permissions.
+`0700`. The hardened Compose forces UID/GID `10001`, so its entrypoint only validates and creates
+the fixed application subdirectories and never changes host ownership. A standalone container
+without that user override may start as root only long enough to initialize an empty `/data`
+mount; the entrypoint performs a non-recursive ownership fix on the fixed directory layout,
+drops permanently to UID/GID `10001`, and only then starts Supervisor and network services.
 
 Gate 3 contains the control plane, built admin shell, Verdaccio, devpi, and Supervisor. Fresh devpi
 data is initialized with persistent secrets and an authenticated loopback-only bootstrap. Existing

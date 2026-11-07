@@ -23,7 +23,11 @@ Supervisor پروژه `Supervisor/supervisor` پس از pin و تست سازگا
 
 ## ترتیب راه‌اندازی
 
-1. entrypoint فقط schema و دسترسی `/data` را validate می‌کند؛ chown یا migration مخرب ندارد.
+1. entrypoint فقط schema و دسترسی `/data` و زیرمسیرهای ثابت را validate/initialize می‌کند؛ در
+   Compose سخت‌گیرانه از ابتدا UID/GID برابر `10001` دارد و ownership میزبان را تغییر نمی‌دهد.
+   اجرای standalone می‌تواند فقط برای bootstrap یک volume خالی با root شروع شود، اما صرفاً همان
+   directoryهای ثابت را بدون recursive chown آماده می‌کند و پیش از Supervisor به `10001` تنزل
+   دائمی می‌یابد؛ migration یا تغییر مخرب ندارد.
 2. database/migration core و module manifestها validate می‌شوند.
 3. devpi، Verdaccio و moduleهای enabled با dependency order راه‌اندازی می‌شوند.
 4. control plane اجرا می‌شود و تا آماده‌شدن dependencyهای ضروری محلی، readiness برابر 503 است.
