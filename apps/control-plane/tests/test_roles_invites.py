@@ -515,11 +515,11 @@ def test_setup_errors_name_fields(tmp_path: Path) -> None:
 
 def test_migration_chain_has_single_head_on_fresh_sqlite(tmp_path: Path) -> None:
     script = ScriptDirectory(str(Path(auth_module.__file__).parent / "migrations"))
-    assert script.get_heads() == ["20261108_0011"]
+    assert script.get_heads() == ["20261108_0012"]
     revision = script.get_revision("20261108_0011")
     assert revision is not None and revision.down_revision == "20261108_0010"
     chain = [item.revision for item in script.walk_revisions()]
-    assert chain[-1] == "20261107_0001" and len(chain) == 11
+    assert chain[-1] == "20261107_0001" and len(chain) == 12
     database = Database(tmp_path)
     database.initialize()
     inspector = inspect(database.engine)
@@ -530,5 +530,5 @@ def test_migration_chain_has_single_head_on_fresh_sqlite(tmp_path: Path) -> None
     assert "token_hash" in columns and "token" not in columns
     with database.engine.connect() as connection:
         version = connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    assert version == "20261108_0011"
+    assert version == "20261108_0012"
     database.dispose()

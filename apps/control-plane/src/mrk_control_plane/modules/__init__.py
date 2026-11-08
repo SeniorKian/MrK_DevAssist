@@ -25,6 +25,8 @@ def _load() -> None:
         "firewall",
         "vuln",
         "dbadmin",
+        "dns",  # before services: the services card and domain sync read it
+        "services",  # after dokploy/s3/host_agent/firewall: it reads their services
         "home",  # last: it reads the services the modules above registered
     ):
         try:

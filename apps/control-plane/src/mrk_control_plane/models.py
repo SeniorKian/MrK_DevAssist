@@ -498,3 +498,25 @@ class UserInvite(Base):
     expires_at: Mapped[int] = mapped_column(Integer, index=True)
     used_at: Mapped[int | None] = mapped_column(Integer)
     revoked_at: Mapped[int | None] = mapped_column(Integer)
+
+
+class ServiceDomain(Base):
+    """A public host name routed to one MRK service (docs/35 §3).
+
+    ``host`` is canonical (IDNA/punycode, lowercase, no trailing dot) and unique
+    across all services. At most one row per service has ``primary`` set.
+    """
+
+    __tablename__ = "service_domains"
+
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    service_id: Mapped[str] = mapped_column(String(32), index=True)
+    host: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    primary: Mapped[bool] = mapped_column("is_primary", Boolean, default=False)
+    https: Mapped[bool] = mapped_column(Boolean, default=True)
+    mode: Mapped[str] = mapped_column(String(32))
+    dokploy_domain_id: Mapped[str | None] = mapped_column(String(64))
+    health: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)
+    created_by_user_id: Mapped[int | None] = mapped_column(Integer)

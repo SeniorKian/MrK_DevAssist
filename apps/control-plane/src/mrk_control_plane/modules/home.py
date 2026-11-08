@@ -37,6 +37,7 @@ from ..models import (
     S3Bucket,
     ServerBackupJob,
     ServerBackupRun,
+    ServiceDomain,
     SystemSetting,
     Task,
     UpstreamHealthCheck,
@@ -89,7 +90,21 @@ ATTENTION_RULES: dict[str, dict[str, Any]] = {
     "s3_public_endpoint_missing": {"any_of": ["s3:admin"],
                                    "action": {"kind": "navigate",
                                               "route": "#/files/storage?settings=1"}},
+    # docs/35: a service domain whose last check found a problem.
+    "domain_problem": {"any_of": ["domains:read"],
+                       "action": {"kind": "navigate", "route": "#/services"}},
+    # docs/37: the DNS engine is installed (socket present) but does not answer.
+    "dns_unreachable": {"any_of": ["dns:read"],
+                        "action": {"kind": "navigate", "route": "#/dns/status"}},
+    # docs/38: the engine's pressure level is above normal / an attack was detected.
+    "dns_under_pressure": {"any_of": ["dns:read"],
+                           "action": {"kind": "navigate", "route": "#/dns/monitor"}},
+    # The attacked domain name comes from query logs, so it needs the log permission
+    # (the pressure/events APIs hide names from dns:read-only users too).
+    "dns_attack_detected": {"any_of": ["dns:logs"],
+                            "action": {"kind": "navigate", "route": "#/dns/monitor"}},
 }
+MAX_DNS_ATTACK_ITEMS = 5
 
 QUICK_ACTIONS: tuple[dict[str, Any], ...] = (
     {"id": "connect_project", "route": "#/packages/connect", "any_of": ["system:read"]},
@@ -98,6 +113,8 @@ QUICK_ACTIONS: tuple[dict[str, Any], ...] = (
     {"id": "invite_teammate", "route": "#/access/people?invite=1", "any_of": ["user:write"]},
     {"id": "check_updates", "route": "#/server/updates?check=1", "any_of": ["updates:write"]},
     {"id": "view_server_usage", "route": "#/server/usage", "any_of": ["metrics:read"]},
+    {"id": "my_services", "route": "#/services", "any_of": ["services:read"]},
+    {"id": "add_domain", "route": "#/services?add=panel", "any_of": ["domains:write"]},
 )
 
 CHECKLIST_STEPS: tuple[dict[str, Any], ...] = (
@@ -113,6 +130,8 @@ CHECKLIST_STEPS: tuple[dict[str, Any], ...] = (
      "any_of": ["user:write"], "optional": False},
     {"id": "set_public_address", "route": "#/files/storage?settings=1",
      "any_of": ["s3:admin"], "optional": True},
+    {"id": "setup_dns", "route": "#/dns/setup",
+     "any_of": ["dns:admin"], "optional": True},
 )
 CHECKLIST_IDS = frozenset(step["id"] for step in CHECKLIST_STEPS)
 
@@ -254,11 +273,50 @@ def evaluate(facts: dict[str, Any], now: float) -> list[dict[str, Any]]:
     if tasks and int(tasks.get("failed_24h") or 0) > 0:
         items.append(_item("jobs_failed", "warning", {"count": int(tasks["failed_24h"])}))
 
-    # 13. S3 public endpoint missing while buckets exist
+    # 13. S3 public endpoint missing while buckets exist (an S3 domain also counts)
     s3 = facts.get("s3")
-    if s3 and int(s3.get("buckets") or 0) > 0 and not s3.get("public_endpoint"):
+    if s3 and int(s3.get("buckets") or 0) > 0 and not s3.get("public_endpoint") and not (
+        s3.get("domains")
+    ):
         items.append(_item("s3_public_endpoint_missing", "info",
                            {"buckets": int(s3["buckets"])}))
+
+    # 14. service domains with a problem (docs/35 §5)
+    for domain in (facts.get("domains") or {}).get("problems") or []:
+        item = _item("domain_problem", "warning", {
+            "host": domain["host"], "problem_code": domain["problem_code"],
+            "service_id": domain["service_id"],
+        }, domain["id"])
+        item["action"]["route"] = f"#/services?domain={domain['id']}"
+        items.append(item)
+
+    # 15. DNS engine installed but not answering (docs/37 §4)
+    dns = facts.get("dns")
+    if dns and dns.get("installed") and dns.get("reachable") is False:
+        items.append(_item("dns_unreachable", "error",
+                           {"error_code": dns.get("error_code"), "since": dns.get("checked_at")}))
+
+    # 16./17. DNS pressure level and detected attacks (docs/38 §4), from the cached
+    # engine view (the dns module refreshes it every 10 s; stale means absent).
+    pressure = (dns or {}).get("pressure") if dns and dns.get("reachable") else None
+    if isinstance(pressure, dict):
+        level = pressure.get("level")
+        if level in {"warning", "critical", "emergency"}:
+            reasons = [
+                str(item.get("metric"))[:40] for item in pressure.get("reasons") or []
+                if isinstance(item, dict) and item.get("metric")
+            ][:5]
+            items.append(_item("dns_under_pressure",
+                               "critical" if level == "emergency" else "warning",
+                               {"level": level, "since": pressure.get("since"),
+                                "reasons": reasons}))
+        hot = pressure.get("hot") if isinstance(pressure.get("hot"), dict) else {}
+        attacks = [item for item in hot.get("attacks") or []
+                   if isinstance(item, dict) and isinstance(item.get("parent"), str)]
+        for attack in attacks[:MAX_DNS_ATTACK_ITEMS]:
+            parent = attack["parent"][:253]
+            items.append(_item("dns_attack_detected", "warning",
+                               {"parent": parent, "since": attack.get("since")}, parent))
 
     items.sort(key=lambda item: (SEVERITY_ORDER[item["severity"]], item["id"]))
     return items
@@ -284,7 +342,9 @@ def checklist_done(facts: dict[str, Any]) -> dict[str, bool | None]:
         "create_backup": None if jobs is None else bool(jobs),
         "invite_teammate": None if users is None else users > 1,
         "set_public_address": None if facts.get("s3") is None else bool(
-            facts["s3"].get("public_endpoint")),
+            facts["s3"].get("public_endpoint") or facts["s3"].get("domains")),
+        "setup_dns": None if facts.get("dns") is None else bool(
+            facts["dns"].get("setup_complete")),
     }
 
 
@@ -364,6 +424,8 @@ class HomeService:
             "notifications": self._notifications,
             "s3": self._s3,
             "people": self._people,
+            "domains": self._domains,
+            "dns": self._dns,
         }
 
     def invalidate(self) -> None:
@@ -643,9 +705,45 @@ class HomeService:
                 buckets = int(db.scalar(select(func.count()).select_from(S3Bucket)) or 0)
                 row = db.get(SystemSetting, SETTINGS_KEY)
                 stored = row.value if row is not None and isinstance(row.value, dict) else {}
-            return {"buckets": buckets, "public_endpoint": bool(stored.get("public_endpoint"))}
+                s3_domains = int(db.scalar(
+                    select(func.count()).select_from(ServiceDomain)
+                    .where(ServiceDomain.service_id == "s3")
+                ) or 0)
+            return {"buckets": buckets, "public_endpoint": bool(stored.get("public_endpoint")),
+                    "domains": s3_domains}
 
         return await asyncio.to_thread(read)
+
+    async def _domains(self) -> dict[str, Any]:
+        def read() -> dict[str, Any]:
+            problems = []
+            with self.ctx.database.session() as db:
+                rows = db.scalars(select(ServiceDomain).order_by(ServiceDomain.host)).all()
+                for row in rows:
+                    health = row.health if isinstance(row.health, dict) else {}
+                    code = health.get("problem_code")
+                    if code:
+                        problems.append({"id": row.id, "host": row.host,
+                                         "service_id": row.service_id, "problem_code": code})
+            return {"count": len(rows), "problems": problems}
+
+        return await asyncio.to_thread(read)
+
+    async def _dns(self) -> dict[str, Any] | None:
+        from . import dns as dns_module
+
+        service = dns_module.ACTIVE_SERVICE
+        if service is None or service.ctx is not self.ctx:
+            return None
+        # A local unix-socket status call (cached 10 s by the module), never outbound.
+        status = await service.status(refresh=True)
+        return {"installed": bool(status.get("installed")),
+                "reachable": status.get("reachable"),
+                "error_code": status.get("error_code"),
+                "checked_at": status.get("checked_at"),
+                "setup_complete": bool(status.get("setup_complete")),
+                # Cached by the dns monitor loop; never an engine call per request.
+                "pressure": service.monitor.cached_pressure()}
 
     async def _people(self) -> dict[str, Any]:
         def users() -> int:

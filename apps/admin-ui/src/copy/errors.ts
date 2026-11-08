@@ -504,7 +504,73 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   mongo_operator_denied: { fa: "این دستور MongoDB برای امنیت مجاز نیست.", en: "This MongoDB operator isn't allowed, for safety." },
   redis_command_denied: { fa: "این دستور Redis برای امنیت مجاز نیست.", en: "This Redis command isn't allowed, for safety." },
   redis_command_invalid: { fa: "دستور Redis شناخته نشد.", en: "Unknown Redis command.", field: "text" },
-  redis_args_invalid: { fa: "ورودی‌های دستور Redis درست نیستند.", en: "The Redis command arguments aren't valid.", field: "text" }
+  redis_args_invalid: { fa: "ورودی‌های دستور Redis درست نیستند.", en: "The Redis command arguments aren't valid.", field: "text" },
+
+  // ── Services and domains (docs/35) ────────────────────────────────────────
+  service_not_found: { fa: "این سرویس پیدا نشد. صفحه را تازه کنید.", en: "This service wasn't found. Refresh the page.", action: "refreshList" },
+  service_not_controllable: { fa: "این سرویس از پنل روشن و خاموش نمی‌شود؛ فقط وضعیتش را می‌بینید.", en: "This service can't be started or stopped from the panel; you can only see its status." },
+  service_action_not_allowed: { fa: "این کار برای این سرویس ممکن نیست.", en: "This action isn't possible for this service." },
+  action_not_allowed: { fa: "این کار برای این سرویس ممکن نیست.", en: "This action isn't possible for this service." },
+  "services:invalid_action": { fa: "این کار شناخته نشد. صفحه را تازه کنید.", en: "This action isn't recognised. Reload the page.", action: "reload" },
+  service_action_failed: { fa: "سرویس به دستور جواب نداد. چند لحظه بعد دوباره امتحان کنید.", en: "The service didn't respond to the command. Try again in a moment.", action: "retry" },
+  service_busy: { fa: "این سرویس الان در حال روشن یا خاموش شدن است. چند لحظه صبر کنید.", en: "This service is starting or stopping right now. Wait a moment.", action: "retry" },
+  "services:confirmation_mismatch": { fa: "نام سرویس درست نوشته نشد. دوباره بنویسید.", en: "The service name wasn't typed correctly. Type it again.", field: "confirm" },
+  "services:confirmation_required": { fa: "برای اطمینان، نام سرویس را بنویسید.", en: "To be sure, type the service's name.", field: "confirm" },
+  domain_in_use: { fa: "این دامنه قبلاً به جای دیگری وصل شده است.", en: "This domain is already attached somewhere else.", field: "host" },
+  domain_exists: { fa: "این دامنه قبلاً اضافه شده است.", en: "This domain was already added.", field: "host" },
+  domain_not_found: { fa: "این دامنه دیگر وجود ندارد. صفحه را تازه کنید.", en: "This domain no longer exists. Refresh the page.", action: "refreshList" },
+  routing_unavailable: {
+    fa: "الان MRK نمی‌تواند دامنه را خودش وصل کند. روش «دستی» را انتخاب کنید یا اتصال Dokploy را بررسی کنید.",
+    en: "MRK can't attach the domain by itself right now. Pick the manual way, or check the Dokploy connection."
+  },
+  invalid_routing_mode: { fa: "این روش اتصال روی این سرور در دسترس نیست. یکی دیگر را انتخاب کنید.", en: "This routing method isn't available on this server. Pick another one." },
+  "domains:invalid_mode": { fa: "این روش اتصال روی این سرور در دسترس نیست. یکی دیگر را انتخاب کنید.", en: "This routing method isn't available on this server. Pick another one." },
+  dokploy_domain_failed: { fa: "Dokploy دامنه را ثبت نکرد. اتصال Dokploy را بررسی کنید و دوباره امتحان کنید.", en: "Dokploy didn't add the domain. Check the Dokploy connection and try again.", action: "retry" },
+  traefik_write_failed: { fa: "دستیار سرور نتوانست فایل Traefik را بنویسد. دسترسی پوشه Traefik را بررسی کنید.", en: "The server helper couldn't write the Traefik file. Check access to the Traefik folder.", action: "retry" },
+  traefik_dir_unavailable: { fa: "پوشه تنظیمات Traefik در دسترس دستیار سرور نیست.", en: "The server helper can't reach the Traefik settings folder." },
+  primary_required: { fa: "دست‌کم یک دامنه باید اصلی باشد. اول دامنه دیگری را اصلی کنید.", en: "At least one domain must be the main one. Make another domain main first." },
+  verify_failed: { fa: "بررسی دامنه تمام نشد. چند لحظه بعد دوباره امتحان کنید.", en: "The domain check didn't finish. Try again in a moment.", action: "retry" },
+  "domains:invalid_host": { fa: "این دامنه درست نوشته نشده؛ مثل npm.example.com بنویسید.", en: "This domain isn't written correctly; write it like npm.example.com.", field: "host" },
+  "domains:confirmation_mismatch": { fa: "نام دامنه درست نوشته نشد. دوباره بنویسید.", en: "The domain name wasn't typed correctly. Type it again.", field: "confirm" },
+  "domains:confirmation_required": { fa: "برای اطمینان، نام دامنه را بنویسید.", en: "To be sure, type the domain name.", field: "confirm" },
+
+  // ── MRK DNS (docs/37 §4) ──────────────────────────────────────────────────
+  dns_not_installed: { fa: "DNS هنوز روی این سرور راه نیفتاده است. از «راه‌اندازی» شروع کنید.", en: "DNS isn't set up on this server yet. Start from Set up." },
+  dns_unreachable: { fa: "برنامه DNS جواب نمی‌دهد. مطمئن شوید روی سرور روشن است و دوباره امتحان کنید.", en: "The DNS program isn't answering. Make sure it's running on the server and try again.", action: "retry" },
+  dns_config_conflict: {
+    fa: "کس دیگری هم‌زمان تنظیمات DNS را تغییر داد. آخرین نسخه را بگیرید و تغییرتان را دوباره بزنید.",
+    en: "Someone else changed the DNS settings at the same time. Load the latest version and make your change again.",
+    action: "refreshList"
+  },
+  config_conflict: {
+    fa: "کس دیگری هم‌زمان تنظیمات DNS را تغییر داد. آخرین نسخه را بگیرید و تغییرتان را دوباره بزنید.",
+    en: "Someone else changed the DNS settings at the same time. Load the latest version and make your change again.",
+    action: "refreshList"
+  },
+  dns_zone_exists: { fa: "این دامنه قبلاً در DNS اضافه شده است.", en: "This domain is already in DNS.", field: "name" },
+  dns_zone_not_found: { fa: "این دامنه دیگر در DNS نیست. فهرست را تازه کنید.", en: "This domain is no longer in DNS. Refresh the list.", action: "refreshList" },
+  dns_record_not_found: { fa: "این رکورد دیگر وجود ندارد. فهرست را تازه کنید.", en: "This record no longer exists. Refresh the list.", action: "refreshList" },
+  dns_override_not_found: { fa: "این نام دیگر وجود ندارد. فهرست را تازه کنید.", en: "This name no longer exists. Refresh the list.", action: "refreshList" },
+  dns_record_invalid: { fa: "چند خانه این رکورد درست نیست؛ با رنگ قرمز مشخص شده‌اند.", en: "A few fields of this record need fixing; they're marked in red.", action: "fixFields" },
+  dns_cname_conflict: { fa: "نامی که «نام دیگر» دارد نمی‌تواند رکورد دیگری هم داشته باشد. یکی را بردارید.", en: "A name that is an alias can't have other records. Remove one of them.", field: "name" },
+  invalid_zone_name: { fa: "نام دامنه را مثل example.com یا office.local بنویسید.", en: "Write the domain name like example.com or office.local.", field: "name" },
+  dns_import_invalid: { fa: "متن فایل دامنه خوانده نشد. شکل آن را بررسی کنید.", en: "The zone text couldn't be read. Check its format.", field: "text" },
+  dns_override_managed: { fa: "این نام را «سرویس‌های من» خودکار می‌سازد؛ دامنه را همان‌جا تغییر دهید.", en: "My services manages this name; change the domain there." },
+  dns_sync_failed: { fa: "نام‌های «سرویس‌های من» به DNS منتقل نشد. چند لحظه بعد دوباره امتحان کنید.", en: "The My services names didn't reach DNS. Try again in a moment.", action: "retry" },
+  "dns:confirmation_mismatch": { fa: "نام دامنه درست نوشته نشد. دوباره بنویسید.", en: "The domain name wasn't typed correctly. Type it again.", field: "confirmation" },
+  "dns:invalid_settings": { fa: "این تنظیم ذخیره نشد؛ مقدار خانه قرمز را بررسی کنید.", en: "This setting wasn't saved; check the field in red.", action: "fixFields" },
+  dns_version_not_found: { fa: "این نسخه دیگر در تاریخچه نیست. تاریخچه را تازه کنید.", en: "This version is no longer in the history. Refresh it.", action: "refreshList" },
+
+  // ── MRK DNS D2: logs, monitoring, limits (docs/38 §4) ──────────────────────
+  dns_limit_reached: { fa: "به بیشترین تعداد مجاز رسیده‌اید. اول چند مورد قدیمی را بردارید.", en: "You've reached the most allowed. Remove a few old ones first." },
+  dns_not_found: { fa: "این مورد دیگر وجود ندارد. فهرست را تازه کنید.", en: "This item no longer exists. Refresh the list.", action: "refreshList" },
+  dns_mitigation_not_found: { fa: "این محدودیت دیگر وجود ندارد؛ شاید وقتش تمام شده. فهرست را تازه کنید.", en: "This limit no longer exists; its time may be up. Refresh the list.", action: "refreshList" },
+  dns_mitigation_invalid: { fa: "این محدودیت گذاشته نشد؛ نشانی یا نام را بررسی کنید.", en: "The limit wasn't set; check the address or name.", action: "fixFields" },
+  dns_invalid_request: { fa: "درخواست کامل نبود. صفحه را تازه کنید و دوباره امتحان کنید.", en: "The request wasn't complete. Reload the page and try again.", action: "reload" },
+  dns_querylog_disabled: { fa: "ثبت لاگ پرسش‌ها خاموش است. از «لاگ» در حالت پیشرفته روشنش کنید.", en: "The question log is off. Turn it on under Log in Advanced mode." },
+  dns_query_invalid: { fa: "فیلترهای جست‌وجو درست نیست؛ زمان، نشانی یا نام را بررسی کنید.", en: "The search filters aren't right; check the time, address or name.", action: "fixFields" },
+  dns_stream_limit: { fa: "الان نمایش‌های زنده زیادی باز است. یکی را ببندید و دوباره امتحان کنید.", en: "Too many live views are open. Close one and try again.", action: "retry" },
+  "dns_logs:confirmation_mismatch": { fa: "کلمه تأیید درست نوشته نشد. دوباره بنویسید.", en: "The confirmation word wasn't typed correctly. Type it again.", field: "confirmation" }
 };
 
 // ── API ──────────────────────────────────────────────────────────────────────

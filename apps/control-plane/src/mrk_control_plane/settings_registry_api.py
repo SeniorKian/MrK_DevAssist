@@ -40,7 +40,7 @@ from .settings_registry import (
 
 MODULE_NAMES = (
     "monitoring", "updates", "vuln", "dbadmin", "notifications", "s3", "server_backups",
-    "firewall", "dokploy",
+    "firewall", "dokploy", "services", "dns",
 )
 LOGGER = logging.getLogger(__name__)
 RESTARTABLE = frozenset({"control-plane", "pypi-router", "s3-engine", "verdaccio", "devpi"})
@@ -136,6 +136,14 @@ def build_adapters(
     if "s3" in services:
         adapters["s3"] = simple(
             services["s3"], "get_settings", lambda s, p, u: s.put_settings(p, u)
+        )
+    if "services" in services:
+        adapters["services"] = simple(
+            services["services"], "get_settings", lambda s, p, u: s.put_settings(p, u)
+        )
+    if "dns" in services:
+        adapters["dns"] = simple(
+            services["dns"], "get_settings", lambda s, p, u: s.put_settings(p, u)
         )
     if "server_backups" in services:
         adapters["server_backups"] = simple(

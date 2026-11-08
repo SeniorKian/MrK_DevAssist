@@ -189,9 +189,45 @@ jobs:
           path: .tmp/e2e-local-engines
           if-no-files-found: ignore
 
+  dns-engine:
+    runs-on: ubuntu-latest
+    # Same pinned toolchain as the dns-builder stage of deploy/appliance/Dockerfile
+    # (scripts/validate_release.py checks the digests match).
+    container:
+      image: golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80
+    defaults:
+      run:
+        working-directory: apps/dns-engine
+    env:
+      GOFLAGS: -buildvcs=false
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - run: go mod verify
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: Unit, integration and race tests
+        run: go test -race -count=1 ./...
+      - name: Fuzz the wire parser, message handling and zone-file import briefly
+        run: |
+          go test -run='^$' -fuzz='^FuzzParseQuery$' -fuzztime=20s ./internal/wire
+          go test -run='^$' -fuzz='^FuzzTemplate$' -fuzztime=20s ./internal/wire
+          go test -run='^$' -fuzz='^FuzzImport$' -fuzztime=20s ./internal/zone
+          go test -run='^$' -fuzz='^FuzzHandle$' -fuzztime=20s ./internal/engine
+      - name: Known vulnerabilities in the module graph and the standard library
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Static build smoke test
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o /tmp/mrk-dns ./cmd/mrk-dns
+          CGO_ENABLED=0 go build -trimpath -o /tmp/mrk-dnsbench ./cmd/mrk-dnsbench
+          /tmp/mrk-dns version
+
   image-build:
     runs-on: ubuntu-latest
-    needs: [control-plane, admin-ui, verdaccio, pglite, pglite-database, lockfile-hosts, engine-e2e]
+    needs: [control-plane, admin-ui, verdaccio, pglite, pglite-database, lockfile-hosts, engine-e2e, dns-engine]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -213,6 +249,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: docker run --rm --entrypoint python mrk/package-mirror:ci -c "import mrk_control_plane"
+      - name: DNS engine drops to uid 10001 keeping only NET_BIND_SERVICE
+        run: |
+          docker run --rm --entrypoint mrk-dns mrk/package-mirror:ci version
+          docker run --detach --name mrk-ci-dns --init --user 0:10001 --read-only \
+            --cap-drop ALL --cap-add NET_BIND_SERVICE --cap-add SETUID --cap-add SETGID \
+            --security-opt no-new-privileges:true --env MRK_DNS_LISTEN=127.0.0.1:53 \
+            --tmpfs /var/lib/mrk-dns:uid=10001,gid=10001 --tmpfs /run/mrk-dns:uid=10001,gid=10001 \
+            --entrypoint mrk-dns mrk/package-mirror:ci serve
+          sleep 3
+          docker logs mrk-ci-dns
+          docker exec mrk-ci-dns mrk-dns health
+          pid=$(docker exec mrk-ci-dns sh -c 'for p in /proc/[0-9]*; do [ "$(cat $p/comm)" = mrk-dns ] && [ "$(awk "/^Uid/{print \$2}" $p/status)" = 10001 ] && basename $p; done' | head -1)
+          docker exec mrk-ci-dns grep -E '^(Uid|Gid|CapPrm|CapEff|CapInh|CapAmb):' /proc/$pid/status
+          docker exec mrk-ci-dns grep -qE '^CapEff:\s+0000000000000400$' /proc/$pid/status
+          docker exec mrk-ci-dns grep -qE '^CapPrm:\s+0000000000000400$' /proc/$pid/status
+          docker rm --force mrk-ci-dns
       - name: Scan image for known vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

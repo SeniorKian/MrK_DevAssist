@@ -66,6 +66,8 @@ type LazyPage = LazyExoticComponent<ComponentType<ShellPageProps>>;
 // Each group page is a separate file with a default export (docs/33 §7 Phase 1 contract).
 const GROUP_PAGES: Record<GroupPageKey, LazyPage> = {
   HomePage: lazy(() => import("./HomePage")) as unknown as LazyPage,
+  ServicesPage: lazy(() => import("./ServicesPage")) as unknown as LazyPage,
+  DnsPage: lazy(() => import("./DnsPage")) as unknown as LazyPage,
   PackagesPage: lazy(() => import("./PackagesPage")) as unknown as LazyPage,
   ServerPage: lazy(() => import("./ServerPage")) as unknown as LazyPage,
   FilesPage: lazy(() => import("./FilesPage")) as unknown as LazyPage,

@@ -2,9 +2,16 @@ import { registryEndpoints } from "./api";
 
 export type ClientCommand = { label: string; ecosystem: "npm" | "pypi"; command: string; everyday: boolean };
 
-/** Client configuration commands for this appliance; `everyday` ones are shown in Simple mode. */
-export function clientCommands(): { endpoints: ReturnType<typeof registryEndpoints>; commands: ClientCommand[] } {
-  const endpoints = registryEndpoints();
+/**
+ * Client configuration commands for this appliance; `everyday` ones are shown in Simple mode.
+ * `publicUrls` are the services' own public addresses (docs/35 `public_url`, from `usePublicServiceUrls()`);
+ * without them the addresses are built from this page's location, as before.
+ */
+export function clientCommands(publicUrls: { npm?: string | null; pypi?: string | null } = {}): {
+  endpoints: ReturnType<typeof registryEndpoints>;
+  commands: ClientCommand[];
+} {
+  const endpoints = registryEndpoints(publicUrls);
   const pypiHost = (() => {
     try {
       return new URL(endpoints.pypi).hostname;

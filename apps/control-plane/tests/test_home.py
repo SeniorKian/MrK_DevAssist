@@ -50,6 +50,10 @@ def broken_facts() -> dict:
         "tasks": {"failed_24h": 1},
         "s3": {"buckets": 2, "public_endpoint": False},
         "people": {"users": 1, "cached_packages": 0},
+        "domains": {"count": 1, "problems": [{"id": "d1", "host": "npm.example.com",
+                                              "service_id": "npm", "problem_code": "dns_missing"}]},
+        "dns": {"installed": True, "reachable": False, "error_code": "dns_unreachable",
+                "checked_at": NOW - 30, "setup_complete": False},
     }
 
 
@@ -71,6 +75,7 @@ def healthy_facts() -> dict:
         "tasks": {"failed_24h": 0},
         "s3": {"buckets": 2, "public_endpoint": True},
         "people": {"users": 3, "cached_packages": 1},
+        "dns": {"installed": True, "reachable": True, "setup_complete": True},
     }
 
 
@@ -82,9 +87,19 @@ def test_every_rule_triggers() -> None:
         "upstreams_all_failing:pypi", "agent_unreachable", "backup_failed:j1",
         "backup_overdue:j2", "updates_available", "vulnerabilities_found",
         "firewall_dry_run", "no_notification_channel", "jobs_failed",
-        "s3_public_endpoint_missing",
+        "s3_public_endpoint_missing", "domain_problem:d1", "dns_unreachable",
     }
-    assert {item["rule"] for item in items} | {"agent_not_paired", "no_backup_jobs"} == set(
+    assert by_id["dns_unreachable"]["severity"] == "error"
+    assert by_id["dns_unreachable"]["params"] == {"error_code": "dns_unreachable",
+                                                  "since": NOW - 30}
+    assert by_id["domain_problem:d1"]["action"]["route"] == "#/services?domain=d1"
+    assert by_id["domain_problem:d1"]["params"] == {
+        "host": "npm.example.com", "problem_code": "dns_missing", "service_id": "npm"}
+    assert {item["rule"] for item in items} | {
+        "agent_not_paired", "no_backup_jobs",
+        # need a reachable engine; covered in test_dns_d2.py
+        "dns_under_pressure", "dns_attack_detected",
+    } == set(
         home.ATTENTION_RULES
     )
     disk = by_id["disk_almost_full"]
@@ -115,6 +130,18 @@ def test_first_run_rules_and_healthy_state() -> None:
     facts = healthy_facts()
     facts["agent"] = {"configured": True, "reachable": None}
     assert home.evaluate(facts, NOW) == []
+
+
+def test_dns_rule_only_when_installed_and_not_answering() -> None:
+    facts = healthy_facts()
+    facts["dns"] = {"installed": False, "reachable": False, "setup_complete": False}
+    assert home.evaluate(facts, NOW) == []
+    facts["dns"] = {"installed": True, "reachable": None}
+    assert home.evaluate(facts, NOW) == []
+    facts["dns"] = {"installed": True, "reachable": False, "error_code": "dns_unreachable"}
+    assert [item["rule"] for item in home.evaluate(facts, NOW)] == ["dns_unreachable"]
+    assert home.checklist_done(facts)["setup_dns"] is False
+    assert home.checklist_done({})["setup_dns"] is None
 
 
 def test_missing_sources_produce_no_items() -> None:
@@ -159,16 +186,16 @@ def test_filtering_by_permission() -> None:
     # viewer: system, upstream, metrics, updates, vuln, task read only
     assert seen == {"component_unavailable", "disk_almost_full", "ecosystem_offline",
                     "upstreams_all_failing", "updates_available", "vulnerabilities_found",
-                    "jobs_failed"}
+                    "jobs_failed", "domain_problem", "dns_unreachable"}
     assert all("_any_of" not in item for item in viewer["attention"])
     assert [action["id"] for action in viewer["quick_actions"]] == [
-        "connect_project", "search_package", "view_server_usage"
+        "connect_project", "search_package", "view_server_usage", "my_services"
     ]
     assert [step["id"] for step in viewer["checklist"]] == ["owner_account", "connect_project"]
     assert viewer["verdict"] == {"level": "problem", "count": len(viewer["attention"])}
 
     owner = home.build_summary(facts, principal("owner"), {}, NOW)
-    assert len(owner["attention"]) == 13
+    assert len(owner["attention"]) == 15
     assert [step["id"] for step in owner["checklist"]] == [
         step["id"] for step in home.CHECKLIST_STEPS
     ]

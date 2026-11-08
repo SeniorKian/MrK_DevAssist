@@ -98,6 +98,8 @@ class Snapshot:
     identities: tuple[Identity, ...]
     keys: dict[str, tuple[Identity, AccessKey]] = field(default_factory=dict)
     generation: int = 0
+    # Extra virtual-host suffixes (other S3 domains, docs/35 §4); the primary is above.
+    extra_suffixes: tuple[str, ...] = ()
 
 
 def _created_ns(value: object) -> int:
@@ -139,6 +141,17 @@ def parse_snapshot(payload: Any, settings: EngineSettings, generation: int = 0) 
     endpoint = payload.get("public_endpoint") or ""
     if not isinstance(suffix, str) or not isinstance(endpoint, str):
         raise ValueError("virtual_host_suffix/public_endpoint must be strings")
+    raw_extra = payload.get("virtual_host_suffixes") or []
+    if not isinstance(raw_extra, list) or not all(isinstance(item, str) for item in raw_extra):
+        raise ValueError("virtual_host_suffixes must be a list of strings")
+    primary_suffix = suffix.strip().lower().strip(".")
+    extra = tuple(
+        dict.fromkeys(
+            item.strip().lower().strip(".")
+            for item in raw_extra[:256]
+            if item.strip().strip(".") and item.strip().lower().strip(".") != primary_suffix
+        )
+    )
     max_object = payload.get("max_object_bytes") or 5 * 1024**4
     if isinstance(max_object, bool) or not isinstance(max_object, int) or max_object < 1:
         raise ValueError("max_object_bytes must be a positive integer")
@@ -175,6 +188,7 @@ def parse_snapshot(payload: Any, settings: EngineSettings, generation: int = 0) 
         identities=tuple(identities),
         keys=keys,
         generation=generation,
+        extra_suffixes=extra,
     )
 
 

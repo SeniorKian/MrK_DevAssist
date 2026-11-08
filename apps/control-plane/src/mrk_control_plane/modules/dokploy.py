@@ -311,9 +311,17 @@ class DokployService:
         hit = self.cache.get(key)
         if hit is not None:
             return hit
-        value = await loader()
-        self.cache.set(key, value, self.tunable("cache_seconds"))
-        return value
+        # Single flight: concurrent callers for the same key wait for one load
+        # instead of each walking Dokploy (protects Dokploy from bursts).
+        locks = self.__dict__.setdefault("_cache_locks", {})
+        lock = locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            hit = self.cache.get(key)
+            if hit is not None:
+                return hit
+            value = await loader()
+            self.cache.set(key, value, self.tunable("cache_seconds"))
+            return value
 
     async def _optional(self, feature: str, procedure: str, **kwargs: Any) -> Any | None:
         """Call a procedure newer Dokploy releases have; None if this one lacks it."""

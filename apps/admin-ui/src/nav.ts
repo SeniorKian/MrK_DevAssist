@@ -16,6 +16,8 @@
  */
 import type { SvgIconComponent } from "@mui/icons-material";
 import HomeRoundedIcon from "@mui/icons-material/HomeRounded";
+import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
+import TravelExploreRoundedIcon from "@mui/icons-material/TravelExploreRounded";
 import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
 import DnsRoundedIcon from "@mui/icons-material/DnsRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
@@ -29,13 +31,20 @@ import type { Language } from "./i18n";
 import type { Bi } from "./copy/text";
 import { normalizeTyped } from "./copy/text";
 
-export type GroupKey = "home" | "packages" | "server" | "files" | "security" | "people" | "alerts";
+export type GroupKey = "home" | "services" | "dns" | "packages" | "server" | "files" | "security" | "people" | "alerts";
 export type UtilityKey = "settings" | "about";
 export type DisplayMode = "simple" | "advanced";
 
 /** Source files that render a tab (`src/<name>.tsx`), inside the group page. */
 export type PanelKey =
   | "HomePage"
+  | "ServicesPage"
+  | "DnsPage"
+  | "DnsSetup"
+  | "DnsNames"
+  | "DnsSettings"
+  | "DnsMonitor"
+  | "DnsLogs"
   | "PackagesPanel"
   | "UpstreamsPanel"
   | "RegistriesPanel"
@@ -74,7 +83,7 @@ export type NavTab = {
 };
 
 /** The page component (file name = default export) that renders a whole group with its tabs. */
-export type GroupPageKey = "HomePage" | "PackagesPage" | "ServerPage" | "FilesPage" | "SecurityPage" | "PeoplePage" | "AlertsPage";
+export type GroupPageKey = "HomePage" | "ServicesPage" | "DnsPage" | "PackagesPage" | "ServerPage" | "FilesPage" | "SecurityPage" | "PeoplePage" | "AlertsPage";
 
 export type NavGroup = {
   key: GroupKey;
@@ -98,6 +107,89 @@ export const NAV_GROUPS: NavGroup[] = [
         hint: { fa: "چیزهایی که امروز به شما نیاز دارند.", en: "What needs you today." },
         anyOf: [],
         panel: "HomePage"
+      }
+    ]
+  },
+  {
+    // docs/35: one card per service (status, start/stop, usage, domains). First after Home.
+    key: "services",
+    label: { fa: "سرویس‌های من", en: "My services" },
+    icon: AppsRoundedIcon,
+    page: "ServicesPage",
+    tabs: [
+      {
+        key: "all",
+        label: { fa: "سرویس‌های من", en: "My services" },
+        hint: { fa: "وضعیت هر سرویس، روشن و خاموش کردن، و دامنه‌های وصل به آن.", en: "Each service's status, start and stop, and its domains." },
+        anyOf: ["services:read", "domains:read"],
+        panel: "ServicesPage",
+        keywords: ["service", "سرویس", "domain", "دامنه", "traefik", "https", "ssl", "گواهی", "پورت", "port"]
+      }
+    ]
+  },
+  {
+    // docs/36–38: MRK's own DNS server (D1 + D2 monitoring and logs). The sanctions bypass comes in D3.
+    key: "dns",
+    label: { fa: "DNS", en: "DNS" },
+    icon: TravelExploreRoundedIcon,
+    page: "DnsPage",
+    tabs: [
+      {
+        key: "status",
+        label: { fa: "وضعیت", en: "Status" },
+        hint: { fa: "DNS سرور کار می‌کند یا نه، و چقدر پرسش جواب می‌دهد.", en: "Whether the server's DNS works, and how many questions it answers." },
+        anyOf: ["dns:read"],
+        panel: "DnsPage",
+        keywords: ["dns", "resolver", "qps", "نام", "آدرس"]
+      },
+      {
+        key: "monitor",
+        label: { fa: "پایش", en: "Monitor" },
+        hint: { fa: "DNS زیر فشار است یا نه، پرمصرف‌ترین‌ها، حمله‌ها و نمودارهای زنده.", en: "Whether DNS is under load, the busiest names and devices, attacks and live charts." },
+        anyOf: ["dns:read"],
+        panel: "DnsMonitor",
+        keywords: ["pressure", "فشار", "attack", "حمله", "ddos", "top", "stats", "آمار", "mitigation", "block", "مسدود"]
+      },
+      {
+        key: "logs",
+        label: { fa: "لاگ", en: "Log" },
+        hint: { fa: "چه دستگاهی چه نامی پرسید و چه جوابی گرفت؛ جست‌وجو، نمایش زنده و دانلود.", en: "Which device asked which name and what came back; search, live view and download." },
+        anyOf: ["dns:logs"],
+        panel: "DnsLogs",
+        keywords: ["query log", "querylog", "لاگ", "log", "tail", "nxdomain", "پرسش‌ها", "export", "csv"]
+      },
+      {
+        key: "setup",
+        label: { fa: "راه‌اندازی", en: "Set up" },
+        hint: { fa: "قدم‌به‌قدم DNS را روی سرور روشن کنید؛ هر قدم خودش بررسی می‌شود.", en: "Turn DNS on for the server step by step; each step checks itself." },
+        anyOf: ["dns:read"],
+        panel: "DnsSetup",
+        keywords: ["install", "نصب", "port 53", "پورت ۵۳", "resolv.conf", "daemon.json"]
+      },
+      {
+        key: "names",
+        label: { fa: "نام‌ها", en: "Names" },
+        hint: { fa: "بگویید هر نام به کدام آدرس برود؛ برای شبکه خودتان یا دامنه‌های شما.", en: "Say which address each name goes to, for your own network or domains." },
+        anyOf: ["dns:read"],
+        panel: "DnsNames",
+        keywords: ["zone", "زون", "record", "رکورد", "override", "A", "CNAME", "MX", "TXT"]
+      },
+      {
+        key: "test",
+        label: { fa: "تست", en: "Test" },
+        hint: { fa: "یک نام بپرسید و ببینید جوابش چیست و از کجا آمد.", en: "Ask about a name and see the answer and where it came from." },
+        anyOf: ["dns:read"],
+        panel: "DnsPage",
+        keywords: ["dig", "nslookup", "lookup", "resolve", "پرسش"]
+      },
+      {
+        key: "settings",
+        label: { fa: "تنظیمات", en: "Settings" },
+        hint: { fa: "کجا گوش بدهد، چه کسی بپرسد، از کدام DNS بیرونی بپرسد و سقف‌ها.", en: "Where it listens, who may ask, which outside DNS it asks, and limits." },
+        anyOf: ["dns:admin"],
+        advancedOnly: true,
+        panel: "DnsSettings",
+        keywords: ["upstream", "forwarder", "cloudflare", "shecan", "شکن", "cache", "rate limit", "acl", "recursion"]
       }
     ]
   },
@@ -377,7 +469,7 @@ export const NAV_UTILITIES: { key: UtilityKey; label: Bi; icon: SvgIconComponent
 ];
 
 /** Phone bottom bar: these four + «بیشتر» (More) which opens a sheet with the rest. */
-export const MOBILE_PRIMARY_GROUPS: GroupKey[] = ["home", "packages", "server", "files"];
+export const MOBILE_PRIMARY_GROUPS: GroupKey[] = ["home", "services", "packages", "server"];
 
 /** Old flat hashes → new routes, so bookmarks keep working. */
 export const LEGACY_ROUTES: Record<string, { group: GroupKey; tab: string }> = {
@@ -430,7 +522,37 @@ export const ROUTE_ALIASES: Record<string, { group: GroupKey; tab?: string }> = 
   "server/backups": { group: "files", tab: "app-backups" },
   "alerts/notifications": { group: "alerts", tab: "channels" },
   "alerts/audit": { group: "alerts", tab: "history" },
-  "alerts/observability": { group: "alerts", tab: "history" }
+  "alerts/observability": { group: "alerts", tab: "history" },
+  domains: { group: "services", tab: "all" },
+  "services/domains": { group: "services", tab: "all" },
+  "services/routing": { group: "services", tab: "all" },
+  "services/overview": { group: "services", tab: "all" },
+  "server/services": { group: "services", tab: "all" },
+  "server/domains": { group: "services", tab: "all" },
+  "home/services": { group: "services", tab: "all" },
+  "dns/overview": { group: "dns", tab: "status" },
+  "dns/install": { group: "dns", tab: "setup" },
+  "dns/guide": { group: "dns", tab: "setup" },
+  "dns/zones": { group: "dns", tab: "names" },
+  "dns/records": { group: "dns", tab: "names" },
+  "dns/overrides": { group: "dns", tab: "names" },
+  "dns/lookup": { group: "dns", tab: "test" },
+  "dns/query": { group: "dns", tab: "test" },
+  "dns/resolve": { group: "dns", tab: "test" },
+  "dns/config": { group: "dns", tab: "settings" },
+  "dns/upstreams": { group: "dns", tab: "settings" },
+  "dns/live": { group: "dns", tab: "monitor" },
+  "dns/pressure": { group: "dns", tab: "monitor" },
+  "dns/stats": { group: "dns", tab: "monitor" },
+  "dns/attacks": { group: "dns", tab: "monitor" },
+  "dns/mitigations": { group: "dns", tab: "monitor" },
+  "dns/top": { group: "dns", tab: "monitor" },
+  "dns/log": { group: "dns", tab: "logs" },
+  "dns/querylog": { group: "dns", tab: "logs" },
+  "dns/queries": { group: "dns", tab: "logs" },
+  "server/dns": { group: "dns", tab: "status" },
+  "services/dns": { group: "dns", tab: "status" },
+  "home/dns": { group: "dns", tab: "status" }
 };
 
 export type Route =

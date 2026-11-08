@@ -32,6 +32,8 @@ export const CONFIRM_WORDS = {
   unpair: { word: { fa: "جدا کن", en: "UNPAIR" }, token: "UNPAIR" },
   /** Offline restore: the operator confirms MRK is stopped. */
   stoppedMrk: { word: { fa: "سرویس را خاموش کردم", en: "I_HAVE_STOPPED_MRK" }, token: "I_HAVE_STOPPED_MRK" },
+  /** DNS: delete the question log (all of it, or everything before a time). */
+  deleteLogs: { word: { fa: "پاک کن", en: "DELETE LOGS" }, token: "DELETE LOGS" },
   /** Generic "I understand" confirmation for client-side-only checks. */
   confirm: { word: { fa: "تأیید", en: "CONFIRM" }, token: "CONFIRM" }
 } satisfies Record<string, ConfirmWord>;

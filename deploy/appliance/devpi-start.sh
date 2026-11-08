@@ -83,8 +83,21 @@ set -- devpi-server \
     --secretfile "$secret_file" \
     --restrict-modify root
 
-if [ -n "${MRK_PYPI_OUTSIDE_URL:-}" ]; then
-    set -- "$@" --outside-url "$MRK_PYPI_OUTSIDE_URL"
+# Public URL for generated links: the environment wins; otherwise the file the
+# panel writes from the primary PyPI domain (docs/35 §4). The file content is
+# accepted only when it is a bare http(s)://host[:port] URL.
+outside_url="${MRK_PYPI_OUTSIDE_URL:-}"
+outside_url_file="${MRK_DATA_DIR:-/data}/pypi/outside-url"
+if [ -z "$outside_url" ] && [ -f "$outside_url_file" ] && [ ! -L "$outside_url_file" ]; then
+    candidate="$(head -c 300 "$outside_url_file" | tr -d '\r\n')"
+    if printf '%s' "$candidate" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$'; then
+        outside_url="$candidate"
+    else
+        echo "Ignoring an invalid PyPI outside URL file: $outside_url_file" >&2
+    fi
+fi
+if [ -n "$outside_url" ]; then
+    set -- "$@" --outside-url "$outside_url"
 fi
 
 exec "$@"

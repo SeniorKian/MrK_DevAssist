@@ -195,6 +195,15 @@ export function apiErrorFromBody(status: number, body: unknown): ApiError {
     fields = (error.fields as unknown[])
       .filter((item): item is FieldIssue => typeof item === "object" && item !== null && typeof (item as FieldIssue).field === "string")
       .map((item) => ({ field: item.field, reason_code: String(item.reason_code ?? ""), params: item.params ?? undefined }));
+  } else if (error.fields && typeof error.fields === "object") {
+    // Some engines send `fields` as a map: {"data.address": "invalid_ip"} or {"ttl": {reason_code, params}}.
+    fields = Object.entries(error.fields as Record<string, unknown>).map(([field, value]) => {
+      if (value && typeof value === "object") {
+        const item = value as { reason_code?: unknown; code?: unknown; params?: Record<string, unknown> };
+        return { field, reason_code: String(item.reason_code ?? item.code ?? ""), params: item.params ?? undefined };
+      }
+      return { field, reason_code: typeof value === "string" ? value : "" };
+    });
   } else if (typeof error.field === "string") {
     fields = [{ field: error.field, reason_code: typeof error.reason === "string" ? error.reason : "", params: (error.params as Record<string, unknown> | undefined) ?? undefined }];
   }
@@ -281,7 +290,36 @@ export async function copyText(value: string): Promise<boolean> {
  * - IP / localhost / explicit-port deployments map to the same host on ports 4873 / 3141.
  *   Those registry ports are served by the appliance over plain HTTP, so http: is used.
  */
-export function registryEndpoints() {
+export function registryEndpoints(publicUrls: { npm?: string | null; pypi?: string | null } = {}) {
+  const derived = derivedRegistryEndpoints();
+  // docs/35 §4: a service's own public address (its main domain) wins over the guess from this page.
+  const npmUrl = publicRegistryUrl(publicUrls.npm, "npm");
+  const pypiUrl = publicRegistryUrl(publicUrls.pypi, "pypi");
+  if (!npmUrl && !pypiUrl) return derived;
+  const npm = npmUrl ?? derived.npm;
+  const pypi = pypiUrl ?? derived.pypi;
+  // Plain-HTTP addresses still need pip/uv "trusted host" flags (`portBased` keeps that meaning).
+  const insecure = [npm, pypi].some((url) => url.startsWith("http:"));
+  return { npm, pypi, portBased: insecure };
+}
+
+/** A service `public_url` → the registry address clients use (npm: `…/`, PyPI: `…/root/pypi/+simple/`). */
+function publicRegistryUrl(value: string | null | undefined, kind: "npm" | "pypi"): string | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const base = `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
+  if (kind === "npm") return `${base}/`;
+  return /\/\+simple$/.test(base) ? `${base}/` : `${base}/root/pypi/+simple/`;
+}
+
+function derivedRegistryEndpoints() {
   const { protocol, hostname, port } = window.location;
   const isAddress =
     hostname === "localhost" ||

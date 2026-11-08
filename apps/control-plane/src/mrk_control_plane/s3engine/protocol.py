@@ -442,9 +442,16 @@ class S3Api:
             host = host.split("]", 1)[0] + "]"
         elif ":" in host:
             host = host.rsplit(":", 1)[0]
-        suffix = snapshot.virtual_host_suffix
         path = request.raw_path or "/"
-        if suffix and host.endswith("." + suffix):
+        suffix = next(
+            (
+                item
+                for item in (snapshot.virtual_host_suffix, *snapshot.extra_suffixes)
+                if item and host.endswith("." + item)
+            ),
+            "",
+        )
+        if suffix:
             request.bucket = host[: -(len(suffix) + 1)]
             remainder = path[1:] if path.startswith("/") else path
             request.key = (

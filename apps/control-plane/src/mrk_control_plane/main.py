@@ -22,7 +22,6 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response, Streami
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
 from .auth import (
@@ -40,7 +39,12 @@ from .components import check_http_component, fetch_json_component
 from .config import Settings, apply_startup_overrides
 from .database import Database, database_health
 from .logging_config import configure_logging
-from .middleware import RequestSecurityMiddleware, correlation_id_context
+from .middleware import (
+    DynamicTrustedHostMiddleware,
+    RequestSecurityMiddleware,
+    TrustedHostsHolder,
+    correlation_id_context,
+)
 from .module_context import Event, EventBus, ModuleContext
 from .netresolve import NetworkSettingsStore, resolve_host, validate_config
 from .outbound import (
@@ -605,7 +609,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.database = database
 
     app.add_middleware(RequestSecurityMiddleware)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(active_settings.trusted_hosts))
+    # Static MRK_TRUSTED_HOSTS plus the panel's domains (docs/35 §4), updated at runtime.
+    trusted_hosts = TrustedHostsHolder(active_settings.trusted_hosts)
+    app.state.trusted_hosts = trusted_hosts
+    app.add_middleware(DynamicTrustedHostMiddleware, holder=trusted_hosts)
     if active_settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -646,8 +653,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def liveness() -> dict[str, str]:
         return {"status": "ok"}
 
+    def stopped_on_purpose(service_id: str) -> bool:
+        # A registry the operator stopped from "My services" must not make the
+        # container unhealthy (Swarm would replace it and restart the service).
+        from .modules import services as services_module
+        from .modules.services_catalog import read_stopped
+
+        if service_id in read_stopped(active_settings.data_dir):
+            return True
+        # A crashed npm/PyPI that the watchdog is retrying must not make the
+        # container unhealthy either (Swarm would restart the panel with it).
+        watched = services_module.ACTIVE_SERVICE
+        return watched is not None and watched.watchdog.handles(service_id)
+
     async def npm_is_ready() -> bool:
-        if not active_settings.npm_enabled:
+        if not active_settings.npm_enabled or stopped_on_purpose("npm"):
             return True
         return await asyncio.to_thread(
             check_http_component,
@@ -657,7 +677,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     async def pypi_is_ready() -> bool:
-        if not active_settings.pypi_enabled:
+        if not active_settings.pypi_enabled or stopped_on_purpose("pypi"):
             return True
         if (
             active_settings.pypi_bootstrap_state_file is not None
@@ -695,11 +715,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=503,
                 content={"status": "not_ready", "component": "pypi_registry"},
             )
-        if active_settings.pypi_enabled and not await asyncio.to_thread(
-            check_http_component,
-            active_settings.pypi_router_health_host,
-            active_settings.pypi_router_health_port,
-            "/health",
+        if (
+            active_settings.pypi_enabled
+            and not stopped_on_purpose("pypi")
+            and not await asyncio.to_thread(
+                check_http_component,
+                active_settings.pypi_router_health_host,
+                active_settings.pypi_router_health_port,
+                "/health",
+            )
         ):
             # Without the router every PyPI cache miss fails, even when upstreams are fine.
             return JSONResponse(
@@ -2776,6 +2800,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_principal=require_principal,
         require_csrf=require_csrf,
         error_payload=_error_payload,
+        trusted_hosts=trusted_hosts,
     )
     app.state.modules = register_all(module_ctx)
     app.state.events = events

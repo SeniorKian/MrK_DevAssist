@@ -30,6 +30,9 @@ class RequestSecurityMiddleware:
                 response_headers.extend(
                     [
                         (b"x-request-id", request_id.encode("ascii")),
+                        # Lets domain verification (docs/35 §5) recognise the panel
+                        # behind a proxy; carries no version or other detail.
+                        (b"x-mrk-service", b"panel"),
                         (b"x-content-type-options", b"nosniff"),
                         (b"x-frame-options", b"DENY"),
                         (b"referrer-policy", b"no-referrer"),
@@ -53,3 +56,79 @@ class RequestSecurityMiddleware:
         finally:
             correlation_id_context.reset(token)
 
+
+class TrustedHostsHolder:
+    """Allowed Host names = static ``MRK_TRUSTED_HOSTS`` ∪ runtime extras (panel domains).
+
+    Extras are replaced as a whole (``set_extra``) by the services module when panel
+    domains change, so no restart is needed. Same patterns as Starlette's
+    TrustedHostMiddleware: exact names, ``*.example.com`` and ``*`` (any).
+    """
+
+    def __init__(self, static_hosts: tuple[str, ...] | list[str]) -> None:
+        for pattern in static_hosts:
+            if "*" in pattern[1:] or (
+                pattern.startswith("*") and pattern != "*" and not pattern.startswith("*.")
+            ):
+                raise ValueError("Domain wildcard patterns must be like '*.example.com'.")
+        self.static = tuple(pattern.lower() for pattern in static_hosts)
+        self.extra: tuple[str, ...] = ()
+
+    def set_extra(self, hosts: list[str] | tuple[str, ...]) -> None:
+        self.extra = tuple(
+            dict.fromkeys(
+                host.lower() for host in hosts if host and "*" not in host and host.isascii()
+            )
+        )
+
+    def allowed(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self.static, *self.extra)))
+
+    def allows(self, host: str) -> tuple[bool, bool]:
+        """(valid, www_redirect_candidate) for a lowercase host without port."""
+        found_www = False
+        for pattern in self.allowed():
+            if pattern == "*":
+                return True, False
+            if host == pattern or (pattern.startswith("*") and host.endswith(pattern[1:])):
+                return True, False
+            if "www." + host == pattern:
+                found_www = True
+        return False, found_www
+
+
+class DynamicTrustedHostMiddleware:
+    """Starlette's TrustedHostMiddleware, reading the allowed list on every request."""
+
+    def __init__(self, app: ASGIApp, holder: TrustedHostsHolder, www_redirect: bool = True) -> None:
+        self.app = app
+        self.holder = holder
+        self.www_redirect = www_redirect
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        from starlette._utils import parse_host_header
+        from starlette.datastructures import URL, Headers
+        from starlette.responses import PlainTextResponse, RedirectResponse, Response
+
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        parsed = parse_host_header(headers.get("host"))
+        if "*" in self.holder.allowed():
+            await self.app(scope, receive, send)
+            return
+        if parsed is None:
+            await PlainTextResponse("Invalid host header", status_code=400)(scope, receive, send)
+            return
+        valid, www = self.holder.allows(parsed.host.lower())
+        if valid:
+            await self.app(scope, receive, send)
+            return
+        response: Response
+        if www and self.www_redirect:
+            url = URL(scope=scope)
+            response = RedirectResponse(url=str(url.replace(netloc="www." + url.netloc)))
+        else:
+            response = PlainTextResponse("Invalid host header", status_code=400)
+        await response(scope, receive, send)

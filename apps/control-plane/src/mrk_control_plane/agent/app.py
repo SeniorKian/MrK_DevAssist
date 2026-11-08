@@ -25,8 +25,9 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import AGENT_VERSION, cgroups, host_metrics
+from . import AGENT_VERSION, cgroups, dns_facts, host_metrics
 from . import backup as backup_sources
+from . import traefik as traefik_files
 from .docker_client import (
     DEFAULT_SOCKET,
     DockerClient,
@@ -59,6 +60,8 @@ _POST_ROUTES = (
     re.compile(r"^/v1/docker/prune/preview$"),
     re.compile(r"^/v1/docker/prune$"),
     re.compile(r"^/v1/backup/db/[^/]+/dump$"),
+    re.compile(r"^/v1/traefik/domains$"),
+    re.compile(r"^/v1/traefik/domains/delete$"),
 )
 
 
@@ -77,6 +80,8 @@ class AgentConfig:
         default_factory=lambda: Path(backup_sources.DEFAULT_VOLUMES_ROOT)
     )
     backup_max_seconds: float = 6 * 3600.0
+    # Read-only host root for the DNS setup facts (docs/37); None = not mounted.
+    host_root: Path | None = field(default_factory=lambda: _default_host_root())
 
     @classmethod
     def from_env(cls, key: bytes) -> AgentConfig:
@@ -98,6 +103,11 @@ class AgentConfig:
             ),
             backup_max_seconds=_backup_max_seconds(),
         )
+
+
+def _default_host_root() -> Path | None:
+    root = Path(host_metrics.DEFAULT_HOST_ROOT)
+    return root if root.is_dir() else None
 
 
 def _backup_max_seconds() -> float:
@@ -296,6 +306,8 @@ def create_agent_app(
                 "docker": docker_data is not None,
                 "host_metrics": host is not None,
                 "firewall": False,
+                "traefik_file": traefik_files.resolve_dir() is not None,
+                "dns_facts": True,
             },
             "docker": docker_data,
             "host": host,
@@ -753,7 +765,77 @@ def create_agent_app(
     from .package_routes import add_package_routes
 
     add_package_routes(app, docker, lambda: docker_possible, _error)
+
+    # ----- docs/35: opt-in Traefik dynamic file for MRK domains -------------------
+
+    add_traefik_routes(app)
+
+    # ----- docs/37: read-only facts for the DNS setup guide ------------------------
+
+    @app.get("/v1/dns/facts")
+    async def dns_host_facts() -> dict[str, Any]:
+        facts = await asyncio.to_thread(dns_facts.collect, config.proc_dir, config.host_root)
+        gateway = None
+        if docker_possible:
+            try:
+                for network in await docker.networks():
+                    if isinstance(network, dict) and network.get("Name") == "bridge":
+                        configs = (network.get("IPAM") or {}).get("Config") or []
+                        for item in configs if isinstance(configs, list) else []:
+                            value = item.get("Gateway") if isinstance(item, dict) else None
+                            if isinstance(value, str) and dns_facts.ip_text(value):
+                                gateway = dns_facts.ip_text(value)
+                                break
+            except DockerUnavailable:
+                gateway = None
+        facts["docker_bridge_gateway"] = gateway
+        return facts
+
     return app
+
+
+def add_traefik_routes(app: FastAPI) -> None:
+    """Write/delete only ``<MRK_AGENT_TRAEFIK_DYNAMIC_DIR>/mrk-domains.yml``.
+
+    Disabled (404 ``traefik_disabled``) unless the operator set the variable and
+    mounted Dokploy's dynamic directory read-write into the agent.
+    """
+    lock = asyncio.Lock()
+
+    @app.get("/v1/traefik/status")
+    async def traefik_status():
+        return await asyncio.to_thread(traefik_files.status, traefik_files.resolve_dir())
+
+    @app.post("/v1/traefik/domains")
+    async def traefik_write(request: Request):
+        directory = traefik_files.resolve_dir()
+        if directory is None:
+            return _error("traefik_disabled", 404)
+        payload = await _json_body(request)
+        try:
+            text = traefik_files.render(payload)
+        except traefik_files.TraefikPayloadError as exc:
+            return _error("invalid_payload", 422, message=str(exc)[:120])
+        async with lock:
+            try:
+                await asyncio.to_thread(traefik_files.write, directory, text)
+            except OSError:
+                LOGGER.warning("traefik dynamic file write failed")
+                return _error("traefik_dir_unwritable", 403)
+        LOGGER.info("traefik dynamic file written", extra={"bytes": len(text)})
+        return {"ok": True, "file": traefik_files.FILE_NAME, "bytes": len(text.encode())}
+
+    @app.post("/v1/traefik/domains/delete")
+    async def traefik_delete():
+        directory = traefik_files.resolve_dir()
+        if directory is None:
+            return _error("traefik_disabled", 404)
+        async with lock:
+            try:
+                removed = await asyncio.to_thread(traefik_files.delete, directory)
+            except OSError:
+                return _error("traefik_dir_unwritable", 403)
+        return {"ok": True, "removed": removed}
 
 
 def _ndjson(line: dict[str, Any]) -> bytes:

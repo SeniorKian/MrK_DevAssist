@@ -46,7 +46,7 @@ def _check_workflows(root: Path, dockerfile: str, failures: list[str]) -> None:
                 failures,
             )
         for image, digest in re.findall(
-            r"\b((?:node|python):[\w.-]+)(?:@(sha256:[0-9a-f]{64}))?(?=\s|$)", text
+            r"\b((?:node|python|golang):[\w.-]+)(?:@(sha256:[0-9a-f]{64}))?(?=\s|$)", text
         ):
             _require(
                 bool(digest), f"{name}: container image {image} is not digest-pinned", failures
@@ -109,6 +109,112 @@ def _check_line_endings(root: Path, failures: list[str]) -> None:
             _require(
                 b"\r\n" not in path.read_bytes(),
                 f"{path.relative_to(root).as_posix()} has CRLF line endings",
+                failures,
+            )
+
+
+# Host networking is reserved for the two services whose job needs the host
+# network namespace: mrk-firewall (nftables rules are per namespace) and mrk-dns
+# (docker-proxy is slow for UDP and hides the client address that DNS ACLs, rate
+# limiting and RRL depend on). Both bind nothing beyond what their settings name
+# and publish no ports; every other service must stay on bridge networks.
+_HOST_NETWORK_ALLOWED = {"mrk-firewall", "mrk-dns"}
+
+
+def _check_dns_service(root: Path, dockerfile: str, failures: list[str]) -> None:
+    """The optional DNS engine (docs/37) runs hardened, unprivileged and opt-in."""
+    _require(
+        "AS dns-builder" in dockerfile, "Dockerfile is missing the dns-builder stage", failures
+    )
+    _require(
+        "COPY --from=dns-builder /out/mrk-dns" in dockerfile,
+        "Dockerfile must copy the mrk-dns binary into the runtime image",
+        failures,
+    )
+    # File capabilities are ignored under no-new-privileges; mrk-dns gets its bind
+    # capability by starting as root with three capabilities and dropping itself.
+    _require(
+        "setcap" not in dockerfile,
+        "Dockerfile must not set file capabilities (no-new-privileges ignores them)",
+        failures,
+    )
+    _require(
+        (root / "apps/dns-engine/go.sum").is_file(), "apps/dns-engine/go.sum is missing", failures
+    )
+    for relative in ("compose.yaml", "deploy/appliance/compose.production.yaml"):
+        document = yaml.safe_load((root / relative).read_text(encoding="utf-8"))
+        services = document.get("services", {}) if isinstance(document, dict) else {}
+        if not isinstance(services, dict):
+            continue
+        for name, svc in services.items():
+            if isinstance(svc, dict) and svc.get("network_mode") == "host":
+                _require(
+                    name in _HOST_NETWORK_ALLOWED,
+                    f"{relative}: service {name} must not use network_mode host",
+                    failures,
+                )
+            if isinstance(svc, dict):
+                _require(
+                    svc.get("privileged") is not True,
+                    f"{relative}: service {name} is privileged",
+                    failures,
+                )
+        dns = services.get("mrk-dns")
+        if not isinstance(dns, dict):
+            failures.append(f"{relative}: service mrk-dns is missing")
+            continue
+        where = f"{relative}: mrk-dns"
+        _require(
+            dns.get("profiles") == ["dns"], f"{where} must be opt-in (profiles: [dns])", failures
+        )
+        _require(
+            dns.get("entrypoint") == ["mrk-dns"], f"{where} entrypoint must be mrk-dns", failures
+        )
+        _require(dns.get("command") == ["serve"], f"{where} command must be serve", failures)
+        # Starts as root only to drop to MRK_DNS_RUN_AS with NET_BIND_SERVICE alone.
+        _require(dns.get("user") == "0:10001", f"{where} must start as 0:10001", failures)
+        env = dns.get("environment") or {}
+        run_as = str(env.get("MRK_DNS_RUN_AS", "")) if isinstance(env, dict) else ""
+        _require(
+            run_as.endswith("10001:10001}") or run_as == "10001:10001",
+            f"{where} must drop to MRK_DNS_RUN_AS 10001:10001 by default",
+            failures,
+        )
+        _require(dns.get("cap_drop") == ["ALL"], f"{where} must drop all capabilities", failures)
+        _require(
+            sorted(dns.get("cap_add") or []) == ["NET_BIND_SERVICE", "SETGID", "SETUID"],
+            f"{where} may add only NET_BIND_SERVICE, SETUID and SETGID",
+            failures,
+        )
+        _require(
+            dns.get("read_only") is True, f"{where} root filesystem must be read-only", failures
+        )
+        _require(
+            "no-new-privileges:true" in (dns.get("security_opt") or []),
+            f"{where} must set no-new-privileges",
+            failures,
+        )
+        _require("ports" not in dns, f"{where} must not publish ports", failures)
+        _require("build" not in dns, f"{where} must use the appliance image", failures)
+        for key in ("mem_limit", "cpus", "pids_limit"):
+            _require(key in dns, f"{where} resource limit {key} is missing", failures)
+        health = dns.get("healthcheck", {})
+        test = health.get("test", []) if isinstance(health, dict) else []
+        _require(
+            test[:3] == ["CMD", "mrk-dns", "health"],
+            f"{where} healthcheck must run mrk-dns health",
+            failures,
+        )
+        mirror = services.get("mrk-mirror", {})
+        if isinstance(mirror, dict):
+            _require(
+                str(dns.get("image")) == str(mirror.get("image")),
+                f"{where} must use the same image as mrk-mirror",
+                failures,
+            )
+            _require(
+                "mrk-dns-run:/run/mrk-dns:ro" in (mirror.get("volumes") or []),
+                f"{relative}: mrk-mirror must mount mrk-dns-run read-only at /run/mrk-dns",
                 failures,
             )
 
@@ -213,6 +319,7 @@ def main() -> int:
     _check_runtime_limits(root, failures)
     _check_runtime_pins(root, failures)
     _check_line_endings(root, failures)
+    _check_dns_service(root, dockerfile, failures)
     print(json.dumps({"status": "passed" if not failures else "failed", "failures": failures}))
     return 1 if failures else 0
 

@@ -15,6 +15,8 @@ import BackupRoundedIcon from "@mui/icons-material/BackupRounded";
 import PersonAddAltRoundedIcon from "@mui/icons-material/PersonAddAltRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import QueryStatsRoundedIcon from "@mui/icons-material/QueryStatsRounded";
+import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
+import LanguageRoundedIcon from "@mui/icons-material/LanguageRounded";
 import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
 import StorageRoundedIcon from "@mui/icons-material/StorageRounded";
 import HistoryRoundedIcon from "@mui/icons-material/HistoryRounded";
@@ -22,6 +24,7 @@ import InfoRoundedIcon from "@mui/icons-material/InfoRounded";
 import type { AuthUser } from "./App";
 import { getJson, hasPermission } from "./api";
 import { clientCommands } from "./clients";
+import { usePublicServiceUrls } from "./services";
 import type { Language } from "./i18n";
 import {
   AttentionList, ChecklistCard, CopyField, FriendlyError, Notice, QuickActionGrid, QuickActionTile, SectionCard, StatGrid, StatTile, Verdict,
@@ -69,7 +72,9 @@ const QUICK_ICONS: Record<string, SvgIconComponent> = {
   backup_now: BackupRoundedIcon,
   invite_teammate: PersonAddAltRoundedIcon,
   check_updates: SystemUpdateAltRoundedIcon,
-  view_server_usage: QueryStatsRoundedIcon
+  view_server_usage: QueryStatsRoundedIcon,
+  my_services: AppsRoundedIcon,
+  add_domain: LanguageRoundedIcon
 };
 
 type SystemStatus = {
@@ -99,7 +104,8 @@ function useSystemStatus(enabled: boolean) {
 function ConnectDialog({ open, language, onClose }: { open: boolean; language: Language; onClose: () => void }) {
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
-  const { commands } = useMemo(() => clientCommands(), []);
+  const publicUrls = usePublicServiceUrls();
+  const { commands } = useMemo(() => clientCommands(publicUrls), [publicUrls.npm, publicUrls.pypi]); // eslint-disable-line react-hooks/exhaustive-deps
   const everyday = commands.filter((item) => item.everyday);
   const [index, setIndex] = useState(0);
   const current = everyday[Math.min(index, everyday.length - 1)];
@@ -128,6 +134,7 @@ export default function HomePage({ user }: { user: AuthUser }) {
   const [connectOpen, setConnectOpen] = useState(false);
   const [checklistError, setChecklistError] = useState<unknown>(null);
   const canSystem = hasPermission(user.permissions, "system:read");
+  const canServices = hasPermission(user.permissions, "services:read") || hasPermission(user.permissions, "domains:read");
   const status = useSystemStatus(canSystem);
   const data = home.data;
 
@@ -147,6 +154,8 @@ export default function HomePage({ user }: { user: AuthUser }) {
   const verdict = !data ? say(COPY.checking) : count === 0 ? say(COPY.allGood) : count === 1 ? say(COPY.needsYouOne) : say(COPY.needsYou, { n: count });
 
   const quick = (data?.quick_actions ?? []).filter((item) => QUICK_ACTION_COPY[item.id]);
+  // docs/35: «سرویس‌های من» is one tap from Home even when the server does not list it yet.
+  if (canServices && !quick.some((item) => item.id === "my_services")) quick.unshift({ id: "my_services", route: "#/services" });
 
   const steps: ChecklistStep[] = (data?.checklist ?? []).map((step) => ({
     key: step.id,

@@ -1,0 +1,1326 @@
+"""«سرویس‌های من» and public domains coordinated with Dokploy (docs/35).
+
+Routes:
+
+* ``GET  /api/v1/services`` (services:read), ``POST /api/v1/services/{id}/actions``
+  (services:operate, CSRF, audit).
+* ``GET/POST /api/v1/domains``, ``PATCH/DELETE /api/v1/domains/{id}``,
+  ``POST /api/v1/domains/{id}/verify`` (domains:read / domains:write).
+* ``GET/PUT /api/v1/domains/routing``.
+
+Domain changes are applied to the routing layer (Dokploy API, the agent-written
+Traefik file, or nothing for manual mode) and then synced into MRK itself:
+TrustedHost names for the panel, devpi's outside URL, the S3 public endpoint
+and virtual-host suffixes. Every sync has its own switch in the settings.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import secrets
+import time
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func, select
+
+from .. import process_control
+from ..components import check_http_component
+from ..models import ServiceDomain, SystemSetting, User
+from ..module_context import Event, ModuleContext
+from .domains_hosts import HostError, canonical_host, display_host
+from .domains_routing import Routing, RoutingError
+from .domains_settings import ROUTING_MODES, SettingsError, SettingsStore
+from .domains_verify import Probes, default_probes, verify_domain
+from .services_catalog import (
+    DOMAIN_SERVICES,
+    SERVICE_INDEX,
+    SERVICES,
+    ServiceDef,
+    UsageCache,
+    read_stopped,
+    state_from_programs,
+    write_stopped,
+)
+from .services_watchdog import ServiceWatchdog
+
+LOGGER = logging.getLogger(__name__)
+MODULE_NAME = "services"
+PYPI_OUTSIDE_FILE = Path("pypi") / "outside-url"
+EMPTY_HEALTH: dict[str, Any] = {
+    "dns": None,
+    "tls": None,
+    "reach": None,
+    "checked_at": None,
+    "problem_code": None,
+    "problems": [],
+}
+VERIFY_TICK_SECONDS = 300.0
+
+# Tests may replace these.
+PROBES: Probes | None = None
+
+
+class ServiceActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1, max_length=16)
+    confirmation: str | None = Field(default=None, max_length=64)
+
+
+class DomainCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_id: str = Field(min_length=1, max_length=32)
+    host: str = Field(min_length=1, max_length=300)
+    https: bool = True
+    primary: bool | None = None
+    mode: str = Field(default="auto", max_length=32)
+
+
+class DomainUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    primary: bool | None = None
+    https: bool | None = None
+
+
+class DomainDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: str | None = Field(default=None, max_length=300)
+
+
+class RoutingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str = Field(max_length=32)
+    traefik_file_enabled: bool | None = None
+
+
+class ServiceError(Exception):
+    def __init__(self, code: str, status_code: int, message: str, **extra: Any) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.message = message
+        self.extra = extra
+
+
+def _row(row: ServiceDomain) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "service_id": row.service_id,
+        "host": row.host,
+        "display_host": display_host(row.host),
+        "primary": bool(row.primary),
+        "https": bool(row.https),
+        "mode": row.mode,
+        "dokploy_domain_id": row.dokploy_domain_id,
+        "health": dict(row.health) if isinstance(row.health, dict) else dict(EMPTY_HEALTH),
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "created_by": row.created_by_user_id,
+    }
+
+
+def public_url(domain: dict[str, Any] | None) -> str | None:
+    if not domain:
+        return None
+    return f"{'https' if domain['https'] else 'http'}://{domain['host']}"
+
+
+class ServicesService:
+    def __init__(self, ctx: ModuleContext) -> None:
+        self.ctx = ctx
+        self.store = SettingsStore(ctx.database)
+        self.routing = Routing(ctx, self.get_settings)
+        self.watchdog = ServiceWatchdog(ctx, self.get_settings)
+        self.usage = UsageCache(
+            ctx.data_dir,
+            counters={
+                "npm": lambda: self._package_count("npm"),
+                "pypi": lambda: self._package_count("pypi"),
+                "s3": self._bucket_count,
+                "panel": self._user_count,
+            },
+        )
+        self.lock = asyncio.Lock()
+        self.last_sync: dict[str, Any] = {}
+        self.busy: set[str] = set()
+        self._task: asyncio.Task[None] | None = None
+        self._probes: Probes | None = None
+
+    # ------------------------------------------------------------------ settings
+    def get_settings(self) -> dict[str, Any]:
+        return self.store.get_settings()
+
+    def put_settings(self, payload: Any, actor_user_id: int | None) -> dict[str, Any]:
+        value = self.store.put_settings(payload, actor_user_id)
+        self.routing.invalidate()
+        return value
+
+    @property
+    def probes(self) -> Probes:
+        if PROBES is not None:
+            return PROBES
+        if self._probes is None:
+            self._probes = default_probes(self.ctx.network_settings.dns)
+        return self._probes
+
+    # ------------------------------------------------------------------ usage counters
+    def _package_count(self, ecosystem: str) -> dict[str, Any]:
+        from ..catalog import PackageCatalog
+
+        count = len(PackageCatalog(self.ctx.data_dir).all_packages(ecosystem))
+        return {"items": count, "items_kind": "packages"}
+
+    def _bucket_count(self) -> dict[str, Any]:
+        from ..models import S3Bucket
+
+        with self.ctx.database.session() as db:
+            count = int(db.scalar(select(func.count()).select_from(S3Bucket)) or 0)
+        return {"items": count, "items_kind": "buckets"}
+
+    def _user_count(self) -> dict[str, Any]:
+        with self.ctx.database.session() as db:
+            count = int(db.scalar(select(func.count()).select_from(User)) or 0)
+        return {"items": count, "items_kind": "users"}
+
+    # ------------------------------------------------------------------ domains (db)
+    def list_domains(self, service_id: str | None = None) -> list[dict[str, Any]]:
+        with self.ctx.database.session() as db:
+            query = select(ServiceDomain).order_by(
+                ServiceDomain.service_id, ServiceDomain.primary.desc(), ServiceDomain.host
+            )
+            if service_id:
+                query = query.where(ServiceDomain.service_id == service_id)
+            return [_row(row) for row in db.scalars(query)]
+
+    def get_domain(self, domain_id: str) -> dict[str, Any]:
+        with self.ctx.database.session() as db:
+            row = db.get(ServiceDomain, domain_id)
+            if row is None:
+                raise ServiceError("domain_not_found", 404, "Domain not found")
+            return _row(row)
+
+    def primary(self, service_id: str) -> dict[str, Any] | None:
+        return next((item for item in self.list_domains(service_id) if item["primary"]), None)
+
+    def _insert(
+        self,
+        service_id: str,
+        host: str,
+        https: bool,
+        mode: str,
+        primary: bool | None,
+        dokploy_id: str | None,
+        actor: int | None,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self.ctx.database.session() as db, db.begin():
+            existing = db.scalars(
+                select(ServiceDomain).where(ServiceDomain.service_id == service_id)
+            ).all()
+            make_primary = not any(row.primary for row in existing) or bool(primary)
+            if make_primary:
+                for row in existing:
+                    row.primary = False
+            row = ServiceDomain(
+                id=secrets.token_hex(8),
+                service_id=service_id,
+                host=host,
+                primary=make_primary,
+                https=https,
+                mode=mode,
+                dokploy_domain_id=dokploy_id,
+                health=dict(EMPTY_HEALTH),
+                created_at=now,
+                updated_at=now,
+                created_by_user_id=actor,
+            )
+            db.add(row)
+            db.flush()
+            return _row(row)
+
+    def _delete_row(self, domain_id: str) -> None:
+        with self.ctx.database.session() as db, db.begin():
+            row = db.get(ServiceDomain, domain_id)
+            if row is None:
+                return
+            service_id, was_primary = row.service_id, row.primary
+            db.delete(row)
+            db.flush()
+            if was_primary:
+                successor = db.scalars(
+                    select(ServiceDomain)
+                    .where(ServiceDomain.service_id == service_id)
+                    .order_by(ServiceDomain.created_at, ServiceDomain.host)
+                    .limit(1)
+                ).first()
+                if successor is not None:
+                    successor.primary = True
+
+    def _update_row(self, domain_id: str, **changes: Any) -> dict[str, Any]:
+        with self.ctx.database.session() as db, db.begin():
+            row = db.get(ServiceDomain, domain_id)
+            if row is None:
+                raise ServiceError("domain_not_found", 404, "Domain not found")
+            if changes.get("primary") is True:
+                for other in db.scalars(
+                    select(ServiceDomain).where(ServiceDomain.service_id == row.service_id)
+                ):
+                    other.primary = other.id == row.id
+            elif changes.get("primary") is False and row.primary:
+                successor = db.scalars(
+                    select(ServiceDomain)
+                    .where(ServiceDomain.service_id == row.service_id, ServiceDomain.id != row.id)
+                    .order_by(ServiceDomain.created_at, ServiceDomain.host)
+                    .limit(1)
+                ).first()
+                if successor is not None:
+                    row.primary = False
+                    successor.primary = True
+            for key in ("https", "health", "dokploy_domain_id"):
+                if key in changes:
+                    setattr(row, key, changes[key])
+            row.updated_at = int(time.time())
+            db.flush()
+            return _row(row)
+
+    # ------------------------------------------------------------------ create/update/delete
+    async def create(self, body: DomainCreateRequest, actor: int | None) -> dict[str, Any]:
+        if body.service_id not in DOMAIN_SERVICES:
+            raise ServiceError(
+                "invalid_service",
+                422,
+                "This service cannot have a domain",
+                fields=[{"field": "service_id", "reason_code": "invalid_choice"}],
+            )
+        if body.mode not in ROUTING_MODES:
+            raise ServiceError(
+                "invalid_routing_mode",
+                422,
+                "Unknown routing mode",
+                fields=[{"field": "mode", "reason_code": "invalid_choice"}],
+            )
+        try:
+            host = canonical_host(body.host)
+        except HostError as exc:
+            raise ServiceError(
+                "invalid_host",
+                422,
+                exc.message,
+                fields=[{"field": "host", "reason_code": exc.reason_code}],
+            ) from None
+        async with self.lock:
+            existing = next((item for item in self.list_domains() if item["host"] == host), None)
+            if existing is not None:
+                raise ServiceError(
+                    "domain_exists",
+                    409,
+                    "This domain is already used by an MRK service",
+                    owner={
+                        "kind": "mrk",
+                        "name": SERVICE_INDEX[existing["service_id"]].name_en,
+                        "service_id": existing["service_id"],
+                        "domain_id": existing["id"],
+                    },
+                    fields=[{"field": "host", "reason_code": "in_use"}],
+                )
+            owner, conflict_check = await self.routing.dokploy_conflict(host)
+            if owner is not None:
+                raise ServiceError(
+                    "domain_in_use",
+                    409,
+                    "This domain is already used in Dokploy",
+                    owner=owner,
+                    conflict_check=conflict_check,
+                    fields=[{"field": "host", "reason_code": "in_use"}],
+                )
+            detected = await self.routing.detect()
+            mode = self.routing.effective_mode(detected, body.mode)
+            available = self.routing.available_modes(detected)
+            if not available.get(mode):
+                code = (
+                    "traefik_dir_unavailable" if mode == "traefik_file" else ("routing_unavailable")
+                )
+                raise ServiceError(
+                    code,
+                    409,
+                    f"Routing mode {mode} is not available here",
+                    mode=mode,
+                    available_modes=[key for key, ok in available.items() if ok],
+                )
+            applied: dict[str, Any] = {
+                "mode": mode,
+                "ok": True,
+                "error_code": None,
+                "conflict_check": conflict_check,
+                "redeploy_required": False,
+                "suggested_action": None,
+            }
+            dokploy_id = None
+            if mode == "dokploy_api":
+                try:
+                    dokploy_id = await self.routing.dokploy_create(
+                        body.service_id, host, body.https, detected
+                    )
+                except Exception as exc:  # noqa: BLE001 - mapped below
+                    raise self._routing_failure(exc, "dokploy_domain_failed") from None
+                hint = self.routing.redeploy_hint(detected)
+                applied["redeploy_required"] = hint is not None
+                applied["suggested_action"] = hint
+            domain = await asyncio.to_thread(
+                self._insert,
+                body.service_id,
+                host,
+                body.https,
+                mode,
+                body.primary,
+                dokploy_id,
+                actor,
+            )
+            if mode == "traefik_file":
+                try:
+                    await self._apply_traefik(detected)
+                except Exception as exc:  # noqa: BLE001
+                    await asyncio.to_thread(self._delete_row, domain["id"])
+                    raise self._routing_failure(exc, "traefik_write_failed") from None
+            result: dict[str, Any] = {"domain": domain, "applied": applied}
+            if mode == "manual":
+                result["instructions"] = self.routing.instructions(
+                    body.service_id, host, body.https, detected
+                )
+            result["sync"] = await self.sync()
+        self._verify_soon(domain["id"])
+        return result
+
+    async def update(self, domain_id: str, body: DomainUpdateRequest) -> dict[str, Any]:
+        async with self.lock:
+            current = await asyncio.to_thread(self.get_domain, domain_id)
+            applied: dict[str, Any] = {
+                "mode": current["mode"],
+                "ok": True,
+                "error_code": None,
+                "redeploy_required": False,
+                "suggested_action": None,
+            }
+            https_changed = body.https is not None and body.https != current["https"]
+            if https_changed and current["mode"] == "dokploy_api" and current["dokploy_domain_id"]:
+                detected = await self.routing.detect()
+                try:
+                    await self.routing.dokploy_update(
+                        current["dokploy_domain_id"],
+                        current["service_id"],
+                        current["host"],
+                        bool(body.https),
+                        detected,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    raise self._routing_failure(exc, "dokploy_domain_failed") from None
+                hint = self.routing.redeploy_hint(detected)
+                applied["redeploy_required"] = hint is not None
+                applied["suggested_action"] = hint
+            changes: dict[str, Any] = {}
+            if body.primary is not None:
+                changes["primary"] = body.primary
+            if https_changed:
+                changes["https"] = body.https
+                changes["health"] = dict(EMPTY_HEALTH)
+            domain = await asyncio.to_thread(lambda: self._update_row(domain_id, **changes))
+            if https_changed and current["mode"] == "traefik_file":
+                try:
+                    await self._apply_traefik(await self.routing.detect())
+                except Exception as exc:  # noqa: BLE001 - saved; report, do not roll back
+                    applied.update(
+                        {
+                            "ok": False,
+                            "error_code": "traefik_write_failed",
+                            "upstream_code": getattr(exc, "code", None),
+                        }
+                    )
+            if current["mode"] == "manual" and https_changed:
+                result_instructions = self.routing.instructions(
+                    current["service_id"],
+                    current["host"],
+                    bool(body.https),
+                    await self.routing.detect(),
+                )
+            else:
+                result_instructions = None
+            sync = await self.sync()
+        if https_changed:
+            self._verify_soon(domain_id)
+        result = {"domain": domain, "health": domain["health"], "applied": applied, "sync": sync}
+        if result_instructions:
+            result["instructions"] = result_instructions
+        return result
+
+    async def delete(self, domain_id: str, confirmation: str | None) -> dict[str, Any]:
+        async with self.lock:
+            current = await asyncio.to_thread(self.get_domain, domain_id)
+            if confirmation not in {current["host"], current["display_host"]}:
+                raise ServiceError(
+                    "confirmation_mismatch",
+                    422,
+                    "Type the domain name to confirm",
+                    expected_confirmation=current["host"],
+                    fields=[{"field": "confirmation", "reason_code": "incorrect"}],
+                )
+            applied: dict[str, Any] = {
+                "mode": current["mode"],
+                "ok": True,
+                "error_code": None,
+                "redeploy_required": False,
+                "suggested_action": None,
+            }
+            if current["mode"] == "dokploy_api" and current["dokploy_domain_id"]:
+                try:
+                    await self.routing.dokploy_delete(current["dokploy_domain_id"])
+                except Exception as exc:  # noqa: BLE001
+                    if getattr(exc, "code", None) not in {"dokploy_not_found"}:
+                        raise self._routing_failure(exc, "dokploy_domain_failed") from None
+                detected = await self.routing.detect()
+                hint = self.routing.redeploy_hint(detected)
+                applied["redeploy_required"] = hint is not None
+                applied["suggested_action"] = hint
+            await asyncio.to_thread(self._delete_row, domain_id)
+            if current["mode"] == "traefik_file":
+                try:
+                    await self._apply_traefik(await self.routing.detect())
+                except Exception as exc:  # noqa: BLE001 - row is gone; report the file state
+                    applied.update(
+                        {
+                            "ok": False,
+                            "error_code": "traefik_write_failed",
+                            "upstream_code": getattr(exc, "code", None),
+                        }
+                    )
+            sync = await self.sync()
+        return {"deleted": domain_id, "applied": applied, "sync": sync}
+
+    async def _apply_traefik(self, detected: dict[str, Any]) -> None:
+        rows = [item for item in self.list_domains() if item["mode"] == "traefik_file"]
+        await self.routing.traefik_apply(rows, detected)
+
+    @staticmethod
+    def _routing_failure(exc: BaseException, code: str) -> ServiceError:
+        if isinstance(exc, RoutingError):
+            return ServiceError(exc.code, exc.status_code, exc.message, **exc.extra)
+        upstream = getattr(exc, "code", None) or type(exc).__name__
+        if upstream == "traefik_disabled":
+            code = "traefik_dir_unavailable"
+        message = getattr(exc, "message", None) or "The routing change failed"
+        status = 409 if code == "traefik_dir_unavailable" else 502
+        return ServiceError(code, status, str(message)[:300], upstream_code=upstream)
+
+    # ------------------------------------------------------------------ verification
+    def _verify_soon(self, domain_id: str) -> None:
+        try:
+            asyncio.get_running_loop().create_task(self._safe_verify(domain_id))
+        except RuntimeError:
+            return
+
+    async def _safe_verify(self, domain_id: str) -> None:
+        try:
+            await self.verify(domain_id)
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("background domain verification failed", exc_info=True)
+
+    async def verify(self, domain_id: str) -> dict[str, Any]:
+        current = await asyncio.to_thread(self.get_domain, domain_id)
+        settings = self.get_settings()
+        health = await verify_domain(
+            host=current["host"],
+            service_id=current["service_id"],
+            https=current["https"],
+            expected_ips=list(settings.get("server_public_ips") or []),
+            probes=self.probes,
+            expiry_warning_days=int(settings["tls_expiry_warning_days"]),
+        )
+        domain = await asyncio.to_thread(lambda: self._update_row(domain_id, health=health))
+        self._publish_health(current, health)
+        return domain
+
+    def _publish_health(self, before: dict[str, Any], health: dict[str, Any]) -> None:
+        previous = (before.get("health") or {}).get("problem_code")
+        problem = health.get("problem_code")
+        details = {
+            "domain_id": before["id"],
+            "host": before["host"],
+            "service_id": before["service_id"],
+            "problem_code": problem,
+            "problems": health.get("problems", []),
+        }
+        if problem == "tls_expiring":
+            tls = health.get("tls") or {}
+            self.ctx.events.publish(
+                Event(
+                    type="domain.cert_expiring",
+                    severity="warning",
+                    title=f"Certificate for {before['host']} expires soon",
+                    message=f"{tls.get('days_left')} days left",
+                    module=MODULE_NAME,
+                    dedupe_key=f"domain.cert_expiring:{before['id']}",
+                    details={**details, "expires_at": tls.get("expires_at")},
+                )
+            )
+        elif problem and problem != previous:
+            self.ctx.events.publish(
+                Event(
+                    type="domain.unhealthy",
+                    severity="warning",
+                    title=f"Domain {before['host']} has a problem: {problem}",
+                    module=MODULE_NAME,
+                    dedupe_key=f"domain.unhealthy:{before['id']}",
+                    details=details,
+                )
+            )
+        elif not problem and previous:
+            self.ctx.events.publish(
+                Event(
+                    type="domain.healthy",
+                    severity="info",
+                    title=f"Domain {before['host']} works again",
+                    module=MODULE_NAME,
+                    dedupe_key=f"domain.unhealthy:{before['id']}",
+                    details=details,
+                )
+            )
+
+    async def verify_due(self) -> int:
+        interval = int(self.get_settings()["verify_interval_seconds"])
+        if interval <= 0:
+            return 0
+        now = time.time()
+        done = 0
+        for item in await asyncio.to_thread(self.list_domains):
+            checked = (item.get("health") or {}).get("checked_at")
+            if checked is None or now - float(checked) >= interval:
+                await self._safe_verify(item["id"])
+                done += 1
+        return done
+
+    # ------------------------------------------------------------------ internal sync
+    async def sync(self) -> dict[str, Any]:
+        settings = self.get_settings()
+        domains = await asyncio.to_thread(self.list_domains)
+        result: dict[str, Any] = {
+            "panel": self._sync_panel(settings, domains),
+            "pypi": await self._sync_pypi(settings, domains),
+            "s3": await asyncio.to_thread(self._sync_s3, settings, domains),
+            "npm": {
+                "status": "not_needed",
+                "note": "Verdaccio builds tarball URLs from Host and X-Forwarded-Proto",
+            },
+            "dns": await self._sync_dns(),
+            "at": int(time.time()),
+        }
+        self.last_sync = result
+        return result
+
+    def _sync_panel(
+        self, settings: dict[str, Any], domains: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        holder = self.ctx.trusted_hosts
+        hosts = [item["host"] for item in domains if item["service_id"] == "panel"]
+        if holder is None:
+            return {"status": "unavailable", "hosts": hosts}
+        if not settings["sync_panel_trusted_hosts"]:
+            holder.set_extra([])
+            return {"status": "disabled", "hosts": []}
+        holder.set_extra(hosts)
+        return {"status": "applied", "hosts": hosts}
+
+    async def _sync_pypi(
+        self, settings: dict[str, Any], domains: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        path = self.ctx.data_dir / PYPI_OUTSIDE_FILE
+        primary = next(
+            (item for item in domains if item["service_id"] == "pypi" and item["primary"]), None
+        )
+        url = public_url(primary)
+        if not settings["sync_pypi_outside_url"]:
+            return {
+                "status": "disabled",
+                "outside_url": None,
+                "restarted": False,
+                "restart_required": False,
+            }
+        if os.getenv("MRK_PYPI_OUTSIDE_URL", "").strip():
+            return {
+                "status": "env_override",
+                "outside_url": os.getenv("MRK_PYPI_OUTSIDE_URL"),
+                "restarted": False,
+                "restart_required": False,
+            }
+
+        def write() -> bool:
+            try:
+                current = path.read_text(encoding="utf-8").strip() if path.is_file() else None
+            except OSError:
+                current = None
+            if current == url:
+                return False
+            if url is None:
+                path.unlink(missing_ok=True)
+                return True
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+            temporary.write_text(url + "\n", encoding="utf-8")
+            temporary.chmod(0o600)
+            os.replace(temporary, path)
+            return True
+
+        changed = await asyncio.to_thread(write)
+        result = {
+            "status": "applied",
+            "outside_url": url,
+            "restarted": False,
+            "restart_required": False,
+        }
+        if not changed:
+            result["status"] = "unchanged"
+            return result
+        if "pypi" in read_stopped(self.ctx.data_dir):
+            return result  # applies on the next start
+        if settings["sync_pypi_restart"] and process_control.supervisor_available():
+            try:
+                await asyncio.to_thread(process_control.program_action, "devpi", "restart")
+                result["restarted"] = True
+            except process_control.SupervisorError as exc:
+                LOGGER.warning(
+                    "devpi restart after a domain change failed", extra={"error_code": exc.code}
+                )
+                result["restart_required"] = True
+        else:
+            result["restart_required"] = True
+        return result
+
+    def _sync_s3(self, settings: dict[str, Any], domains: list[dict[str, Any]]) -> dict[str, Any]:
+        from . import s3 as s3_module
+        from .s3_store import DOMAIN_SUFFIXES_KEY
+
+        store = s3_module.ACTIVE_STORE
+        if store is None:
+            return {"status": "unavailable"}
+        if not settings["sync_s3_endpoint"]:
+            return {"status": "disabled"}
+        s3_domains = [item for item in domains if item["service_id"] == "s3"]
+        primary = next((item for item in s3_domains if item["primary"]), None)
+        desired_endpoint = public_url(primary)
+        desired_suffix = primary["host"] if primary else None
+        state = self.store.state()
+        managed = state.get("s3_managed") if isinstance(state.get("s3_managed"), dict) else {}
+        current = store.get_settings()
+        patch: dict[str, Any] = {}
+        manual: list[str] = []
+        for key, desired in (
+            ("public_endpoint", desired_endpoint),
+            ("virtual_host_suffix", desired_suffix),
+        ):
+            now_value = current.get(key)
+            if now_value in (None, "") or now_value == managed.get(key):
+                if now_value != desired:
+                    patch[key] = desired
+            elif desired is not None and now_value != desired:
+                manual.append(key)  # set by hand on the S3 page; respected
+        if patch:
+            store.put_settings(patch, None)
+        managed = {**managed, **patch}
+        hosts = [item["host"] for item in s3_domains]
+        now = int(time.time())
+        with self.ctx.database.session() as db, db.begin():
+            row = db.get(SystemSetting, DOMAIN_SUFFIXES_KEY)
+            value = {"hosts": hosts, "managed_by": "domains"}
+            if row is None:
+                db.add(SystemSetting(key=DOMAIN_SUFFIXES_KEY, value=value, updated_at=now))
+            elif row.value != value:
+                row.value = value
+                row.updated_at = now
+        state["s3_managed"] = {
+            key: managed.get(key) for key in ("public_endpoint", "virtual_host_suffix")
+        }
+        self.store.save_state(state)
+        store.write_snapshot()
+        return {
+            "status": "manual_override" if manual else "applied",
+            "managed_by": "domains",
+            "public_endpoint": store.get_settings().get("public_endpoint"),
+            "virtual_host_suffix": store.get_settings().get("virtual_host_suffix"),
+            "virtual_host_suffixes": hosts,
+            "manual_keys": manual,
+        }
+
+    # ------------------------------------------------------------------ services view
+    async def _state(
+        self, service: ServiceDef, status: dict[str, dict[str, str]] | None, stopped: set[str]
+    ) -> tuple[str, str | None, bool]:
+        settings = self.ctx.settings
+        if service.id == "panel":
+            return "running", None, False
+        if service.id in {"agent", "firewall"}:
+            return await self._helper_state(service.id)
+        if service.id == "dns":
+            return await self._dns_state()
+        enabled = {
+            "npm": getattr(settings, "npm_enabled", False),
+            "pypi": getattr(settings, "pypi_enabled", False),
+            "s3": True,
+        }[service.id]
+        if service.id == "s3":
+            from . import s3 as s3_module
+
+            store = s3_module.ACTIVE_STORE
+            if store is not None:
+                enabled = bool((await asyncio.to_thread(store.get_settings)).get("enabled", True))
+        if not enabled:
+            return "disabled", "disabled_in_settings", False
+        if status is None:
+            ready = await self._health_fallback(service.id)
+            if ready:
+                return "running", "supervisor_unavailable", False
+            return "unknown", "supervisor_unavailable", False
+        state, reason = state_from_programs(service, status)
+        if state == "stopped" and service.id in stopped:
+            reason = "stopped_by_user"
+        return state, reason, True
+
+    async def _health_fallback(self, service_id: str) -> bool:
+        settings = self.ctx.settings
+        if service_id == "npm":
+            return await asyncio.to_thread(
+                check_http_component, settings.npm_health_host, settings.npm_health_port, "/-/ping"
+            )
+        if service_id == "pypi":
+            return await asyncio.to_thread(
+                check_http_component,
+                settings.pypi_health_host,
+                settings.pypi_health_port,
+                "/+status",
+            )
+        if service_id == "s3":
+            from . import s3 as s3_module
+            from .s3_client import EngineAdmin
+
+            store = s3_module.ACTIVE_STORE
+            if store is None:
+                return False
+            try:
+                return bool(await EngineAdmin(store.admin_token_path).health())
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+
+    async def _helper_state(self, service_id: str) -> tuple[str, str | None, bool]:
+        from .home import find_service
+
+        name = "HostAgentService" if service_id == "agent" else "FirewallService"
+        service = find_service(self.ctx, name)
+        if service is None:
+            return "not_installed", "module_unavailable", False
+        if service_id == "agent":
+            source, url, _key = service.resolve()
+            configured = source is not None and url is not None
+        else:
+            configured = bool(await asyncio.to_thread(service.configured))
+        if not configured:
+            return "not_installed", f"{service_id}_not_configured", False
+        reachable = getattr(service, "reachable", None)
+        if reachable is True:
+            return "running", None, False
+        if reachable is False:
+            return "degraded", f"{service_id}_unreachable", False
+        return "unknown", "not_checked_yet", False
+
+    def _dns_service(self) -> Any | None:
+        from . import dns as dns_module
+
+        service = dns_module.ACTIVE_SERVICE
+        return service if service is not None and service.ctx is self.ctx else None
+
+    async def _dns_state(self) -> tuple[str, str | None, bool]:
+        service = self._dns_service()
+        if service is None:
+            return "not_installed", "module_unavailable", False
+        status = await service.status(refresh=True)
+        if not status.get("installed"):
+            return "not_installed", "dns_not_installed", False
+        if status.get("reachable"):
+            return "running", None, False
+        return "degraded", "dns_unreachable", False
+
+    async def _sync_dns(self) -> dict[str, Any]:
+        service = self._dns_service()
+        if service is None:
+            return {"status": "unavailable"}
+        return await service.safe_sync()
+
+    async def services_view(self, *, include_domains: bool) -> dict[str, Any]:
+        programs = sorted({name for item in SERVICES for name in item.programs})
+        status = await asyncio.to_thread(process_control.program_status, programs)
+        stopped = await asyncio.to_thread(read_stopped, self.ctx.data_dir)
+        domains = await asyncio.to_thread(self.list_domains)
+        items = []
+        for service in SERVICES:
+            state, reason, supervised = await self._state(service, status, stopped)
+            crash = self.watchdog.record(service.id)
+            if crash is not None:
+                auto = bool(self.get_settings().get("auto_restart", True))
+                state = "crashed"
+                reason = "crashed_retrying" if auto else "crashed_no_auto_restart"
+            own = [item for item in domains if item["service_id"] == service.id]
+            primary = next((item for item in own if item["primary"]), None)
+            controllable = bool(service.actions) and supervised and state != "disabled"
+            usage = await self.usage.read(service)
+            items.append(
+                {
+                    "id": service.id,
+                    "name_fa": service.name_fa,
+                    "name_en": service.name_en,
+                    "description_fa": service.description_fa,
+                    "description_en": service.description_en,
+                    "state": state,
+                    "reason_code": reason,
+                    "recovery": crash.public() if crash is not None else None,
+                    "controllable": controllable,
+                    "actions": list(service.actions) if controllable else [],
+                    "internal_port": service.internal_port,
+                    "usage": usage
+                    or {
+                        "disk_bytes": None,
+                        "disk_partial": False,
+                        "items": None,
+                        "items_kind": None,
+                        "last_activity_at": None,
+                        "requests_24h": None,
+                    },
+                    "domains": [
+                        {
+                            "id": item["id"],
+                            "host": item["host"],
+                            "display_host": item["display_host"],
+                            "primary": item["primary"],
+                            "https": item["https"],
+                            "health": item["health"],
+                        }
+                        for item in own
+                    ]
+                    if include_domains
+                    else [],
+                    "domains_supported": service.domains,
+                    "public_url": public_url(primary),
+                    "manage_route": service.manage_route,
+                }
+            )
+        detected = await self.routing.detect_quick()
+        return {
+            "items": items,
+            "routing": {
+                "mode": self.get_settings()["routing_mode"],
+                "effective_mode": (
+                    self.routing.effective_mode(detected) if detected is not None else None
+                ),
+                "detected": self._public_detected(detected) if detected is not None else None,
+                "detecting": detected is None,
+            },
+            "supervisor_available": status is not None,
+        }
+
+    @staticmethod
+    def _public_detected(detected: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in detected.items() if key != "errors"} | {
+            "errors": list(dict.fromkeys(detected.get("errors") or []))
+        }
+
+    async def action(
+        self, service_id: str, action: str, confirmation: str | None
+    ) -> dict[str, Any]:
+        service = SERVICE_INDEX.get(service_id)
+        if service is None:
+            raise ServiceError("service_not_found", 404, "Unknown service")
+        if action not in {"start", "stop", "restart"}:
+            raise ServiceError(
+                "service_action_not_allowed",
+                422,
+                "Unknown action",
+                fields=[{"field": "action", "reason_code": "invalid_choice"}],
+            )
+        if action not in service.actions:
+            raise ServiceError(
+                "service_not_controllable",
+                409,
+                "This service cannot be started or stopped from the panel",
+            )
+        if action in {"stop", "restart"} and confirmation != service.id:
+            raise ServiceError(
+                "confirmation_mismatch",
+                422,
+                "Type the service id to confirm",
+                expected_confirmation=service.id,
+                fields=[{"field": "confirmation", "reason_code": "incorrect"}],
+            )
+        state, _reason, supervised = await self._state(
+            service,
+            await asyncio.to_thread(process_control.program_status, list(service.programs)),
+            set(),
+        )
+        if state == "disabled":
+            raise ServiceError(
+                "service_action_not_allowed",
+                409,
+                "This service is turned off in settings",
+                reason="service_disabled",
+            )
+        if not supervised:
+            raise ServiceError(
+                "service_not_controllable",
+                409,
+                "The process supervisor is not reachable here",
+                reason="supervisor_unavailable",
+            )
+        if service.id in self.busy:
+            raise ServiceError("service_busy", 409, "Another action on this service is running")
+        self.busy.add(service.id)
+        self.watchdog.busy.add(service.id)
+        try:
+            result = await self._run_action(service, action)
+            # The operator took over: forget the automatic retry schedule.
+            self.watchdog.reset(service.id)
+            return result
+        finally:
+            self.busy.discard(service.id)
+            self.watchdog.busy.discard(service.id)
+
+    async def _run_action(self, service: ServiceDef, action: str) -> dict[str, Any]:
+        order = list(service.programs)
+        if action == "stop":
+            order.reverse()  # devpi before its router
+        elif service.id == "pypi":
+            order = ["pypi-router", "devpi"]
+        stopped = await asyncio.to_thread(read_stopped, self.ctx.data_dir)
+        if action == "stop":
+            await asyncio.to_thread(write_stopped, self.ctx.data_dir, stopped | {service.id})
+        try:
+            for program in order:
+                await asyncio.to_thread(process_control.program_action, program, action)
+        except process_control.SupervisorError as exc:
+            raise ServiceError(
+                "service_action_failed", 502, exc.message, upstream_code=exc.code
+            ) from None
+        if action in {"start", "restart"} and service.id in stopped:
+            await asyncio.to_thread(write_stopped, self.ctx.data_dir, stopped - {service.id})
+        status = await asyncio.to_thread(process_control.program_status, list(service.programs))
+        new_state, reason = state_from_programs(service, status)
+        return {"id": service.id, "action": action, "state": new_state, "reason_code": reason}
+
+    # ------------------------------------------------------------------ routing view
+    async def routing_view(self, *, refresh: bool = False) -> dict[str, Any]:
+        detected = await self.routing.detect(refresh=refresh)
+        settings = self.get_settings()
+        target = self.routing.target_host(detected)
+        network = settings["dokploy_network"]
+        return {
+            "mode": settings["routing_mode"],
+            "effective_mode": self.routing.effective_mode(detected),
+            "available_modes": [
+                key for key, ok in self.routing.available_modes(detected).items() if ok
+            ],
+            "detected": self._public_detected(detected),
+            "settings": {
+                key: settings[key]
+                for key in (
+                    "traefik_file_enabled",
+                    "cert_resolver",
+                    "entrypoint_web",
+                    "entrypoint_websecure",
+                    "redirect_middleware",
+                    "target_host",
+                    "dokploy_network",
+                    "verify_interval_seconds",
+                    "server_public_ips",
+                )
+            },
+            "target_host": target,
+            "guidance": guidance(network, target, detected),
+            "sync": self.last_sync or None,
+        }
+
+    # ------------------------------------------------------------------ lifecycle
+    async def _restop(self) -> None:
+        """Services stopped on purpose stay stopped after a container restart."""
+        stopped = await asyncio.to_thread(read_stopped, self.ctx.data_dir)
+        if not stopped or not process_control.supervisor_available():
+            return
+        for service_id in sorted(stopped):
+            service = SERVICE_INDEX[service_id]
+            for program in reversed(service.programs):
+                try:
+                    await asyncio.to_thread(process_control.program_action, program, "stop")
+                except process_control.SupervisorError:
+                    LOGGER.warning("could not keep %s stopped", service_id)
+
+    async def _loop(self) -> None:
+        await asyncio.sleep(30)
+        while True:
+            try:
+                await self.verify_due()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("domain verification loop failed")
+            await asyncio.sleep(VERIFY_TICK_SECONDS)
+
+    async def start(self) -> None:
+        try:
+            await self.sync()
+        except Exception:
+            LOGGER.exception("initial domain sync failed")
+        try:
+            await self._restop()
+        except Exception:
+            LOGGER.exception("re-stopping services failed")
+        self._task = asyncio.create_task(self._loop(), name="mrk-domain-verify")
+        self.watchdog.start()
+
+    async def stop(self) -> None:
+        await self.watchdog.stop()
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+
+def guide_snippets(network: str, target: str) -> dict[str, str]:
+    join_network = (
+        "services:\n"
+        f"  {target}:\n"
+        "    networks:\n"
+        "      - default\n"
+        f"      - {network}\n"
+        "networks:\n"
+        f"  {network}:\n"
+        "    external: true\n"
+    )
+    agent_mount = (
+        "services:\n"
+        "  mrk-agent:\n"
+        "    environment:\n"
+        "      MRK_AGENT_TRAEFIK_DYNAMIC_DIR: /host/traefik-dynamic\n"
+        "    volumes:\n"
+        "      # read-write, only this folder; the agent writes only mrk-domains.yml\n"
+        "      - /etc/dokploy/traefik/dynamic:/host/traefik-dynamic\n"
+    )
+    dokploy_compose = (
+        "# Dokploy → Create Service → Compose → Raw; paste the MRK compose file and\n"
+        "# keep the service name (e.g. mrk-mirror). Then connect Dokploy in MRK\n"
+        "# (Server → Dokploy) and add domains here: they are created through the\n"
+        "# Dokploy API on this Compose service (ports 8080/4873/3141/9000).\n"
+    )
+    return {
+        "join_dokploy_network": join_network,
+        "agent_traefik_mount": agent_mount,
+        "dokploy_compose_install": dokploy_compose,
+    }
+
+
+def guidance(network: str, target: str, detected: dict[str, Any]) -> list[dict[str, Any]]:
+    """Ordered help cards for the routing page: {id, title_fa, title_en, body_fa, body_en, code}."""
+    snippets = guide_snippets(network, target)
+    cards = [
+        {
+            "id": "dokploy_compose_install",
+            "title_fa": "نصب MRK به‌صورت Compose داخل Dokploy (روش پیشنهادی)",
+            "title_en": "Install MRK as a Compose service in Dokploy (recommended)",
+            "body_fa": "با این روش دامنه‌ها مستقیم با API رسمی Dokploy روی همان سرویس ثبت "
+            "می‌شوند و گواهی Let's Encrypt خودکار گرفته می‌شود.",
+            "body_en": "Domains are then registered through Dokploy's official API on the same "
+            "service and Let's Encrypt certificates are issued automatically.",
+            "code": snippets["dokploy_compose_install"],
+            "done": bool(detected.get("inside_dokploy")),
+        },
+        {
+            "id": "join_dokploy_network",
+            "title_fa": f"اتصال کانتینر MRK به شبکه {network}",
+            "title_en": f"Attach the MRK container to {network}",
+            "body_fa": "Traefik دکپلوی فقط از این شبکه به MRK می‌رسد (برای روش فایل Traefik).",
+            "body_en": "Dokploy's Traefik reaches MRK only on this network (Traefik file mode).",
+            "code": snippets["join_dokploy_network"],
+            "done": bool(detected.get("on_dokploy_network")),
+        },
+        {
+            "id": "agent_traefik_mount",
+            "title_fa": "اجازه نوشتن فایل Traefik به Agent (اختیاری)",
+            "title_en": "Let the agent write the Traefik file (optional)",
+            "body_fa": "فقط پوشه dynamic دکپلوی، قابل نوشتن، به Agent داده می‌شود و Agent فقط "
+            "فایل mrk-domains.yml را می‌سازد. سپس «اجازه نوشتن فایل Traefik» را روشن کنید.",
+            "body_en": "Mount only Dokploy's dynamic folder read-write into the agent; it writes "
+            "only mrk-domains.yml. Then turn on “Allow the Traefik file”.",
+            "code": snippets["agent_traefik_mount"],
+            "done": bool(detected.get("traefik_dir_available")),
+        },
+    ]
+    return cards
+
+
+ACTIVE_SERVICE: ServicesService | None = None
+
+
+def register(ctx: ModuleContext) -> None:
+    global ACTIVE_SERVICE
+    service = ServicesService(ctx)
+    ACTIVE_SERVICE = service
+    services_router = APIRouter(prefix="/api/v1/services", tags=["services"])
+    domains_router = APIRouter(prefix="/api/v1/domains", tags=["domains"])
+
+    def fail(exc: ServiceError) -> JSONResponse:
+        extra = dict(exc.extra)
+        fields = extra.pop("fields", None)
+        return ctx.error_payload(  # type: ignore[call-arg]
+            exc.code, exc.message, exc.status_code, fields=fields, **extra
+        )
+
+    async def audit(
+        principal: Any, action: str, object_type: str, object_id: str, result: str = "success"
+    ) -> None:
+        await asyncio.to_thread(
+            ctx.audit, principal.user_id, action, object_type, object_id, result
+        )
+
+    @services_router.get("")
+    async def list_services(request: Request) -> dict[str, Any]:
+        ctx.require_principal(request, "services:read")
+        return await service.services_view(include_domains=True)
+
+    @services_router.post("/{service_id}/actions", response_model=None)
+    async def service_action(service_id: str, request: Request) -> dict[str, Any] | JSONResponse:
+        principal = ctx.require_principal(request, "services:operate")
+        ctx.require_csrf(request, principal)
+        try:
+            body = ServiceActionRequest.model_validate_json(await request.body() or b"{}")
+        except ValueError:
+            return ctx.error_payload("validation_error", "Invalid request body", 422)
+        try:
+            result = await service.action(service_id, body.action, body.confirmation)
+        except ServiceError as exc:
+            if exc.status_code not in {404, 422}:
+                await audit(
+                    principal,
+                    "services.action",
+                    "service",
+                    f"{service_id}:{body.action}",
+                    "failure",
+                )
+            return fail(exc)
+        await audit(principal, "services.action", "service", f"{service_id}:{body.action}")
+        return result
+
+    @domains_router.get("")
+    async def list_domains(request: Request) -> dict[str, Any]:
+        ctx.require_principal(request, "domains:read")
+        return {"items": await asyncio.to_thread(service.list_domains)}
+
+    @domains_router.post("", status_code=201, response_model=None)
+    async def create_domain(request: Request, body: DomainCreateRequest) -> Any:
+        principal = ctx.require_principal(request, "domains:write")
+        ctx.require_csrf(request, principal)
+        try:
+            result = await service.create(body, principal.user_id)
+        except ServiceError as exc:
+            await audit(principal, "domain.create", "domain", body.host[:255], "failure")
+            return fail(exc)
+        await audit(principal, "domain.create", "domain", result["domain"]["host"])
+        return result
+
+    @domains_router.get("/routing")
+    async def get_routing(request: Request, refresh: bool = False) -> dict[str, Any]:
+        ctx.require_principal(request, "domains:read")
+        return await service.routing_view(refresh=refresh)
+
+    @domains_router.put("/routing", response_model=None)
+    async def put_routing(request: Request, body: RoutingRequest) -> Any:
+        principal = ctx.require_principal(request, "domains:write")
+        ctx.require_csrf(request, principal)
+        patch: dict[str, Any] = {"routing_mode": body.mode}
+        if body.traefik_file_enabled is not None:
+            patch["traefik_file_enabled"] = body.traefik_file_enabled
+        try:
+            await asyncio.to_thread(service.put_settings, patch, principal.user_id)
+        except SettingsError as exc:
+            return ctx.error_payload(  # type: ignore[call-arg]
+                "invalid_routing_mode",
+                exc.message,
+                422,
+                fields=[{"field": "mode", "reason_code": "invalid_choice"}],
+            )
+        await audit(principal, "domains.routing.update", "domain_routing", body.mode)
+        return await service.routing_view(refresh=True)
+
+    @domains_router.patch("/{domain_id}", response_model=None)
+    async def update_domain(domain_id: str, request: Request, body: DomainUpdateRequest) -> Any:
+        principal = ctx.require_principal(request, "domains:write")
+        ctx.require_csrf(request, principal)
+        try:
+            result = await service.update(domain_id, body)
+        except ServiceError as exc:
+            if exc.status_code != 404:
+                await audit(principal, "domain.update", "domain", domain_id, "failure")
+            return fail(exc)
+        await audit(principal, "domain.update", "domain", result["domain"]["host"])
+        return result
+
+    @domains_router.delete("/{domain_id}", response_model=None)
+    async def delete_domain(domain_id: str, request: Request) -> Any:
+        principal = ctx.require_principal(request, "domains:write")
+        ctx.require_csrf(request, principal)
+        raw = await request.body()
+        try:
+            body = (
+                DomainDeleteRequest.model_validate_json(raw)
+                if raw.strip()
+                else (DomainDeleteRequest())
+            )
+        except ValueError:
+            return ctx.error_payload("validation_error", "Invalid request body", 422)
+        try:
+            result = await service.delete(domain_id, body.confirmation)
+        except ServiceError as exc:
+            if exc.status_code not in {404, 422}:
+                await audit(principal, "domain.delete", "domain", domain_id, "failure")
+            return fail(exc)
+        await audit(principal, "domain.delete", "domain", domain_id)
+        return result
+
+    @domains_router.post("/{domain_id}/verify", response_model=None)
+    async def verify(domain_id: str, request: Request) -> Any:
+        principal = ctx.require_principal(request, "domains:write")
+        ctx.require_csrf(request, principal)
+        try:
+            domain = await service.verify(domain_id)
+        except ServiceError as exc:
+            return fail(exc)
+        except Exception:  # noqa: BLE001 - a probe crashed; never a 500
+            LOGGER.exception("domain verification failed")
+            return ctx.error_payload("verify_failed", "The domain check could not run", 502)
+        await audit(
+            principal,
+            "domain.verify",
+            "domain",
+            domain["host"],
+            "success" if not domain["health"].get("problem_code") else "failure",
+        )
+        return {"domain": domain, "health": domain["health"]}
+
+    ctx.routers.append(services_router)
+    ctx.routers.append(domains_router)
+    ctx.start_hooks.append(service.start)
+    ctx.stop_hooks.append(service.stop)

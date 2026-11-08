@@ -111,6 +111,8 @@ class ModuleContext:
     routers: list[APIRouter] = field(default_factory=list)
     start_hooks: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
     stop_hooks: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
+    # middleware.TrustedHostsHolder: runtime extras for the Host check (docs/35 §4).
+    trusted_hosts: Any = None
 
     def audit(
         self,

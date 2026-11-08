@@ -545,8 +545,18 @@ def summarize_container(
         "created": _int(raw.get("Created")),
         "ports": ports,
         "labels_subset": labels_subset(container_labels(raw), prefixes),
+        "networks": container_networks(raw),
         "protected": protected,
     }
+
+
+def container_networks(raw: dict[str, Any]) -> list[str]:
+    """Names of the networks a container is attached to (names only, no addresses)."""
+    settings = raw.get("NetworkSettings")
+    networks = settings.get("Networks") if isinstance(settings, dict) else None
+    if not isinstance(networks, dict):
+        return []
+    return sorted(str(name)[:128] for name in networks)[:32]
 
 
 def _strings(value: object, limit: int = 64) -> list[str]:

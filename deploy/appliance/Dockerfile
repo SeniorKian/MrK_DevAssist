@@ -15,6 +15,10 @@ ARG BUILD_DATE="unknown"
 #   docker build --build-arg PIP_INDEX_URL=https://pypi.org/simple/ ...
 ARG NPM_REGISTRY=""
 ARG PIP_INDEX_URL=""
+# - go: go.sum pins every module hash, so a GOPROXY mirror cannot change module
+#   contents (like the npm lockfile integrity hashes).
+#   docker build --build-arg GOPROXY=https://proxy.golang.org,direct ...
+ARG GOPROXY=""
 
 FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS admin-builder
 ARG NPM_REGISTRY
@@ -40,6 +44,25 @@ ARG NPM_REGISTRY
 WORKDIR /opt/pglite
 COPY deploy/pglite/package.json deploy/pglite/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY" && npm config set replace-registry-host always; fi; npm ci --omit=dev --ignore-scripts
+
+# MRK DNS engine (docs/36, docs/37): static Go binaries, built here and copied into
+# the runtime image (no separate image, no Go toolchain at runtime).
+FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS dns-builder
+ARG GOPROXY
+ENV CGO_ENABLED=0 \
+    GOFLAGS=-trimpath \
+    GOTOOLCHAIN=local
+WORKDIR /build/dns-engine
+COPY apps/dns-engine/go.mod apps/dns-engine/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod if [ -n "$GOPROXY" ]; then export GOPROXY; else unset GOPROXY; fi; \
+    go mod download && go mod verify
+COPY apps/dns-engine/ ./
+ARG VCS_REF
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -buildvcs=false -ldflags "-s -w -X mrk/dns-engine/internal/version.Commit=${VCS_REF:-unknown}" \
+      -o /out/mrk-dns ./cmd/mrk-dns \
+    && go build -buildvcs=false -ldflags "-s -w" -o /out/mrk-dnsbench ./cmd/mrk-dnsbench \
+    && /out/mrk-dns version
 
 FROM python:3.13-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90 AS runtime
 
@@ -109,6 +132,11 @@ COPY --from=verdaccio-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=verdaccio-builder /opt/verdaccio /opt/verdaccio
 COPY --from=pglite-builder /opt/pglite /opt/pglite
 COPY --from=admin-builder /build/admin-ui/dist /opt/mrk/admin-ui
+# MRK DNS engine. No file capabilities: with no-new-privileges the kernel ignores
+# them on execve. The mrk-dns service starts as uid 0 with only NET_BIND_SERVICE,
+# SETUID and SETGID and the engine immediately drops to MRK_DNS_RUN_AS (10001)
+# keeping only NET_BIND_SERVICE (docs/37 §0.2).
+COPY --from=dns-builder /out/mrk-dns /out/mrk-dnsbench /usr/local/bin/
 COPY deploy/appliance/supervisord.conf /opt/mrk/supervisord.conf
 COPY deploy/appliance/devpi-start.sh /opt/mrk/devpi-start.sh
 COPY deploy/appliance/devpi-configure.sh /opt/mrk/devpi-configure.sh
@@ -117,8 +145,9 @@ COPY deploy/appliance/entrypoint.py /opt/mrk/entrypoint.py
 # compromised service cannot rewrite entrypoint.py that the next start runs as root.
 # The sed is a CRLF guard: a CRLF checkout would otherwise break `set -eu`.
 RUN sed -i 's/\r$//' /opt/mrk/devpi-start.sh /opt/mrk/devpi-configure.sh /opt/mrk/supervisord.conf \
-    && mkdir -p /data /var/lib/mrk-agent /mnt/links \
-    && chown 10001:10001 /data /var/lib/mrk-agent /mnt/links \
+    && mkdir -p /data /var/lib/mrk-agent /mnt/links /var/lib/mrk-dns /run/mrk-dns \
+    && chown 10001:10001 /data /var/lib/mrk-agent /mnt/links /var/lib/mrk-dns /run/mrk-dns \
+    && chmod 0750 /var/lib/mrk-dns /run/mrk-dns \
     && chown -R root:root /opt/mrk \
     && chmod -R u=rwX,go=rX /opt/mrk
 

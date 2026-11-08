@@ -30,9 +30,19 @@ const EVENT_PHRASES: Record<string, Bi> = {
   "update.available": { fa: "برای برنامه‌ای نسخه تازه بیاید", en: "an app has a new version" },
   "dokploy.deploy_failed": { fa: "انتشار برنامه‌ای در Dokploy انجام نشود", en: "a Dokploy deploy fails" },
   "dokploy.unreachable": { fa: "Dokploy جواب ندهد", en: "Dokploy stops answering" },
+  "service.crashed": { fa: "یکی از سرویس‌ها (npm، PyPI یا S3) از کار بیفتد", en: "a service (npm, PyPI or S3) crashes" },
+  "service.recovered": { fa: "سرویسی که از کار افتاده بود دوباره کار کند", en: "a crashed service works again" },
+  "domain.unhealthy": { fa: "یکی از دامنه‌ها مشکل پیدا کند", en: "a domain develops a problem" },
+  "domain.cert_expiring": { fa: "گواهی HTTPS یک دامنه رو به اتمام باشد", en: "a domain's HTTPS certificate is about to expire" },
   "firewall.blocked": { fa: "دیوار آتش نشانی‌ای را مسدود کند", en: "the firewall blocks an address" },
   "docker.pruned": { fa: "موارد بی‌استفاده Docker پاک شود", en: "unused Docker items are cleaned up" },
-  "notification.test": { fa: "پیام آزمایشی فرستاده شود", en: "a test alert is sent" }
+  "notification.test": { fa: "پیام آزمایشی فرستاده شود", en: "a test alert is sent" },
+  "dns.unreachable": { fa: "DNS سرور جواب ندهد", en: "the server's DNS stops answering" },
+  "dns.pressure": { fa: "DNS سرور زیر فشار برود یا از فشار بیرون بیاید", en: "the server's DNS comes under load or recovers" },
+  "dns.attack_detected": { fa: "حمله‌ای به DNS سرور دیده شود", en: "an attack on the server's DNS is seen" },
+  "dns.mitigation_auto": { fa: "MRK خودکار دستگاه یا نامی را در DNS کند یا مسدود کند", en: "MRK automatically slows down or blocks a device or name in DNS" },
+  "dns.logs_degraded": { fa: "لاگ کامل پرسش‌های DNS موقتاً نوشته نشود", en: "the full DNS question log is paused" },
+  "dns.logs_recovered": { fa: "نوشتن لاگ پرسش‌های DNS به حالت عادی برگردد", en: "the DNS question log is back to normal" }
 };
 
 const IMPORTANCE: Record<Severity, { label: Bi; hint: Bi; phrase: Bi; any: Bi }> = {

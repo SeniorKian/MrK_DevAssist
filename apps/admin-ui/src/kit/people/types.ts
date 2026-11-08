@@ -98,7 +98,7 @@ function isRoleKey(value: string): value is RoleKey {
 
 /** Catalogue from the copy module (used when `GET /api/v1/permissions` is unavailable). */
 export function fallbackCatalog(): PermissionCatalog {
-  const order: PermissionGroup[] = ["home", "packages", "server", "files", "security", "people", "alerts"];
+  const order: PermissionGroup[] = ["home", "packages", "server", "dns", "files", "security", "people", "alerts"];
   return {
     groups: order.map((group) => ({
       id: group,

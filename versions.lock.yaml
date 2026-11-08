@@ -14,6 +14,15 @@ components:
     version: "24.18.0"
     image: "node:24.18.0-trixie-slim"
     digest: "sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573"
+  golang:
+    version: "1.27.3"
+    image: "golang:1.27.3-trixie"
+    digest: "sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80"
+    note: "Build stage dns-builder only; the runtime image carries static mrk-dns/mrk-dnsbench binaries."
+  miekg_dns:
+    version: "1.1.73"
+    source: "https://github.com/miekg/dns"
+    note: "BSD-3-Clause DNS protocol library for the MRK DNS engine; with golang.org/x/net 0.62.0 and x/sys 0.49.0 (BSD-3-Clause), hashes in apps/dns-engine/go.sum."
   fastapi:
     version: "0.162.0"
     source: "https://github.com/fastapi/fastapi"

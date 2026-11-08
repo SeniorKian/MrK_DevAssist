@@ -37,6 +37,8 @@ from .s3_policy import (
 )
 
 SETTINGS_KEY = "s3.settings"
+# Written by the services module (docs/35 §4): every S3 domain, for virtual-host style.
+DOMAIN_SUFFIXES_KEY = "s3.domain_suffixes"
 PANEL_SECRET_REF = "s3-panel"  # noqa: S105 - SecretStore reference, not a secret
 MAX_OBJECT_BYTES = 5 * 1024**4  # 5 TiB, the S3 single-object maximum
 MAX_ACTIVE_KEYS = 2
@@ -306,6 +308,12 @@ class S3Store:
                 for row in identities
             ]
             bucket_items = [_bucket_item(row) for row in buckets]
+            suffix_row = db.get(SystemSetting, DOMAIN_SUFFIXES_KEY)
+            extra_suffixes = (
+                [item for item in suffix_row.value.get("hosts", []) if isinstance(item, str)]
+                if suffix_row is not None and isinstance(suffix_row.value, dict)
+                else []
+            )
         panel = {
             "id": PANEL_IDENTITY,
             "name": PANEL_IDENTITY,
@@ -320,6 +328,7 @@ class S3Store:
             "region": settings["region"],
             "public_endpoint": settings["public_endpoint"],
             "virtual_host_suffix": settings["virtual_host_suffix"],
+            "virtual_host_suffixes": extra_suffixes,
             "max_object_bytes": settings["max_object_bytes"],
             "buckets": bucket_items,
             "identities": [panel, *identity_items],

@@ -22,8 +22,8 @@ from mrk_control_plane.pypi_router import (
     create_router_app,
     prepare_spool_dir,
 )
+from mrk_control_plane.supervisor_listener import essential_programs, should_stop
 from mrk_control_plane.supervisor_listener import run as run_listener
-from mrk_control_plane.supervisor_listener import should_stop
 from mrk_control_plane.tasks import TaskManager
 from mrk_control_plane.upstream_store import UpstreamStore
 from mrk_control_plane.verdaccio_runtime import build_runtime_config
@@ -140,15 +140,20 @@ def test_readiness_reports_dead_pypi_router(tmp_path: Path, monkeypatch) -> None
     assert ready.json()["component"] == "pypi_upstream_router"
 
 
-def test_supervisor_listener_stops_only_on_fatal(
+def test_supervisor_listener_stops_only_on_essential_fatal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("MRK_FATAL_MARKER", str(tmp_path / "fatal"))
-    assert should_stop({"eventname": "PROCESS_STATE_FATAL"}, {"processname": "devpi"}, set())
+    monkeypatch.delenv("MRK_FATAL_ESSENTIAL", raising=False)
+    fatal = {"eventname": "PROCESS_STATE_FATAL"}
+    # Essential programs stop the container; npm/PyPI/S3 are left to the watchdog.
+    assert should_stop(fatal, {"processname": "pglite"}, set())
+    assert should_stop(fatal, {"processname": "control-plane"}, set())
+    assert not should_stop(fatal, {"processname": "devpi"}, set())
+    assert not should_stop(fatal, {"processname": "verdaccio"}, set())
+    assert should_stop(fatal, {"processname": "devpi"}, set(), essential_programs("*"))
     assert not should_stop(
-        {"eventname": "PROCESS_STATE_FATAL"},
-        {"processname": "devpi-configure"},
-        {"devpi-configure"},
+        fatal, {"processname": "devpi-configure"}, {"devpi-configure"}, essential_programs("*")
     )
     assert not should_stop({"eventname": "PROCESS_STATE_EXITED"}, {"processname": "x"}, set())
 
@@ -156,13 +161,24 @@ def test_supervisor_listener_stops_only_on_fatal(
     monkeypatch.setattr(
         "mrk_control_plane.supervisor_listener.os.kill", lambda _pid, sig: killed.append(sig)
     )
-    payload = "processname:verdaccio groupname:verdaccio from_state:BACKOFF"
-    header = f"ver:3.0 server:supervisor eventname:PROCESS_STATE_FATAL len:{len(payload)}\n"
-    stdout = io.StringIO()
-    run_listener(io.StringIO(header + payload), stdout, io.StringIO())
+
+    def feed(name: str) -> tuple[str, str]:
+        payload = f"processname:{name} groupname:{name} from_state:BACKOFF"
+        header = f"ver:3.0 server:supervisor eventname:PROCESS_STATE_FATAL len:{len(payload)}\n"
+        stdout, stderr = io.StringIO(), io.StringIO()
+        run_listener(io.StringIO(header + payload), stdout, stderr)
+        return stdout.getvalue(), stderr.getvalue()
+
+    out, err = feed("verdaccio")
+    assert not killed
+    assert "RESULT 2\nOK" in out
+    assert "watchdog" in err
+    assert not (tmp_path / "fatal").exists()
+
+    out, _ = feed("control-plane")
     assert killed
-    assert "RESULT 2\nOK" in stdout.getvalue()
-    assert (tmp_path / "fatal").read_text() == "verdaccio"
+    assert "RESULT 2\nOK" in out
+    assert (tmp_path / "fatal").read_text() == "control-plane"
 
 
 def test_blocking_last_usable_upstream_is_rejected(tmp_path: Path) -> None:

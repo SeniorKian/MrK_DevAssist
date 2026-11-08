@@ -251,6 +251,10 @@ class HostAgentService:
         if status_code == 403 and error:
             # e.g. volume_unreadable: report the real reason, not "unreachable".
             raise AgentError(error, 403, f"The agent refused the request ({error})")
+        if status_code == 404 and error == "traefik_disabled":
+            raise AgentError(
+                "traefik_disabled", 409, "The agent has no Traefik dynamic directory configured"
+            )
         if status_code == 404:
             raise AgentError("agent_not_found", 404, "The agent could not find that object")
         if status_code == 409 and error == "plan_changed":

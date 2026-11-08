@@ -307,7 +307,8 @@ def test_agent_info_containers_and_summary(tmp_path: Path) -> None:
     seen: list[httpx.Request] = []
     with TestClient(agent_app(tmp_path, seen)) as client:
         info = signed_get(client, "/v1/info").json()
-        assert info["capabilities"] == {"docker": True, "host_metrics": True, "firewall": False}
+        assert info["capabilities"] == {"docker": True, "host_metrics": True, "firewall": False,
+                                        "traefik_file": False, "dns_facts": True}
         assert info["docker"] == {
             "version": "27.3.1",
             "api_version": "1.47",
@@ -326,7 +327,7 @@ def test_agent_info_containers_and_summary(tmp_path: Path) -> None:
         assert by_name["app-web"]["labels_subset"] == {"com.dokploy.app": "web"}
         assert set(by_name["mrk-mirror-1"]) == {
             "id", "name", "image", "state", "status", "created", "ports", "labels_subset",
-            "protected", "image_id",
+            "protected", "image_id", "networks",
         }
 
         summary = signed_get(client, "/v1/docker/summary").json()

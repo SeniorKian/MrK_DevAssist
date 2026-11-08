@@ -3,6 +3,7 @@ import { Box, Button, CircularProgress, Grid, Stack, Typography } from "@mui/mat
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import { ApiError, getJson, isAbortError } from "./api";
 import { clientCommands } from "./clients";
+import { usePublicServiceUrls } from "./services";
 import { pick, say, type Bi } from "./copy";
 import { CopyField, FriendlyError, HelpTip, KeyValueList, Ltr, Notice, SectionCard, StatusPill, useKit } from "./kit";
 import type { Language } from "./i18n";
@@ -99,7 +100,8 @@ export function ConnectTab() {
     return () => controller.current?.abort();
   }, [load]);
 
-  const { endpoints, commands } = useMemo(() => clientCommands(), []);
+  const publicUrls = usePublicServiceUrls();
+  const { endpoints, commands } = useMemo(() => clientCommands(publicUrls), [publicUrls.npm, publicUrls.pypi]); // eslint-disable-line react-hooks/exhaustive-deps
   const registries = [
     { key: "npm_registry", ecosystem: "npm" as const, name: "npm", endpoint: endpoints.npm, hint: COPY.npmHint },
     { key: "pypi_registry", ecosystem: "pypi" as const, name: "PyPI", endpoint: endpoints.pypi, hint: COPY.pypiHint }
@@ -162,7 +164,7 @@ export function ConnectTab() {
               { label: pick(language, COPY.panelPort), value: <Ltr mono>8080</Ltr> }
             ]}
           />
-          <Notice>{pick(language, COPY.derived)}</Notice>
+          {!publicUrls.npm && !publicUrls.pypi && <Notice>{pick(language, COPY.derived)}</Notice>}
           <Notice>{pick(language, COPY.proxyNote)}</Notice>
         </Stack>
       </SectionCard>

@@ -14,6 +14,7 @@ import { DEFAULT_PASSWORD_POLICY, readAuthFailure, readPasswordPolicy, type Auth
 import ChangePasswordPage from "./ChangePasswordPage";
 import InvitePage, { inviteTokenFromHash } from "./InvitePage";
 import { resetHome } from "./homeSummary";
+import { resetServices } from "./services";
 import { translate, type Language } from "./i18n";
 
 type ColorMode = "dark" | "light";
@@ -68,6 +69,7 @@ export function App() {
     setUser(null);
     setCsrfToken("");
     resetHome();
+    resetServices();
   }, []);
 
   useEffect(() => {
@@ -160,6 +162,7 @@ export function App() {
   const adoptSession = useCallback(
     (payload: { user: AuthUser; csrf_token: string; must_change_password?: boolean }) => {
       resetHome();
+      resetServices();
       setUser({ ...payload.user, must_change_password: payload.user.must_change_password ?? payload.must_change_password });
       setCsrf(payload.csrf_token);
       setSessionExpired(false);
@@ -227,6 +230,7 @@ export function App() {
       setSessionExpired(false);
       setAuthView("login");
       resetHome();
+      resetServices();
     }
   }, []);
 

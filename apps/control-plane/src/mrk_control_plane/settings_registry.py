@@ -199,6 +199,7 @@ GROUPS: tuple[Group, ...] = (
     Group("server.apps", "برنامه‌های Dokploy", "Dokploy apps", "server/apps"),
     Group("server.updates", "نسخه تازه برنامه‌ها", "Image updates", "server/updates"),
     Group("server.databases", "دیتابیس‌ها", "Databases", "server/databases"),
+    Group("server.dns", "سرور DNS", "DNS server", "dns/settings"),
     Group("files.space", "فضای فایل (S3)", "File space (S3)", "files/space"),
     Group("files.backups", "پشتیبان برنامه‌ها", "App backups", "files/backups"),
     Group("security.firewall", "فایروال", "Firewall", "security/firewall"),

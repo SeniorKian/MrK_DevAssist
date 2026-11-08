@@ -13,7 +13,7 @@ import type { Bi } from "./text";
 
 export type RoleKey = "owner" | "admin" | "operator" | "developer" | "viewer";
 export type Danger = "none" | "low" | "medium" | "high" | "critical";
-export type PermissionGroup = "home" | "packages" | "server" | "files" | "security" | "people" | "alerts";
+export type PermissionGroup = "home" | "packages" | "server" | "dns" | "files" | "security" | "people" | "alerts";
 
 export type RoleInfo = {
   name: Bi;
@@ -55,12 +55,12 @@ export const ROLES: Record<RoleKey, RoleInfo> = {
     name: { fa: "مسئول روزانه", en: "Operator" },
     oneLiner: { fa: "کارهای هر روز را انجام می‌دهد، تنظیمات اصلی را نه", en: "Does the daily work, not the core setup" },
     can: {
-      fa: ["روشن و خاموش کردن کانتینرها و انتشار برنامه‌ها", "اجرای پشتیبان‌گیری", "امتحان و مسدود کردن منابع و مدیریت بسته‌ها", "آپلود فایل", "بررسی نسخه‌ها و مشکلات امنیتی، دیدن لاگ و تاریخچه"],
-      en: ["Start/stop containers and deploy apps", "Run backups", "Test/block sources and manage cached packages", "Upload files", "Check updates and security issues; see logs and history"]
+      fa: ["روشن و خاموش کردن کانتینرها و انتشار برنامه‌ها", "اجرای پشتیبان‌گیری", "امتحان و مسدود کردن منابع و مدیریت بسته‌ها", "آپلود فایل", "افزودن و تغییر نام‌های DNS", "بررسی نسخه‌ها و مشکلات امنیتی، دیدن لاگ و تاریخچه"],
+      en: ["Start/stop containers and deploy apps", "Run backups", "Test/block sources and manage cached packages", "Upload files", "Add and change DNS names", "Check updates and security issues; see logs and history"]
     },
     cannot: {
-      fa: ["افزودن افراد", "تغییر پروکسی و DNS", "تنظیم پشتیبان‌گیری یا Dokploy", "دیوار آتش و پایگاه‌های داده"],
-      en: ["Add people", "Change proxies or DNS", "Set up backups or Dokploy", "Firewall and databases"]
+      fa: ["افزودن افراد", "تغییر پروکسی و تنظیمات DNS", "تنظیم پشتیبان‌گیری یا Dokploy", "دیوار آتش و پایگاه‌های داده"],
+      en: ["Add people", "Change proxies or DNS settings", "Set up backups or Dokploy", "Firewall and databases"]
     },
     color: "primary"
   },
@@ -99,6 +99,10 @@ export const PERMISSIONS: Record<string, PermissionInfo> = {
   "upstream:read": { group: "packages", name: { fa: "دیدن منابع دریافت، پروکسی و DNS", en: "See package sources, proxies and DNS" }, danger: "none" },
   "upstream:operate": { group: "packages", name: { fa: "امتحان، مسدود کردن و حالت بدون اینترنت منابع", en: "Test, block and switch sources offline" }, danger: "medium", requires: ["upstream:read"] },
   "upstream:write": { group: "packages", name: { fa: "افزودن و تغییر منابع، پروکسی، DNS و منابع داخلی", en: "Add/change sources, proxies, DNS and internal sources" }, danger: "high", requires: ["upstream:read"] },
+  "services:read": { group: "server", name: { fa: "دیدن سرویس‌ها و وضعیتشان", en: "See services and their status" }, danger: "none" },
+  "services:operate": { group: "server", name: { fa: "روشن، خاموش و راه‌اندازی دوباره سرویس‌ها", en: "Start, stop and restart services" }, danger: "medium", requires: ["services:read"] },
+  "domains:read": { group: "server", name: { fa: "دیدن دامنه‌ها و سلامت آن‌ها", en: "See domains and their health" }, danger: "none" },
+  "domains:write": { group: "server", name: { fa: "افزودن، تغییر و برداشتن دامنه‌ها و روش اتصال آن‌ها", en: "Add, change and remove domains and how they're routed" }, danger: "high", requires: ["domains:read"] },
   "agent:read": { group: "server", name: { fa: "دیدن سرور و کانتینرها", en: "See the server and containers" }, danger: "none" },
   "agent:write": { group: "server", name: { fa: "وصل کردن دستیار سرور و تنظیم هشدارهای مصرف", en: "Connect the server helper; set resource alerts" }, danger: "high", requires: ["agent:read"] },
   "metrics:read": { group: "server", name: { fa: "دیدن نمودار مصرف منابع", en: "See resource charts" }, danger: "none" },
@@ -112,6 +116,10 @@ export const PERMISSIONS: Record<string, PermissionInfo> = {
   "updates:write": { group: "server", name: { fa: "بررسی دستی و تنظیم بررسی نسخه‌ها", en: "Check now; change update-check settings" }, danger: "low", requires: ["updates:read"] },
   "db:read": { group: "server", name: { fa: "دیدن پایگاه‌های داده و داده‌هایشان", en: "Browse databases and their data" }, danger: "high" },
   "db:write": { group: "server", name: { fa: "نوشتن در پایگاه داده و مدیریت اتصال‌ها", en: "Write to databases; manage connections" }, danger: "critical", requires: ["db:read"] },
+  "dns:read": { group: "dns", name: { fa: "دیدن وضعیت DNS، نام‌ها و دامنه‌های آن", en: "See DNS status, names and domains" }, danger: "none" },
+  "dns:write": { group: "dns", name: { fa: "افزودن و تغییر نام‌ها و دامنه‌های DNS", en: "Add and change DNS names and domains" }, danger: "high", requires: ["dns:read"] },
+  "dns:logs": { group: "dns", name: { fa: "دیدن پرسش‌های DNS (چه کسی چه چیزی پرسید)", en: "See DNS questions (who asked what)" }, danger: "medium", requires: ["dns:read"] },
+  "dns:admin": { group: "dns", name: { fa: "تنظیمات DNS: کجا گوش بدهد، چه کسی بپرسد و DNS بیرونی", en: "DNS settings: where it listens, who may ask, outside DNS" }, danger: "critical", requires: ["dns:read", "dns:write"] },
   "s3:read": { group: "files", name: { fa: "دیدن و دانلود فایل‌ها", en: "See and download files" }, danger: "medium" },
   "s3:write": { group: "files", name: { fa: "آپلود، پاک کردن و لینک اشتراک فایل", en: "Upload, delete and share files" }, danger: "medium", requires: ["s3:read"] },
   "s3:admin": { group: "files", name: { fa: "ساخت پوشه اصلی، کاربر و کلید فضای فایل", en: "Manage buckets, file-space users and keys" }, danger: "high", requires: ["s3:read"] },
@@ -143,13 +151,14 @@ export const ROLE_PERMISSIONS: Record<RoleKey, readonly string[]> = {
     "system:read", "upstream:read", "upstream:operate", "cache:read", "cache:write", "task:read", "task:write",
     "audit:read", "backup:read", "notification:read", "agent:read", "metrics:read", "logs:read", "docker:operate",
     "dokploy:read", "dokploy:deploy", "s3:read", "s3:write", "backup:server:read", "updates:read", "updates:write",
-    "firewall:read", "vuln:read", "vuln:write"
+    "firewall:read", "vuln:read", "vuln:write", "services:read", "services:operate", "domains:read",
+    "dns:read", "dns:write"
   ],
   developer: [
     "system:read", "upstream:read", "cache:read", "task:read", "token:read", "token:write", "metrics:read",
-    "dokploy:read", "s3:read", "updates:read", "vuln:read"
+    "dokploy:read", "s3:read", "updates:read", "vuln:read", "services:read", "domains:read", "dns:read"
   ],
-  viewer: ["system:read", "upstream:read", "cache:read", "task:read", "metrics:read", "updates:read", "vuln:read"]
+  viewer: ["system:read", "upstream:read", "cache:read", "task:read", "metrics:read", "updates:read", "vuln:read", "services:read", "domains:read", "dns:read"]
 };
 
 export const ROLE_ORDER: RoleKey[] = ["viewer", "developer", "operator", "admin", "owner"];
@@ -158,6 +167,7 @@ export const PERMISSION_GROUP_NAMES: Record<PermissionGroup, Bi> = {
   home: { fa: "خانه", en: "Home" },
   packages: { fa: "بسته‌ها", en: "Packages" },
   server: { fa: "سرور و برنامه‌ها", en: "Server & apps" },
+  dns: { fa: "DNS", en: "DNS" },
   files: { fa: "فایل‌ها و پشتیبان", en: "Files & backups" },
   security: { fa: "امنیت و اینترنت", en: "Security & internet" },
   people: { fa: "کاربران و دسترسی", en: "People & access" },

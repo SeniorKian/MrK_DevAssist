@@ -65,6 +65,10 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             # Gate 19 (docs/32 §1)
             "firewall:read", "firewall:write", "vuln:read", "vuln:write", "db:read",
             "db:write",
+            # docs/35 (services & domains)
+            "services:read", "services:operate", "domains:read", "domains:write",
+            # docs/37 (DNS server)
+            "dns:read", "dns:write", "dns:logs", "dns:admin",
         }
     ),
     "operator": frozenset(
@@ -78,6 +82,10 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             "s3:read", "s3:write", "backup:server:read", "updates:read", "updates:write",
             # Gate 19 (docs/32 §1)
             "firewall:read", "vuln:read", "vuln:write",
+            # docs/35 (services & domains)
+            "services:read", "services:operate", "domains:read",
+            # docs/37 (DNS server)
+            "dns:read", "dns:write",
         }
     ),
     "developer": frozenset(
@@ -88,6 +96,10 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             "s3:read", "updates:read",
             # Gate 19 (docs/32 §1)
             "vuln:read",
+            # docs/35 (services & domains)
+            "services:read", "domains:read",
+            # docs/37 (DNS server)
+            "dns:read",
         }
     ),
     "viewer": frozenset(
@@ -97,6 +109,10 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             "updates:read",
             # Gate 19 (docs/32 §1)
             "vuln:read",
+            # docs/35 (services & domains)
+            "services:read", "domains:read",
+            # docs/37 (DNS server)
+            "dns:read",
         }
     ),
 }
@@ -190,6 +206,38 @@ PERMISSION_CATALOG: Final[tuple[PermissionSpec, ...]] = (
        "Connect/disconnect and tune Dokploy",
        "اتصال به Dokploy و کلید دسترسی آن را تنظیم می‌کند.",
        "Sets up the Dokploy connection and its access key.", "high", ("dokploy:read",)),
+    _P("services:read", "server", "دیدن سرویس‌های MRK و مصرفشان", "See MRK services and usage",
+       "وضعیت روشن/خاموش، مصرف فضا و دامنه‌های هر سرویس MRK.",
+       "On/off state, disk use and domains of each MRK service."),
+    _P("services:operate", "server", "روشن، خاموش و راه‌اندازی دوباره سرویس‌های MRK",
+       "Start, stop and restart MRK services",
+       "مخزن npm، PyPI و فضای فایل را خاموش یا روشن می‌کند؛ کاربران تا روشن شدن دسترسی ندارند.",
+       "Stops or starts the npm, PyPI and file-storage services; users lose access meanwhile.",
+       "medium", ("services:read",)),
+    _P("domains:read", "server", "دیدن دامنه‌های سرویس‌ها", "See service domains",
+       "دامنه‌های متصل به هر سرویس، روش مسیریابی و نتیجه بررسی آن‌ها.",
+       "Domains attached to each service, the routing mode and check results."),
+    _P("domains:write", "server", "افزودن، تغییر و حذف دامنه سرویس‌ها",
+       "Add, change and remove service domains",
+       "دامنه را در Dokploy/Traefik ثبت یا حذف می‌کند و نشانی عمومی سرویس‌ها را عوض می‌کند.",
+       "Registers or removes domains in Dokploy/Traefik and changes the services' public URLs.",
+       "high", ("domains:read",)),
+    _P("dns:read", "server", "دیدن وضعیت و نام‌های DNS", "See DNS status and names",
+       "وضعیت سرور DNS، زون‌ها، رکوردها و راهنمای راه‌اندازی را نشان می‌دهد.",
+       "Shows the DNS server's state, zones, records and the setup guide."),
+    _P("dns:write", "server", "تغییر نام‌ها، زون‌ها و رکوردهای DNS",
+       "Change DNS names, zones and records",
+       "رکورد و زون DNS می‌سازد یا عوض می‌کند؛ روی نشانی‌هایی که سرور و کانتینرها می‌بینند اثر دارد.",
+       "Creates or changes DNS zones and records; affects what the server and containers resolve.",
+       "medium", ("dns:read",)),
+    _P("dns:logs", "server", "دیدن لاگ پرس‌وجوهای DNS", "See DNS query logs",
+       "چه دستگاهی چه نامی را پرسیده است؛ اطلاعات حساس دارد.",
+       "Which client asked for which name; sensitive data.", "medium", ("dns:read",)),
+    _P("dns:admin", "server", "تنظیمات موتور DNS، دسترسی‌ها و DNSهای بالادست",
+       "DNS engine settings, access lists and upstreams",
+       "نشانی گوش‌دادن، فهرست دسترسی و DNSهای بالادست را عوض می‌کند؛ اشتباه آن DNS را قطع می‌کند.",
+       "Changes listen addresses, access lists and upstreams; a mistake breaks DNS for everyone.",
+       "high", ("dns:read", "dns:write")),
     _P("updates:read", "server", "دیدن نسخه‌های تازه برنامه‌ها", "See available image updates",
        "نشان می‌دهد برای کدام برنامه‌ها نسخه جدید آمده است.",
        "Shows which apps have a newer image version."),

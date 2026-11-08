@@ -10,6 +10,7 @@ import { formatRelative } from "./kit/formatters";
 import { ECOSYSTEM_WORDS } from "./copy/kinds";
 import { reasonFor } from "./copy/errors";
 import { fill, type Bi } from "./copy/text";
+import { domainProblemText } from "./services";
 
 export type HomeSeverity = "critical" | "error" | "warning" | "info";
 
@@ -122,7 +123,9 @@ const COMPONENT_WORDS: Record<string, Bi> = {
   database: { fa: "پایگاه داده پنل", en: "The panel's database" },
   control_plane: { fa: "سرور MRK", en: "The MRK server" },
   s3_engine: { fa: "فضای فایل", en: "File space" },
-  s3: { fa: "فضای فایل", en: "File space" }
+  s3: { fa: "فضای فایل", en: "File space" },
+  dns: { fa: "DNS سرور", en: "The server's DNS" },
+  dns_engine: { fa: "DNS سرور", en: "The server's DNS" }
 };
 
 /** Plain name of a system component («مخزن npm»). Unknown → «یکی از بخش‌های MRK». */
@@ -208,6 +211,26 @@ const RULES: Record<string, RuleCopy> = {
     title: { fa: "آدرس عمومی فضای فایل تنظیم نشده", en: "The file space has no public address yet" },
     why: { fa: "برنامه‌های بیرون از این سرور نمی‌توانند به فایل‌ها وصل شوند.", en: "Apps outside this server can't reach your files." },
     button: { fa: "تنظیم", en: "Set it up" }
+  },
+  dns_unreachable: {
+    title: { fa: "DNS سرور جواب نمی‌دهد", en: "The server's DNS isn't answering" },
+    why: { fa: "تا درست نشود، برنامه‌هایی که از این DNS می‌پرسند نام‌ها را پیدا نمی‌کنند.", en: "Until it's fixed, apps that ask this DNS can't find names." },
+    button: { fa: "بررسی DNS", en: "Check DNS" }
+  },
+  dns_under_pressure: {
+    title: { fa: "DNS سرور زیر فشار است", en: "The server's DNS is under load" },
+    why: { fa: "MRK خودکار کارهای کم‌اهمیت را کم کرده تا پرسش‌ها جواب بگیرند. ببینید چه کسی بیشتر می‌پرسد.", en: "MRK has cut back less important work so questions still get answers. See who is asking the most." },
+    button: { fa: "دیدن پایش", en: "See monitor" }
+  },
+  dns_attack_detected: {
+    title: { fa: "حمله‌ای به DNS سرور دیده شد", en: "An attack on the server's DNS was seen" },
+    why: { fa: "کسی تعداد زیادی نام ساختگی می‌پرسد تا DNS را خسته کند. با یک دکمه جلویش را بگیرید.", en: "Someone is asking lots of made-up names to wear DNS out. Stop it with one button." },
+    button: { fa: "جلویش را بگیر", en: "Stop it" }
+  },
+  domain_problem: {
+    title: { fa: "دامنه {host} مشکل دارد", en: "The domain {host} has a problem" },
+    why: { fa: "تا درست نشود، این دامنه از بیرون باز نمی‌شود.", en: "Until it's fixed, this domain won't open from outside." },
+    button: { fa: "بررسی دامنه", en: "Check the domain" }
   }
 };
 
@@ -215,6 +238,8 @@ const UNKNOWN_RULE: RuleCopy = {
   title: { fa: "یک مورد تازه به توجه شما نیاز دارد", en: "Something new needs your attention" },
   button: { fa: "دیدن", en: "See it" }
 };
+
+const DNS_MONITOR_RULES = new Set(["dns_under_pressure", "dns_attack_detected"]);
 
 export type AttentionText = { title: string; why?: string; button: string; severity: "critical" | "warning" | "info"; route?: string };
 
@@ -236,7 +261,8 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
     job_name: String(params.job_name ?? (language === "fa" ? "بی‌نام" : "unnamed")),
     count: typeof params.count === "number" ? params.count : null,
     days: typeof params.days === "number" ? params.days : null,
-    buckets: typeof params.buckets === "number" ? params.buckets : null
+    buckets: typeof params.buckets === "number" ? params.buckets : null,
+    host: typeof params.host === "string" && params.host ? params.host : language === "fa" ? "یکی از سرویس‌ها" : "for one of your services"
   };
   let why = copy.why ? fill(copy.why[language], values, language) : undefined;
   if (item.rule === "backup_failed") {
@@ -244,12 +270,27 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
     why = [reason, lastSuccess(language, params.last_success_at)].filter(Boolean).join(" ");
   }
   if (item.rule === "backup_overdue") why = lastSuccess(language, params.last_success_at);
+  if (item.rule === "domain_problem" && typeof params.problem_code === "string") {
+    const problem = domainProblemText(language, params.problem_code);
+    why = `${problem.title}. ${problem.fix}`;
+  }
+  if (item.rule === "dns_under_pressure" && params.level === "emergency") {
+    why = language === "fa"
+      ? "فشار خیلی زیاد است و MRK فقط کارهای ضروری را انجام می‌دهد. ببینید چه کسی بیشتر می‌پرسد."
+      : "The load is very heavy and MRK is doing only what's essential. See who is asking the most.";
+  }
+  if (item.rule === "dns_attack_detected" && typeof params.parent === "string" && params.parent) {
+    why = language === "fa"
+      ? `کسی تعداد زیادی نام ساختگی زیر «${params.parent}» می‌پرسد تا DNS را خسته کند. با یک دکمه جلویش را بگیرید.`
+      : `Someone is asking lots of made-up names under “${params.parent}” to wear DNS out. Stop it with one button.`;
+  }
   if (item.rule === "agent_unreachable" && typeof params.since === "number") {
     const when = formatRelative(params.since * 1000, language);
     why = language === "fa" ? `آخرین بار ${when} جواب داد. مطمئن شوید روی سرور روشن است.` : `It last answered ${when}. Make sure it's running on the server.`;
   }
   const severity = item.severity === "critical" || item.severity === "error" ? "critical" : item.severity === "warning" ? "warning" : "info";
-  return { title: fill(copy.title[language], values, language), why, button: copy.button[language], severity, route: item.action?.route };
+  const route = item.action?.route ?? (item.rule === "domain_problem" ? "#/services" : item.rule === "dns_unreachable" ? "#/dns/status" : DNS_MONITOR_RULES.has(item.rule) ? "#/dns/monitor" : undefined);
+  return { title: fill(copy.title[language], values, language), why, button: copy.button[language], severity, route };
 }
 
 export const QUICK_ACTION_COPY: Record<string, { label: Bi; hint: Bi }> = {
@@ -258,7 +299,9 @@ export const QUICK_ACTION_COPY: Record<string, { label: Bi; hint: Bi }> = {
   backup_now: { label: { fa: "پشتیبان‌گیری همین حالا", en: "Back up now" }, hint: { fa: "یک پشتیبان تازه از برنامه‌ها", en: "A fresh backup of your apps" } },
   invite_teammate: { label: { fa: "دعوت همکار", en: "Invite a teammate" }, hint: { fa: "با یک لینک ساده", en: "With a simple link" } },
   check_updates: { label: { fa: "بررسی نسخه‌های تازه", en: "Check for new versions" }, hint: { fa: "کدام برنامه‌ها نسخه تازه دارند", en: "Which apps have a newer version" } },
-  view_server_usage: { label: { fa: "دیدن مصرف سرور", en: "See server use" }, hint: { fa: "پردازنده، حافظه و دیسک", en: "CPU, memory and disk" } }
+  view_server_usage: { label: { fa: "دیدن مصرف سرور", en: "See server use" }, hint: { fa: "پردازنده، حافظه و دیسک", en: "CPU, memory and disk" } },
+  my_services: { label: { fa: "سرویس‌های من", en: "My services" }, hint: { fa: "وضعیت، روشن و خاموش، دامنه‌ها", en: "Status, start/stop, domains" } },
+  add_domain: { label: { fa: "افزودن دامنه", en: "Add a domain" }, hint: { fa: "یک آدرس اینترنتی برای سرویس‌ها", en: "A web address for your services" } },
 };
 
 export const CHECKLIST_COPY: Record<string, Bi> = {
@@ -268,5 +311,6 @@ export const CHECKLIST_COPY: Record<string, Bi> = {
   connect_agent: { fa: "وصل کردن دستیار سرور", en: "Connect the server helper" },
   create_backup: { fa: "ساخت اولین پشتیبان", en: "Create your first backup" },
   invite_teammate: { fa: "دعوت یک همکار", en: "Invite a teammate" },
-  set_public_address: { fa: "تنظیم آدرس عمومی فضای فایل", en: "Set the file space's public address" }
+  set_public_address: { fa: "تنظیم آدرس عمومی فضای فایل", en: "Set the file space's public address" },
+  setup_dns: { fa: "راه‌اندازی DNS خود سرور (اختیاری)", en: "Set up the server's own DNS (optional)" }
 };

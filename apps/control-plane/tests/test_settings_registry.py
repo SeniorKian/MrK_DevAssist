@@ -73,7 +73,7 @@ def clean_env(monkeypatch):
 def test_registry_schema_is_complete_and_consistent() -> None:
     specs = registry().specs
     assert len(specs) >= 230
-    assert len(GROUPS) == 16 and len(set(GROUP_IDS)) == 16
+    assert len(GROUPS) == 17 and len(set(GROUP_IDS)) == 17
     assert {spec.group for spec in specs.values()} == set(GROUP_IDS)
     for spec in specs.values():
         assert re.fullmatch(r"[a-z0-9_]+(\.[a-z0-9_]+)+", spec.key), spec.key
@@ -105,7 +105,9 @@ def _flatten(payload: dict, prefix: tuple[str, ...] = ()) -> dict[tuple[str, ...
 def test_every_module_setting_has_a_spec_with_the_same_default() -> None:
     from mrk_control_plane.modules import (
         dbadmin_policy,
+        dns,
         dokploy,
+        domains_settings,
         firewall_engine,
         monitoring_math,
         notifications_engine,
@@ -131,6 +133,8 @@ def test_every_module_setting_has_a_spec_with_the_same_default() -> None:
         "dbadmin": dbadmin_policy.default_settings(),
         "dokploy": {name: default for name, _env, default, _lo, _hi in dokploy.TUNABLES},
         "server_backups": {"timezone": server_backups_cron.DEFAULT_TIMEZONE},
+        "services": domains_settings.DEFAULT_SETTINGS,
+        "dns": dns.DEFAULT_SETTINGS,
         "network": {"dns": DnsConfig().public()},
     }
     for module, defaults in modules.items():
@@ -288,7 +292,7 @@ def test_registry_listing_hides_secrets_and_reports_sources(app_env) -> None:
         assert response.status_code == 200
         payload = response.json()
         assert SECRET_PASSPHRASE not in response.text
-        assert len(payload["groups"]) == 16
+        assert len(payload["groups"]) == 17
         group = payload["groups"][0]
         assert {"id", "name_fa", "name_en", "items"} <= set(group)
         items = items_by_key(payload)

@@ -54,7 +54,11 @@
     "Nginx",
     "UTC",
     "Enter",
-    "Ctrl"
+    "Ctrl",
+    "UDP",
+    "TCP",
+    "Cloudflare",
+    "Quad9"
   ],
   "parenthetical": [
     "upstream",
