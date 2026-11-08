@@ -1,19 +1,108 @@
 from __future__ import annotations
 
+import ipaddress
 import json
+import logging
 import os
+import re
 import secrets
 import time
 from pathlib import Path
 
+from .config import apply_startup_overrides
+from .netresolve import NetworkSettingsStore
+from .outbound import HTTP_PROXY_TYPES, OutboundError, resolve_route
+from .package_policy import quarantined_names
 from .secret_store import SecretStore
 from .upstream_store import UpstreamStore
+
+LOGGER = logging.getLogger(__name__)
 
 VERDACCIO_BINARY = "/opt/verdaccio/node_modules/.bin/verdaccio"
 
 
+QUARANTINE_GROUP = "mrk-quarantine-none"
+_UPSTREAM_ID = re.compile(r"^[A-Za-z0-9]{1,64}$")
+
+
+def _is_network(value: str) -> bool:
+    try:
+        ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return False
+    return True
+
+
 def _yaml_scalar(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _proxy_lines(
+    item: dict[str, object], network: NetworkSettingsStore, secret_store: SecretStore
+) -> list[str]:
+    """Per-uplink http(s) proxy for Verdaccio.
+
+    Verdaccio reads proxies only from its config file (or one global env var for
+    all uplinks), so credentials end up in generated.yaml, which is mode 0600
+    and regenerated on every start. SOCKS is not supported by Verdaccio; such an
+    uplink is skipped (never silently connected directly).
+    """
+    reference = item.get("proxy_id")
+    if not reference:
+        return []
+    route = resolve_route(network, secret_store, str(reference))
+    if route is None:  # pragma: no cover - a reference always resolves or raises
+        return []
+    if route.profile.type not in HTTP_PROXY_TYPES:
+        raise OutboundError(
+            "proxy_type_unsupported_for_npm", "Verdaccio supports HTTP(S) proxies only"
+        )
+    lines = [
+        f"    http_proxy: {_yaml_scalar(route.url)}",
+        f"    https_proxy: {_yaml_scalar(route.url)}",
+    ]
+    # Verdaccio matches no_proxy by host-name suffix only; IP/CIDR entries are dropped.
+    names = [pattern for pattern in route.profile.no_proxy if not _is_network(pattern)]
+    if names:
+        lines.append(f"    no_proxy: {_yaml_scalar(','.join(names))}")
+    return lines
+
+
+def _uplink_block(
+    item: dict[str, object],
+    secret_store: SecretStore,
+    network: NetworkSettingsStore | None = None,
+) -> tuple[list[str], str | None, str | None]:
+    identifier = str(item["id"])
+    if _UPSTREAM_ID.fullmatch(identifier) is None:
+        # The id becomes a YAML key and an environment variable name.
+        raise ValueError("npm upstream id is not a safe identifier")
+    name = f"mrk_{identifier}"
+    block = [
+        f"  {name}:",
+        f"    url: {_yaml_scalar(str(item['url']))}",
+        f"    timeout: {int(str(item['timeout_seconds']))}s",
+        "    maxage: 5m",
+        "    fail_timeout: 2m",
+        "    max_fails: 1",
+        "    cache: true",
+        "    strict_ssl: true",
+    ]
+    if network is not None:
+        block.extend(_proxy_lines(item, network, secret_store))
+    elif item.get("proxy_id"):
+        raise OutboundError("proxy_unavailable", "network settings are unavailable")
+    if not item.get("credential_ref"):
+        return block, None, None
+    if item.get("credential_type") != "bearer":
+        raise RuntimeError("npm upstream credentials must use bearer tokens")
+    value = secret_store.get(str(item["credential_ref"]))
+    token = value.get("token")
+    if not token:
+        raise RuntimeError("npm upstream bearer token is unavailable")
+    env_name = f"MRK_NPM_UPLINK_TOKEN_{identifier.upper()}"
+    block.extend(["    auth:", "      type: bearer", f"      token_env: {env_name}"])
+    return block, env_name, token
 
 
 def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
@@ -26,11 +115,15 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
         and item.get("enabled") is True
         and (item.get("blocked_until") is None or int(item["blocked_until"]) <= now)
     ]
-    if not upstreams and not store.offline("npm"):
-        raise RuntimeError("no enabled npm upstream is configured")
+    # With no usable upstream, serve from cache instead of exiting: an exit
+    # would burn supervisor's retries and take the whole npm registry down.
+    cache_only = store.offline("npm") or not upstreams
+    if cache_only and not store.offline("npm"):
+        LOGGER.warning("no usable npm upstream; Verdaccio starts in cache-only mode")
 
     environment = dict(os.environ)
     secret_store = SecretStore(data_dir)
+    network = NetworkSettingsStore(data_dir)
     uplink_names: list[str] = []
     lines = [
         "storage: /data/npm/storage",
@@ -42,47 +135,45 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
         "",
         "uplinks:",
     ]
-    if store.offline("npm"):
-        lines.append("  {}")
-    else:
+    uplink_lines: list[str] = []
+    if not cache_only:
         for item in upstreams:
-            identifier = str(item["id"])
-            name = f"mrk_{identifier}"
-            uplink_names.append(name)
-            lines.extend(
-                [
-                    f"  {name}:",
-                    f"    url: {_yaml_scalar(str(item['url']))}",
-                    f"    timeout: {int(item['timeout_seconds'])}s",
-                    "    maxage: 5m",
-                    "    fail_timeout: 2m",
-                    "    max_fails: 1",
-                    "    cache: true",
-                    "    strict_ssl: true",
-                ]
-            )
-            if item.get("credential_ref"):
-                if item.get("credential_type") != "bearer":
-                    raise RuntimeError("npm upstream credentials must use bearer tokens")
-                value = secret_store.get(str(item["credential_ref"]))
-                token = value.get("token")
-                if not token:
-                    raise RuntimeError("npm upstream bearer token is unavailable")
-                env_name = f"MRK_NPM_UPLINK_TOKEN_{identifier.upper()}"
-                environment[env_name] = token
-                lines.extend(
-                    [
-                        "    auth:",
-                        "      type: bearer",
-                        f"      token_env: {env_name}",
-                    ]
+            try:
+                block, env_name, token = _uplink_block(item, secret_store, network)
+            except (KeyError, ValueError, RuntimeError):
+                # One broken credential must not stop Verdaccio: the exit would
+                # go FATAL and the FATAL listener would stop the whole container.
+                LOGGER.exception(
+                    "skipping npm uplink with unusable configuration",
+                    extra={"upstream_id": str(item.get("id", ""))},
                 )
+                continue
+            uplink_names.append(block[0].strip().rstrip(":"))
+            uplink_lines.extend(block)
+            if env_name is not None and token is not None:
+                environment[env_name] = token
+    if uplink_lines:
+        lines.extend(uplink_lines)
+    else:
+        if not cache_only:
+            LOGGER.warning("no npm uplink could be configured; Verdaccio starts cache-only")
+        lines.append("  {}")
 
     proxy = " ".join(uplink_names)
+    lines.extend(["", "packages:"])
+    for package in sorted(quarantined_names(data_dir, "npm")):
+        # Quarantined names come first so they win over the wildcard rules:
+        # nobody may read them and nothing is fetched from an uplink.
+        lines.extend(
+            [
+                f"  {_yaml_scalar(package)}:",
+                f"    access: {QUARANTINE_GROUP}",
+                f"    publish: {QUARANTINE_GROUP}",
+                f"    unpublish: {QUARANTINE_GROUP}",
+            ]
+        )
     lines.extend(
         [
-            "",
-            "packages:",
             "  '@*/*':",
             "    access: $all",
             "    publish: $authenticated",
@@ -133,6 +224,7 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
 
 
 def run() -> None:
+    apply_startup_overrides()  # panel overrides; explicit env still wins
     data_dir = Path(os.getenv("MRK_DATA_DIR", "/data")).resolve()
     UpstreamStore(data_dir).ensure_defaults(
         os.getenv("MRK_PYPI_PRIMARY_UPSTREAM", "https://pypi.org/simple/"),

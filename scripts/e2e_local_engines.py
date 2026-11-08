@@ -30,7 +30,12 @@ def _port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _run(command: list[str], *, env: dict[str, str] | None = None) -> str:
+def _run(
+    command: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    secrets_to_redact: tuple[str, ...] = (),
+) -> str:
     # Every executable and argument is constructed internally by this test harness.
     completed = subprocess.run(  # noqa: S603
         command,
@@ -45,10 +50,15 @@ def _run(command: list[str], *, env: dict[str, str] | None = None) -> str:
         ),
     )
     if completed.returncode != 0:
-        raise RuntimeError(
+        message = (
             f"command failed ({completed.returncode}): {' '.join(command)}\n"
             f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
         )
+        # Generated passwords travel in argv (devpi has no stdin option);
+        # keep them out of CI logs at least.
+        for secret in secrets_to_redact:
+            message = message.replace(secret, "***")
+        raise RuntimeError(message)
     return completed.stdout.strip()
 
 
@@ -328,7 +338,8 @@ def _exercise_devpi(run_dir: Path) -> dict[str, object]:
             "--no-root-pypi",
             "--root-passwd",
             root_password,
-        ]
+        ],
+        secrets_to_redact=(root_password,),
     )
     log_path = run_dir / "devpi.log"
     command = [
@@ -346,7 +357,10 @@ def _exercise_devpi(run_dir: Path) -> dict[str, object]:
         _wait_http(f"{base_url}/+status", process, log_path)
         client = [devpi, "--clientdir", str(client_dir)]
         _run([*client, "use", base_url])
-        _run([*client, "login", "root", f"--password={root_password}"])
+        _run(
+            [*client, "login", "root", f"--password={root_password}"],
+            secrets_to_redact=(root_password,),
+        )
         _run([*client, "index", "-c", "e2e", "bases="])
         _run([*client, "use", "root/e2e"])
         wheel = _create_wheel(run_dir)

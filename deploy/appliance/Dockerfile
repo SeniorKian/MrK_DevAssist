@@ -2,33 +2,51 @@
 
 ARG VCS_REF="unknown"
 ARG BUILD_DATE="unknown"
+# Package sources used while building the image. Empty = use the hosts recorded in
+# the lockfiles / default PyPI.
+# - npm: package-lock.json sha512 integrity hashes are still enforced, so an npm
+#   mirror cannot change package contents.
+# - pip: the direct runtime packages are version-pinned, but pip does NOT verify
+#   hashes and transitive dependencies are resolved at build time, so a
+#   PIP_INDEX_URL mirror must be trusted as much as PyPI itself.
+#   TODO: generate a hashed lock (pip-compile --generate-hashes for linux/py3.13,
+#   amd64 and arm64) and install it with --require-hashes --no-deps.
+#   docker build --build-arg NPM_REGISTRY=https://registry.npmjs.org/ ...
+#   docker build --build-arg PIP_INDEX_URL=https://pypi.org/simple/ ...
+ARG NPM_REGISTRY=""
+ARG PIP_INDEX_URL=""
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS admin-builder
+FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS admin-builder
+ARG NPM_REGISTRY
+WORKDIR /build/admin-ui
+COPY apps/admin-ui/package.json apps/admin-ui/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY" && npm config set replace-registry-host always; fi; npm ci --ignore-scripts
+COPY apps/admin-ui/ ./
+# Build metadata comes after `npm ci` so a new commit keeps the dependency layer cached.
 ARG VCS_REF
 ARG BUILD_DATE
 ENV VITE_BUILD_COMMIT=$VCS_REF \
     VITE_BUILD_DATE=$BUILD_DATE
-WORKDIR /build/admin-ui
-COPY apps/admin-ui/package.json apps/admin-ui/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
-COPY apps/admin-ui/ ./
 RUN npm run build
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS verdaccio-builder
+FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS verdaccio-builder
+ARG NPM_REGISTRY
 WORKDIR /opt/verdaccio
 COPY deploy/verdaccio/package.json deploy/verdaccio/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
+RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY" && npm config set replace-registry-host always; fi; npm ci --omit=dev --ignore-scripts
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS pglite-builder
+FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS pglite-builder
+ARG NPM_REGISTRY
 WORKDIR /opt/pglite
 COPY deploy/pglite/package.json deploy/pglite/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
+RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY" && npm config set replace-registry-host always; fi; npm ci --omit=dev --ignore-scripts
 
-FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72 AS runtime
+FROM python:3.13-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90 AS runtime
 
 ARG VCS_REF="unknown"
 ARG BUILD_DATE="unknown"
 ARG SOURCE_URL="unknown"
+ARG PIP_INDEX_URL
 
 LABEL org.opencontainers.image.title="MRK Package Mirror" \
       org.opencontainers.image.description="Single-container npm and PyPI mirror appliance" \
@@ -56,7 +74,7 @@ ENV PYTHONUNBUFFERED=1 \
     MRK_PYPI_ROUTER_PORT=3142 \
     MRK_PYPI_ROUTER_HEALTH_HOST=127.0.0.1 \
     MRK_PYPI_ROUTER_READ_TIMEOUT=90 \
-    MRK_PYPI_REQUEST_TIMEOUT=90 \
+    MRK_PYPI_REQUEST_TIMEOUT=900 \
     MRK_AUTH_COOKIE_SECURE=true \
     MRK_SESSION_TTL_SECONDS=28800 \
     MRK_BUILD_COMMIT=$VCS_REF \
@@ -67,34 +85,50 @@ ENV PYTHONUNBUFFERED=1 \
 RUN groupadd --gid 10001 mrk \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mrk
 
+# Gate 19 S7: the nft CLI for the optional mrk-firewall helper. Only that service
+# gets CAP_NET_ADMIN; in every other process the binary is inert. No service is
+# enabled (there is no init system in the image).
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends nftables \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /opt/mrk
 COPY LICENSE /opt/mrk/LICENSE
 COPY apps/control-plane/pyproject.toml /tmp/control-plane/pyproject.toml
 COPY apps/control-plane/src /tmp/control-plane/src
+# Single source of truth for the runtime pins (also used by CI, tracked by Dependabot).
+COPY deploy/appliance/requirements.txt /tmp/runtime-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install /tmp/control-plane supervisor==4.3.0 \
-      setuptools==81.0.0 msgpack==1.2.4 urllib3==2.8.0 \
-      devpi-server==6.21.0 devpi-web==5.2.0 devpi-client==7.3.0 \
-    && python -c "import msgpack, setuptools, urllib3; assert msgpack.version == (1, 2, 4); assert setuptools.__version__ == '81.0.0'; assert urllib3.__version__ == '2.8.0'" \
+    python -m pip install ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} /tmp/control-plane \
+      -r /tmp/runtime-requirements.txt \
+    && python -c "import importlib.metadata as md, sys; pins = [line.strip().split('==') for line in open('/tmp/runtime-requirements.txt') if '==' in line and not line.startswith('#')]; bad = [(name, want, md.version(name)) for name, want in pins if md.version(name) != want]; sys.exit(f'runtime pin mismatch: {bad}' if bad else 0)" \
     && python -m pip uninstall --yes pip wheel \
-    && rm -rf /tmp/control-plane /usr/local/lib/python3.13/ensurepip
+    && rm -rf /tmp/control-plane /tmp/runtime-requirements.txt /usr/local/lib/python3.13/ensurepip
 
 COPY --from=verdaccio-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=verdaccio-builder /opt/verdaccio /opt/verdaccio
 COPY --from=pglite-builder /opt/pglite /opt/pglite
 COPY --from=admin-builder /build/admin-ui/dist /opt/mrk/admin-ui
-COPY deploy/verdaccio/config.yaml /opt/mrk/verdaccio/config.yaml
 COPY deploy/appliance/supervisord.conf /opt/mrk/supervisord.conf
 COPY deploy/appliance/devpi-start.sh /opt/mrk/devpi-start.sh
 COPY deploy/appliance/devpi-configure.sh /opt/mrk/devpi-configure.sh
 COPY deploy/appliance/entrypoint.py /opt/mrk/entrypoint.py
-RUN mkdir -p /data \
-    && chown -R 10001:10001 /data /opt/mrk
+# Application files stay root-owned and read-only for the runtime user, so a
+# compromised service cannot rewrite entrypoint.py that the next start runs as root.
+# The sed is a CRLF guard: a CRLF checkout would otherwise break `set -eu`.
+RUN sed -i 's/\r$//' /opt/mrk/devpi-start.sh /opt/mrk/devpi-configure.sh /opt/mrk/supervisord.conf \
+    && mkdir -p /data /var/lib/mrk-agent /mnt/links \
+    && chown 10001:10001 /data /var/lib/mrk-agent /mnt/links \
+    && chown -R root:root /opt/mrk \
+    && chmod -R u=rwX,go=rX /opt/mrk
 
-EXPOSE 8080 4873 3141
+# 9000 = native S3 API (s3-engine); /mnt/links = mount point for linked-folder buckets.
+EXPOSE 8080 4873 3141 9000
 VOLUME ["/data"]
 
-HEALTHCHECK --interval=30s --timeout=8s --start-period=20s --retries=3 \
+# First boot (PGlite initdb, devpi-init, migrations, mirror bootstrap) can take
+# minutes on slow disks; failed probes inside the start period do not count.
+HEALTHCHECK --interval=30s --timeout=8s --start-period=300s --retries=3 \
   CMD ["python", "-m", "mrk_control_plane.healthcheck"]
 
 ENTRYPOINT ["python", "/opt/mrk/entrypoint.py"]

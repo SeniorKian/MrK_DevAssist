@@ -48,6 +48,7 @@ services:
       - /opt/mirrors/pypi:/data
 ```
 
-روی میزبان Linux مسیر volume باید قبل از اجرا با مالک `10001:10001` و mode `0700` ساخته شود.
+روی میزبان Linux مسیر volume باید قبل از اجرا با مالک `10001:10001` ساخته شود؛ entrypoint در هر
+شروع mode آن و زیرپوشه‌های ثابت را `0750` می‌کند.
 GitHub Actions به سرور production وصل نمی‌شود؛ CD فعلی artifact publication است. deploy خودکار
 سرور فقط پس از تعریف environment protection، runner/credential و rollback policy اضافه می‌شود.

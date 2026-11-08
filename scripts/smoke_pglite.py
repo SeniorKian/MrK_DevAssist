@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sys
 import tempfile
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from mrk_control_plane.tasks import TaskManager
 from sqlalchemy import text
 
 
-def main() -> None:
+def main() -> int:
     database_url = os.environ["MRK_SMOKE_DATABASE_URL"]
     with tempfile.TemporaryDirectory(prefix="mrk-pglite-smoke-") as temporary:
         data_dir = Path(temporary)
@@ -68,23 +69,25 @@ def main() -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
+        checks = {
+            "authentication": "ok",
+            "task_repository": "ok" if queued else "failed",
+            "encrypted_backup": ("ok" if backup_validation.get("valid") is True else "failed"),
+            "offline_restore": "ok" if restore_ok else "failed",
+        }
         print(
             json.dumps(
-                {
-                    "dialect": database.dialect,
-                    "migration": revision,
-                    "authentication": "ok",
-                    "task_repository": "ok" if queued else "failed",
-                    "encrypted_backup": (
-                        "ok" if backup_validation.get("valid") is True else "failed"
-                    ),
-                    "offline_restore": "ok" if restore_ok else "failed",
-                },
+                {"dialect": database.dialect, "migration": revision, **checks},
                 sort_keys=True,
             )
         )
         database.dispose()
+    failed = sorted(name for name, state in checks.items() if state != "ok")
+    if failed:
+        print(f"PGlite smoke test failed: {', '.join(failed)}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

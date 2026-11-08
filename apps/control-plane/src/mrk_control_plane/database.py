@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, event, inspect
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Base
@@ -70,7 +73,31 @@ class Database:
         finally:
             cursor.close()
 
+    def wait_until_reachable(self, timeout_seconds: float | None = None) -> None:
+        """Wait for the database to accept connections before running migrations.
+
+        Supervisor only orders process start; it does not wait for PGlite to be
+        ready, and a slow first boot used to exhaust the control plane's retries.
+        """
+        if timeout_seconds is None:
+            timeout_seconds = float(os.getenv("MRK_DATABASE_WAIT_SECONDS", "120"))
+        deadline = time.monotonic() + timeout_seconds
+        delay = 0.25
+        while True:
+            try:
+                with self.engine.connect() as connection:
+                    connection.exec_driver_sql("SELECT 1")
+                return
+            except OperationalError:
+                if time.monotonic() >= deadline:
+                    raise
+                LOGGER.info("waiting for the database to accept connections")
+                time.sleep(delay)
+                delay = min(delay * 2, 5.0)
+
     def initialize(self) -> None:
+        if not self.url.startswith("sqlite"):
+            self.wait_until_reachable()
         migration_root = Path(__file__).with_name("migrations")
         config = Config()
         config.set_main_option("script_location", migration_root.as_posix())
@@ -94,6 +121,14 @@ class Database:
     def sessions(self) -> Iterator[Session]:
         with self.session_factory() as session:
             yield session
+
+    def maintenance(self) -> None:
+        """Reclaim dead rows and refresh planner statistics."""
+        with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            if self.is_embedded_sqlite:
+                connection.exec_driver_sql("PRAGMA optimize")
+            else:
+                connection.exec_driver_sql("VACUUM (ANALYZE)")
 
     def dispose(self) -> None:
         self.engine.dispose()

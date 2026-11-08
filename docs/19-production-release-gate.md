@@ -29,10 +29,10 @@ Workflow انتشار:
 4. digest منتشرشده را با Trivy برای HIGH/CRITICAL قابل‌رفع fail می‌کند؛
 5. فقط digest immutable را در summary تحویل می‌دهد.
 
-Base imageهای resolveشده در 2026-11-07:
+Base imageهای resolveشده در 2026-11-08 (Debian 13 trixie؛ جایگزین bookworm به‌خاطر CVEهای critical/high بدون fix در Debian 12):
 
-- Node `24.18.0-bookworm-slim`: `sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d`
-- Python `3.13-slim-bookworm` (`3.13.18`): `sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72`
+- Node `24.18.0-trixie-slim`: `sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573`
+- Python `3.13-slim-trixie` (`3.13.18`): `sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90`
 
 ## Egress policy
 
@@ -119,7 +119,9 @@ concurrency=16 اجرا و readiness قبل و بعد را بررسی می‌ک�
 - [ ] GitHub repository/GHCR visibility با تصمیم license سازگار است.
 - [ ] CI، image build، Trivy، SBOM، provenance، attestation و soak سبز هستند.
 - [ ] image فقط با `@sha256:<digest>` انتخاب شده است.
-- [ ] `/opt/mirrors/pypi` روی host با مالک `10001:10001` و mode `0700` آماده است.
+- [ ] `/opt/mirrors/pypi` روی host با مالک `10001:10001` آماده است (entrypoint mode را `0750` می‌کند).
+- [ ] restart policy برابر `unless-stopped`/`always` است (نه `on-failure`) و stop timeout حداقل 180s است.
+- [ ] سقف منابع (`MRK_MEM_LIMIT`، `MRK_CPUS`) با ظرفیت host هماهنگ است.
 - [ ] دامنه‌های واقعی CORS، trusted hosts و PyPI outside URL تنظیم شده‌اند.
 - [ ] TLS، HSTS و محدودیت دسترسی admin domain روی reverse proxy فعال است.
 - [ ] egress FQDN policy و DNS resolver policy در زیرساخت enforce شده‌اند.

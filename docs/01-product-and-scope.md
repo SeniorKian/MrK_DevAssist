@@ -92,7 +92,7 @@
 - record editor، import/export، AXFR/IXFR، TSIG و Dynamic Update
 - DNSSEC، DoH/DoT/DoQ، blocklist، query log و آمار
 - Simple Mode برای کارهای روزمره و Advanced Mode برای قابلیت‌های حساس
-- استفاده از موتور Technitium به‌صورت process داخلیِ بدون تغییر و adapter مبتنی بر API رسمی
+- موتور DNS بومی MRK به‌صورت clean-room (ADR در `docs/23`)
 
 ### Modular Appliance
 
@@ -110,7 +110,6 @@
 - ویرایش مستقیم فایل‌های Verdaccio/devpi توسط مرورگر
 - حذف خودکار package بدون policy و audit
 - dependency vulnerability scanner اختصاصی
-- بازنویسی موتور DNS از صفر
 - کپی مستقیم UI، نام تجاری یا دارایی‌های Uptime Kuma و Technitium
 - ادعای HA برای Appliance تک‌نودی
 - مسیریابی DNS کلاسیک UDP/TCP بر اساس hostname؛ این پروتکل Host header ندارد

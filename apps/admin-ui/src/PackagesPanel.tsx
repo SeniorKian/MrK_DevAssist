@@ -1,32 +1,35 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  Chip,
-  CircularProgress,
-  Divider,
-  Grid,
-  InputAdornment,
-  MenuItem,
-  Stack,
-  TextField,
-  Tooltip,
-  Typography
-} from "@mui/material";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Box, Button, CircularProgress, InputAdornment, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import PushPinRoundedIcon from "@mui/icons-material/PushPinRounded";
 import GppBadRoundedIcon from "@mui/icons-material/GppBadRounded";
-import DeleteSweepRoundedIcon from "@mui/icons-material/DeleteSweepRounded";
+import GppGoodRoundedIcon from "@mui/icons-material/GppGoodRounded";
+import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import CloudDownloadRoundedIcon from "@mui/icons-material/CloudDownloadRounded";
 import SyncRoundedIcon from "@mui/icons-material/SyncRounded";
+import RestoreFromTrashRoundedIcon from "@mui/icons-material/RestoreFromTrashRounded";
+import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
+import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
+import { ApiError, getJson, hasPermission, isAbortError, mutateJson } from "./api";
+import { CONFIRM_TOKENS, deleteConfirmation, errorSentence, pick, say, type Bi } from "./copy";
+import {
+  Bytes, ConfirmAction, EmptyState, FriendlyError, Ltr, NoAccess, Notice, RelativeTime, ResponsiveList, SectionCard, StatusPill,
+  useConfirmAction, useKit, useUndoSnackbar
+} from "./kit";
 import type { Language } from "./i18n";
+import { formatBytes, formatNumber } from "./format";
+
+/**
+ * Packages › «جست‌وجو و مدیریت» and «پیش‌دریافت» (docs/33 §4.2).
+ * Simple: search, keep / stop keeping (undo), remove to the recycle bin, restore from the bin.
+ * Advanced: quarantine with a reason, fetch again from the source, file counts, delete forever.
+ */
+
+type Ecosystem = "npm" | "pypi";
 
 type PackageRecord = {
   name: string;
-  ecosystem: "npm" | "pypi";
+  ecosystem: Ecosystem;
   versions: string[];
   artifact_count: number;
   size_bytes: number;
@@ -36,242 +39,544 @@ type PackageRecord = {
   quarantine_reason: string | null;
 };
 
-type Props = {
-  language: Language;
-  csrf: string;
-  permissions: string[];
-  onUnauthorized: () => void;
-};
+type TrashRecord = { trash_id: string; ecosystem: string; name: string; trashed_at: number; size_bytes: number; expires_at: number | null };
 
-type PurgePreview = {
-  ecosystem: "npm" | "pypi";
-  name: string;
-  artifact_count: number;
-  size_bytes: number;
-  blocked_by_pin: boolean;
-  confirmation: string;
-};
+type PurgePreview = { ecosystem: Ecosystem; name: string; artifact_count: number; size_bytes: number; blocked_by_pin: boolean; confirmation: string };
 
-const labels = {
-  fa: {
-    title: "کاتالوگ پکیج‌ها",
-    hint: "محتوای واقعی cache در npm و PyPI را جست‌وجو و سیاست‌های نگه‌داری را مدیریت کنید.",
-    search: "جست‌وجوی نام پکیج",
-    all: "همه اکوسیستم‌ها",
-    versions: "نسخه‌ها",
-    artifacts: "فایل",
-    size: "حجم",
-    pin: "Pin",
-    unpin: "Unpin",
-    quarantine: "قرنطینه",
-    release: "رفع قرنطینه",
-    preview: "پیش‌نمایش حذف",
-    reason: "دلیل قرنطینه",
-    empty: "پکیجی در cache پیدا نشد.",
-    error: "دریافت یا تغییر اطلاعات پکیج ناموفق بود.",
-    readOnly: "نقش شما اجازه تغییر سیاست cache را ندارد.",
-    purgeTitle: "پیش‌نمایش عملیات حذف",
-    blocked: "به‌علت Pin امکان حذف ندارد",
-    confirmation: "عبارت تأیید",
-    executePurge: "اجرای حذف",
-    revalidate: "بازاعتبارسنجی",
-    taskQueued: "وظیفه با موفقیت در صف قرار گرفت",
-    prefetchTitle: "دریافت از قبل",
-    prefetchHint: "محتوای requirements.txt یا package-lock.json را وارد کنید تا پکیج‌ها از مسیر همین mirror دریافت و cache شوند.",
-    manifest: "محتوای فایل",
-    enqueue: "افزودن به صف",
-    taskOnly: "نقش شما اجازه اجرای وظایف عملیاتی را ندارد.",
-    confirmationMismatch: "عبارت تأیید را دقیقاً وارد کنید."
+const SEARCH_LIMIT = 100;
+
+const COPY = {
+  search: { fa: "نام بسته را بنویسید", en: "Type a package name" },
+  all: { fa: "همه", en: "All" },
+  results: { fa: "{count} بسته", en: "{count} packages" },
+  truncated: { fa: "فقط {count} بسته اول نشان داده شده؛ نام را دقیق‌تر بنویسید.", en: "Only the first {count} packages are shown; type a more exact name." },
+  name: { fa: "نام بسته", en: "Package" },
+  kind: { fa: "نوع", en: "Type" },
+  versions: { fa: "نسخه‌ها", en: "Versions" },
+  size: { fa: "حجم", en: "Size" },
+  files: { fa: "تعداد فایل", en: "Files" },
+  lastChange: { fa: "آخرین تغییر", en: "Last change" },
+  state: { fa: "وضعیت", en: "State" },
+  stored: { fa: "ذخیره‌شده", en: "Stored" },
+  keep: { fa: "نگه دار", en: "Keep" },
+  stopKeeping: { fa: "دیگر نگه ندار", en: "Stop keeping" },
+  kept: { fa: "«{name}» نگه داشته می‌شود و هیچ‌وقت خودکار پاک نمی‌شود.", en: "“{name}” will be kept and never removed automatically." },
+  unkept: { fa: "«{name}» دیگر نگه داشته نمی‌شود.", en: "“{name}” is no longer kept." },
+  remove: { fa: "پاک کن", en: "Remove" },
+  removeTitle: { fa: "«{name}» از ذخیره محلی پاک شود؟", en: "Remove “{name}” from local copies?" },
+  removeBody: {
+    fa: "{files} فایل ({size}) پاک می‌شود. تا چند روز در سطل بازیافت می‌ماند و می‌توانید برش گردانید.",
+    en: "{files} files ({size}) will be removed. They stay in the recycle bin for a few days, so you can bring them back."
   },
-  en: {
-    title: "Package catalog",
-    hint: "Search real npm and PyPI cache content and manage retention policies.",
-    search: "Search package name",
-    all: "All ecosystems",
-    versions: "Versions",
-    artifacts: "artifacts",
-    size: "Size",
-    pin: "Pin",
-    unpin: "Unpin",
-    quarantine: "Quarantine",
-    release: "Release",
-    preview: "Purge preview",
-    reason: "Quarantine reason",
-    empty: "No cached packages were found.",
-    error: "Could not load or update package data.",
-    readOnly: "Your role cannot change cache policies.",
-    purgeTitle: "Purge operation preview",
-    blocked: "Purge is blocked because this package is pinned",
-    confirmation: "Confirmation phrase",
-    executePurge: "Execute purge",
-    revalidate: "Revalidate",
-    taskQueued: "The job was queued successfully",
-    prefetchTitle: "Prefetch packages",
-    prefetchHint: "Paste requirements.txt or package-lock.json content to download and cache packages through this mirror.",
-    manifest: "File content",
-    enqueue: "Add to queue",
-    taskOnly: "Your role cannot run operational jobs.",
-    confirmationMismatch: "Enter the confirmation phrase exactly."
-  }
-} as const;
+  removeConsequence: { fa: "اگر پروژه‌ای دوباره این بسته را بخواهد، MRK آن را از منبع دریافت می‌کند.", en: "If a project asks for it again, MRK fetches it from the source." },
+  removeBlocked: { fa: "این بسته نگه‌داشته‌شده است. اول «دیگر نگه ندار» را بزنید.", en: "This package is kept. Choose “Stop keeping” first." },
+  removeStarted: { fa: "پاک کردن «{name}» شروع شد.", en: "Removing “{name}” has started." },
+  quarantine: { fa: "قرنطینه…", en: "Quarantine…" },
+  quarantineTitle: { fa: "«{name}» قرنطینه شود؟", en: "Quarantine “{name}”?" },
+  quarantineBody: { fa: "تا وقتی قرنطینه است، هیچ پروژه‌ای نمی‌تواند آن را نصب کند.", en: "While quarantined, no project can install it." },
+  quarantineReason: { fa: "چرا؟ (دست‌کم ۳ نویسه)", en: "Why? (at least 3 characters)" },
+  quarantineYes: { fa: "قرنطینه کن", en: "Quarantine" },
+  quarantined: { fa: "«{name}» قرنطینه شد.", en: "“{name}” was quarantined." },
+  release: { fa: "از قرنطینه درآور", en: "Release" },
+  released: { fa: "«{name}» از قرنطینه درآمد.", en: "“{name}” was released." },
+  revalidate: { fa: "دریافت دوباره از منبع", en: "Fetch again from source" },
+  revalidateStarted: { fa: "دریافت دوباره «{name}» شروع شد.", en: "Fetching “{name}” again has started." },
+  seeJobs: { fa: "دیدن پیشرفت", en: "See progress" },
+  emptyAll: { fa: "هنوز بسته‌ای روی این سرور ذخیره نشده.", en: "No packages are stored on this server yet." },
+  emptyAllBody: { fa: "وقتی پروژه‌ها از این سرور نصب کنند، بسته‌ها این‌جا دیده می‌شوند.", en: "Once projects install from this server, their packages show up here." },
+  connect: { fa: "اتصال یک پروژه", en: "Connect a project" },
+  emptyQuery: { fa: "چیزی با «{query}» پیدا نشد.", en: "Nothing matches “{query}”." },
+  emptyQueryBody: { fa: "املای نام را بررسی کنید یا آن را از قبل دانلود کنید.", en: "Check the spelling, or download it ahead of time." },
+  prefetchIt: { fa: "پیش‌دریافت", en: "Download ahead" },
+  readOnly: { fa: "نقش شما فقط اجازه دیدن بسته‌ها را دارد.", en: "Your role can only view packages." },
+  listLabel: { fa: "بسته‌های ذخیره‌شده", en: "Stored packages" },
+  // recycle bin
+  trash: { fa: "سطل بازیافت", en: "Recycle bin" },
+  trashHint: { fa: "بسته‌های پاک‌شده تا زمان مشخص‌شده این‌جا می‌مانند و برمی‌گردند.", en: "Removed packages wait here until their time runs out, and can be brought back." },
+  trashEmpty: { fa: "سطل بازیافت خالی است.", en: "The recycle bin is empty." },
+  trashEmptyBody: { fa: "بسته‌ای که پاک کنید، چند روز این‌جا می‌ماند.", en: "A package you remove stays here for a few days." },
+  trashUnavailable: { fa: "سطل بازیافت روی نسخه فعلی سرور نیست.", en: "The recycle bin isn't available on this server version." },
+  removedAt: { fa: "پاک‌شده", en: "Removed" },
+  goneAt: { fa: "پاک شدن برای همیشه", en: "Deleted for good" },
+  restore: { fa: "برگردان", en: "Restore" },
+  restoreTitle: { fa: "«{name}» برگردانده شود؟", en: "Bring back “{name}”?" },
+  restoreBody: { fa: "فایل‌های این بسته دوباره در ذخیره محلی قرار می‌گیرند.", en: "This package's files go back into local copies." },
+  restoreYes: { fa: "بله، برگردان", en: "Yes, restore" },
+  restored: { fa: "«{name}» برگردانده شد.", en: "“{name}” was restored." },
+  deleteForever: { fa: "پاک کردن برای همیشه…", en: "Delete forever…" },
+  deleteTitle: { fa: "«{name}» برای همیشه پاک شود؟", en: "Delete “{name}” forever?" },
+  deleteBody: { fa: "فایل‌ها برای همیشه پاک می‌شوند و دیگر برنمی‌گردند.", en: "The files are erased and can't be brought back." },
+  deleted: { fa: "«{name}» برای همیشه پاک شد.", en: "“{name}” was deleted forever." },
+  // prefetch
+  prefetchTitle: { fa: "دانلود بسته‌ها از قبل", en: "Download packages ahead" },
+  prefetchHint: {
+    fa: "فهرست بسته‌های پروژه را این‌جا بگذارید تا از قبل دانلود شوند و بعداً بدون اینترنت هم نصب شوند.",
+    en: "Paste your project's package list so the packages are downloaded now and install later even without internet."
+  },
+  fileKind: { fa: "این فهرست از کدام فایل است؟", en: "Which file is this list from?" },
+  pythonFile: { fa: "پایتون", en: "Python" },
+  nodeFile: { fa: "جاوااسکریپت", en: "JavaScript" },
+  manifest: { fa: "محتوای فایل", en: "File content" },
+  manifestHelpPy: { fa: "محتوای فایل requirements.txt را بچسبانید.", en: "Paste the content of requirements.txt." },
+  manifestHelpNpm: { fa: "محتوای فایل package-lock.json را بچسبانید.", en: "Paste the content of package-lock.json." },
+  enqueue: { fa: "دانلود از قبل", en: "Download ahead" },
+  enqueuing: { fa: "در حال شروع…", en: "Starting…" },
+  prefetchStarted: { fa: "دانلود بسته‌ها شروع شد.", en: "Downloading the packages has started." },
+  prefetchLimits: {
+    fa: "هر بار حداکثر ۵۰۰ بسته و برای هر نسخه حداکثر ۴۰ فایل دانلود می‌شود.",
+    en: "Each run downloads at most 500 packages and at most 40 files per version."
+  },
+  noTasks: { fa: "نقش شما اجازه شروع کارهای پس‌زمینه را ندارد.", en: "Your role can't start background jobs." }
+} satisfies Record<string, Bi>;
 
-function bytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
-  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
-  return `${(value / 1024 ** 3).toFixed(1)} GB`;
+const ECOSYSTEM_LABEL: Record<string, string> = { npm: "npm", pypi: "PyPI" };
+
+const packagePath = (item: { ecosystem: string; name: string }) => `/api/v1/packages/${item.ecosystem}/${encodeURIComponent(item.name)}`;
+
+function useJobsNotice() {
+  const { language } = useKit();
+  return (message: string) => ({ message, action: <Button color="inherit" size="small" href="#/alerts/jobs">{pick(language, COPY.seeJobs)}</Button> });
 }
 
-export function PackagesPanel({ language, csrf, permissions, onUnauthorized }: Props) {
-  const copy = labels[language];
-  const canWrite = permissions.includes("*") || permissions.includes("cache:write");
-  const canRunTasks = permissions.includes("*") || permissions.includes("task:write");
+// ── Search & manage ──────────────────────────────────────────────────────────
+
+export type PackagesTabProps = { permissions: readonly string[] };
+
+export function SearchTab({ permissions }: PackagesTabProps) {
+  const { language, isAdvanced } = useKit();
+  const canWrite = hasPermission(permissions, "cache:write");
+  const canRunTasks = hasPermission(permissions, "task:write");
+  const { ask, dialog } = useConfirmAction();
+  const { notify, snackbar } = useUndoSnackbar();
+  const jobsNotice = useJobsNotice();
   const [items, setItems] = useState<PackageRecord[]>([]);
+  const [count, setCount] = useState(0);
   const [query, setQuery] = useState("");
   const [ecosystem, setEcosystem] = useState("");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [reason, setReason] = useState("manual security review");
-  const [preview, setPreview] = useState<PurgePreview | null>(null);
-  const [confirmation, setConfirmation] = useState("");
-  const [taskNotice, setTaskNotice] = useState<string | null>(null);
-  const [operationPending, setOperationPending] = useState(false);
-  const [prefetchEcosystem, setPrefetchEcosystem] = useState<"npm" | "pypi">("pypi");
-  const [manifest, setManifest] = useState("");
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
+  const [jobNotice, setJobNotice] = useState<{ message: string; action: ReactNode } | null>(null);
+  const [quarantineTarget, setQuarantineTarget] = useState<PackageRecord | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [trashKey, setTrashKey] = useState(0);
+  const loadController = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ q: query });
+      const params = new URLSearchParams({ q: query, limit: String(SEARCH_LIMIT) });
       if (ecosystem) params.set("ecosystem", ecosystem);
-      const response = await fetch(`/api/v1/packages?${params}`, { cache: "no-store" });
-      if (response.status === 401) return onUnauthorized();
-      if (!response.ok) throw new Error("load failed");
-      const payload = (await response.json()) as { items: PackageRecord[] };
+      const payload = await getJson<{ items: PackageRecord[]; count?: number }>(`/api/v1/packages?${params}`, controller.signal);
+      if (controller.signal.aborted) return;
       setItems(payload.items);
-      setError(false);
-    } catch {
-      setError(true);
+      setCount(payload.count ?? payload.items.length);
+      setLoadError(null);
+    } catch (caught) {
+      if (isAbortError(caught) || controller.signal.aborted || (caught instanceof ApiError && caught.status === 401)) return;
+      setLoadError(caught);
     } finally {
-      setLoading(false);
+      if (loadController.current === controller) {
+        loadController.current = null;
+        setLoading(false);
+      }
     }
-  }, [ecosystem, onUnauthorized, query]);
+  }, [ecosystem, query]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 250);
     return () => window.clearTimeout(timer);
   }, [load]);
+  useEffect(() => () => loadController.current?.abort(), []);
 
-  const policy = async (item: PackageRecord, body: object) => {
+  const run = async (action: () => Promise<void>) => {
+    setActionError(null);
     try {
-      const response = await fetch(
-        `/api/v1/packages/${item.ecosystem}/${encodeURIComponent(item.name)}/policy`,
-        {
-          method: "PUT",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            "X-CSRF-Token": csrf
-          },
-          body: JSON.stringify(body)
-        }
-      );
-      if (response.status === 401) return onUnauthorized();
-      if (!response.ok) throw new Error("policy failed");
-      await load();
-    } catch {
-      setError(true);
+      await action();
+      return true;
+    } catch (caught) {
+      if (!(caught instanceof ApiError && caught.status === 401)) setActionError(caught);
+      return false;
     }
   };
 
-  const purgePreview = async (item: PackageRecord) => {
-    try {
-      const response = await fetch(
-        `/api/v1/packages/${item.ecosystem}/${encodeURIComponent(item.name)}/purge-preview`,
-        { method: "POST", headers: { "X-CSRF-Token": csrf } }
-      );
-      if (response.status === 401) return onUnauthorized();
-      if (!response.ok) throw new Error("preview failed");
-      setPreview((await response.json()) as PurgePreview);
-      setConfirmation("");
-    } catch {
-      setError(true);
-    }
+  const setPinned = async (item: PackageRecord, pinned: boolean, undoable = true) => {
+    const ok = await run(async () => {
+      await mutateJson(`${packagePath(item)}/policy`, { method: "PUT", body: { pinned } });
+    });
+    if (!ok) return;
+    await load();
+    notify({
+      message: say(language, pinned ? COPY.kept : COPY.unkept, { name: item.name }),
+      onUndo: undoable ? () => void setPinned(item, !pinned, false) : undefined
+    });
   };
 
-  const queuePackageTask = async (item: PackageRecord, action: "purge" | "revalidate") => {
-    if (action === "purge" && (!preview || confirmation !== preview.confirmation)) {
-      setError(true);
+  const remove = async (item: PackageRecord) => {
+    let preview: PurgePreview | null = null;
+    const ok = await run(async () => {
+      preview = await mutateJson<PurgePreview>(`${packagePath(item)}/purge-preview`, { method: "POST" });
+    });
+    const target = preview as PurgePreview | null;
+    if (!ok || !target) return;
+    if (target.blocked_by_pin) {
+      notify({ message: pick(language, COPY.removeBlocked), tone: "info" });
       return;
     }
-    setOperationPending(true);
-    setError(false);
-    try {
-      const response = await fetch(
-        `/api/v1/packages/${item.ecosystem}/${encodeURIComponent(item.name)}/${action}`,
-        {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            "X-CSRF-Token": csrf
-          },
-          body: action === "purge" ? JSON.stringify({ confirmation }) : undefined
-        }
-      );
-      if (response.status === 401) return onUnauthorized();
-      if (!response.ok) throw new Error("task enqueue failed");
-      const payload = (await response.json()) as { task_id: string };
-      setTaskNotice(`${copy.taskQueued}: ${payload.task_id}`);
-      setPreview(null);
-      setConfirmation("");
-    } catch {
-      setError(true);
-    } finally {
-      setOperationPending(false);
+    const accepted = await ask({
+      title: say(language, COPY.removeTitle, { name: item.name }),
+      body: say(language, COPY.removeBody, { files: formatNumber(target.artifact_count, language), size: formatBytes(target.size_bytes, language) }),
+      consequences: [pick(language, COPY.removeConsequence)],
+      undoable: true,
+      severity: "disruptive",
+      confirmLabel: pick(language, COPY.remove)
+    });
+    if (!accepted) return;
+    const done = await run(async () => {
+      await mutateJson(`${packagePath(item)}/purge`, { method: "POST", body: { confirmation: target.confirmation || CONFIRM_TOKENS.purge(item.ecosystem, item.name) } });
+    });
+    if (done) {
+      setJobNotice(jobsNotice(say(language, COPY.removeStarted, { name: item.name })));
+      setTrashKey((value) => value + 1);
     }
   };
 
-  const queuePrefetch = async () => {
-    if (!manifest.trim()) return;
-    setOperationPending(true);
-    setError(false);
+  const revalidate = async (item: PackageRecord) => {
+    const ok = await run(async () => {
+      await mutateJson(`${packagePath(item)}/revalidate`, { method: "POST" });
+    });
+    if (ok) setJobNotice(jobsNotice(say(language, COPY.revalidateStarted, { name: item.name })));
+  };
+
+  const release = async (item: PackageRecord) => {
+    const ok = await run(async () => {
+      await mutateJson(`${packagePath(item)}/policy`, { method: "PUT", body: { quarantined: false, quarantine_reason: null } });
+    });
+    if (ok) {
+      notify({ message: say(language, COPY.released, { name: item.name }) });
+      await load();
+    }
+  };
+
+  const submitQuarantine = async () => {
+    if (!quarantineTarget || reason.trim().length < 3) return;
+    setBusy(true);
+    const target = quarantineTarget;
+    const ok = await run(async () => {
+      await mutateJson(`${packagePath(target)}/policy`, { method: "PUT", body: { quarantined: true, quarantine_reason: reason.trim() } });
+    });
+    setBusy(false);
+    if (!ok) return;
+    setQuarantineTarget(null);
+    notify({ message: say(language, COPY.quarantined, { name: target.name }) });
+    await load();
+  };
+
+  const trimmed = query.trim();
+  const formattedCount = formatNumber(count, language);
+
+  return (
+    <Stack spacing={2.5}>
+      <SectionCard>
+        <Stack spacing={1.5}>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
+            <TextField
+              fullWidth
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              label={pick(language, COPY.search)}
+              slotProps={{
+                htmlInput: { maxLength: 200, dir: "auto" },
+                input: {
+                  startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment>,
+                  endAdornment: loading ? <CircularProgress size={18} aria-label={pick(language, COPY.search)} /> : null
+                }
+              }}
+            />
+            <ToggleButtonGroup exclusive size="small" value={ecosystem} onChange={(_event, value: string | null) => setEcosystem(value ?? "")} sx={{ flexShrink: 0, "& .MuiToggleButton-root": { minHeight: 44, px: 2 } }}>
+              <ToggleButton value="">{pick(language, COPY.all)}</ToggleButton>
+              <ToggleButton value="npm">npm</ToggleButton>
+              <ToggleButton value="pypi">PyPI</ToggleButton>
+            </ToggleButtonGroup>
+          </Stack>
+          <Typography variant="caption" color="text.secondary" role="status">
+            {count >= SEARCH_LIMIT ? say(language, COPY.truncated, { count: formattedCount }) : say(language, COPY.results, { count: formattedCount })}
+          </Typography>
+        </Stack>
+      </SectionCard>
+
+      {loadError !== null && <FriendlyError error={loadError} onRetry={() => void load()} />}
+      {actionError !== null && <FriendlyError error={actionError} onClose={() => setActionError(null)} />}
+      {jobNotice && <Notice tone="success" action={jobNotice.action}>{jobNotice.message}</Notice>}
+      {!canWrite && <NoAccess needs="cache:write" />}
+
+      <SectionCard flush>
+        <ResponsiveList<PackageRecord>
+          label={pick(language, COPY.listLabel)}
+          rows={items}
+          rowKey={(row) => `${row.ecosystem}:${row.name}`}
+          columns={[
+            { key: "name", header: pick(language, COPY.name), render: (row) => <Ltr>{row.name}</Ltr> },
+            { key: "eco", header: pick(language, COPY.kind), render: (row) => ECOSYSTEM_LABEL[row.ecosystem] ?? row.ecosystem },
+            { key: "versions", header: pick(language, COPY.versions), render: (row) => <Ltr>{row.versions.slice(0, isAdvanced ? 8 : 3).join("، ") || "—"}</Ltr>, hideOnCard: true },
+            { key: "size", header: pick(language, COPY.size), render: (row) => <Bytes value={row.size_bytes} /> },
+            { key: "files", header: pick(language, COPY.files), render: (row) => formatNumber(row.artifact_count, language), advancedOnly: true },
+            { key: "mtime", header: pick(language, COPY.lastChange), render: (row) => <RelativeTime value={row.latest_mtime} />, advancedOnly: true },
+            { key: "state", header: pick(language, COPY.state), render: (row) => <PackageState row={row} /> }
+          ]}
+          card={{
+            title: (row) => <Ltr>{row.name}</Ltr>,
+            meta: (row) => (
+              <>
+                {ECOSYSTEM_LABEL[row.ecosystem]} · <Bytes value={row.size_bytes} />
+              </>
+            ),
+            status: (row) => <PackageState row={row} />
+          }}
+          actions={canWrite ? [
+            { key: "keep", label: pick(language, COPY.keep), icon: PushPinRoundedIcon, onClick: (row) => void setPinned(row, true), hidden: (row) => row.pinned },
+            { key: "unkeep", label: pick(language, COPY.stopKeeping), icon: PushPinRoundedIcon, onClick: (row) => void setPinned(row, false), hidden: (row) => !row.pinned },
+            { key: "revalidate", label: pick(language, COPY.revalidate), icon: SyncRoundedIcon, onClick: (row) => void revalidate(row), advancedOnly: true, disabled: (row) => !canRunTasks || row.pinned },
+            { key: "quarantine", label: pick(language, COPY.quarantine), icon: GppBadRoundedIcon, onClick: (row) => { setReason(""); setQuarantineTarget(row); }, advancedOnly: true, hidden: (row) => row.quarantined },
+            { key: "release", label: pick(language, COPY.release), icon: GppGoodRoundedIcon, onClick: (row) => void release(row), advancedOnly: true, hidden: (row) => !row.quarantined },
+            { key: "remove", label: pick(language, COPY.remove), icon: DeleteOutlineRoundedIcon, onClick: (row) => void remove(row), danger: true, disabled: () => !canRunTasks }
+          ] : undefined}
+          empty={
+            loading ? undefined : trimmed ? (
+              <EmptyState
+                icon={SearchRoundedIcon}
+                title={say(language, COPY.emptyQuery, { query: trimmed })}
+                body={pick(language, COPY.emptyQueryBody)}
+                action={hasPermission(permissions, "cache:write") ? <Button variant="contained" href="#/packages/prefetch" startIcon={<CloudDownloadRoundedIcon />}>{pick(language, COPY.prefetchIt)}</Button> : undefined}
+              />
+            ) : (
+              <EmptyState
+                icon={Inventory2RoundedIcon}
+                title={pick(language, COPY.emptyAll)}
+                body={pick(language, COPY.emptyAllBody)}
+                action={<Button variant="contained" href="#/packages/connect">{pick(language, COPY.connect)}</Button>}
+              />
+            )
+          }
+        />
+      </SectionCard>
+
+      <RecycleBin key={trashKey} permissions={permissions} onChanged={() => void load()} />
+
+      <ConfirmAction
+        open={quarantineTarget !== null}
+        title={quarantineTarget ? say(language, COPY.quarantineTitle, { name: quarantineTarget.name }) : ""}
+        body={pick(language, COPY.quarantineBody)}
+        undoable
+        severity="destructive"
+        confirmLabel={pick(language, COPY.quarantineYes)}
+        busy={busy}
+        error={quarantineTarget ? actionError : null}
+        confirmDisabled={reason.trim().length < 3}
+        onConfirm={() => void submitQuarantine()}
+        onClose={() => setQuarantineTarget(null)}
+      >
+        <TextField fullWidth required label={pick(language, COPY.quarantineReason)} value={reason} onChange={(event) => setReason(event.target.value)} slotProps={{ htmlInput: { minLength: 3, maxLength: 500, dir: "auto" } }} />
+      </ConfirmAction>
+      {dialog}
+      {snackbar}
+    </Stack>
+  );
+}
+
+function PackageState({ row }: { row: PackageRecord }) {
+  const { language } = useKit();
+  if (row.quarantined) return <StatusPill status="quarantined" />;
+  if (row.pinned) return <StatusPill status="pinned" />;
+  return <StatusPill tone="ok" label={pick(language, COPY.stored)} />;
+}
+
+// ── Recycle bin ──────────────────────────────────────────────────────────────
+
+function RecycleBin({ permissions, onChanged }: { permissions: readonly string[]; onChanged: () => void }) {
+  const { language, c } = useKit();
+  const canWrite = hasPermission(permissions, "cache:write");
+  const { ask, dialog } = useConfirmAction();
+  const { notify, snackbar } = useUndoSnackbar();
+  const [items, setItems] = useState<TrashRecord[] | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const response = await fetch("/api/v1/packages/prefetch", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "X-CSRF-Token": csrf
-        },
-        body: JSON.stringify({ ecosystem: prefetchEcosystem, content: manifest })
-      });
-      if (response.status === 401) return onUnauthorized();
-      if (!response.ok) throw new Error("prefetch enqueue failed");
-      const payload = (await response.json()) as { task_id: string };
-      setTaskNotice(`${copy.taskQueued}: ${payload.task_id}`);
-      setManifest("");
-    } catch {
-      setError(true);
+      const payload = await getJson<{ items: TrashRecord[] }>("/api/v1/packages/trash");
+      setItems(payload.items);
+      setError(null);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) return;
+      if (caught instanceof ApiError && (caught.status === 404 || caught.status === 405)) setUnavailable(true);
+      else setError(caught);
     } finally {
-      setOperationPending(false);
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => void load(), [load]);
+
+  const restore = async (item: TrashRecord) => {
+    const accepted = await ask({ title: say(language, COPY.restoreTitle, { name: item.name }), body: pick(language, COPY.restoreBody), confirmLabel: pick(language, COPY.restoreYes) });
+    if (!accepted) return;
+    try {
+      await mutateJson(`/api/v1/packages/trash/${encodeURIComponent(item.trash_id)}/restore`, { method: "POST" });
+      notify({ message: say(language, COPY.restored, { name: item.name }) });
+      await load();
+      onChanged();
+    } catch (caught) {
+      notify({ message: errorSentence(language, caught), tone: "error" });
+    }
+  };
+
+  const deleteForever = async (item: TrashRecord) => {
+    const token = CONFIRM_TOKENS.trashDelete(item.trash_id);
+    const accepted = await ask({
+      title: say(language, COPY.deleteTitle, { name: item.name }),
+      body: pick(language, COPY.deleteBody),
+      undoable: false,
+      severity: "destructive",
+      typed: deleteConfirmation(token)
+    });
+    if (!accepted) return;
+    try {
+      await mutateJson(`/api/v1/packages/trash/${encodeURIComponent(item.trash_id)}`, { method: "DELETE", body: { confirmation: token } });
+      notify({ message: say(language, COPY.deleted, { name: item.name }) });
+      await load();
+    } catch (caught) {
+      notify({ message: errorSentence(language, caught), tone: "error" });
+    }
+  };
+
+  if (unavailable) return null;
+  return (
+    <SectionCard
+      title={pick(language, COPY.trash)}
+      hint={pick(language, COPY.trashHint)}
+      collapsible
+      defaultCollapsed={!items || items.length === 0}
+      flush
+      action={
+        <Button size="small" onClick={() => void load()} disabled={loading} startIcon={loading ? <CircularProgress size={14} /> : <RefreshRoundedIcon />} sx={{ minHeight: 44 }}>
+          {c.refresh}
+        </Button>
+      }
+    >
+      {error !== null && <Box sx={{ p: 2 }}><FriendlyError error={error} onRetry={() => void load()} /></Box>}
+      <ResponsiveList<TrashRecord>
+        label={pick(language, COPY.trash)}
+        rows={items ?? []}
+        rowKey={(row) => row.trash_id}
+        columns={[
+          { key: "name", header: pick(language, COPY.name), render: (row) => <Ltr>{row.name}</Ltr> },
+          { key: "eco", header: pick(language, COPY.kind), render: (row) => ECOSYSTEM_LABEL[row.ecosystem] ?? row.ecosystem },
+          { key: "size", header: pick(language, COPY.size), render: (row) => <Bytes value={row.size_bytes} /> },
+          { key: "at", header: pick(language, COPY.removedAt), render: (row) => <RelativeTime value={row.trashed_at} /> },
+          { key: "expires", header: pick(language, COPY.goneAt), render: (row) => <RelativeTime value={row.expires_at} /> },
+          { key: "id", header: "ID", render: (row) => <Ltr mono>{row.trash_id}</Ltr>, advancedOnly: true }
+        ]}
+        card={{
+          title: (row) => <Ltr>{row.name}</Ltr>,
+          meta: (row) => <><Bytes value={row.size_bytes} /> · <RelativeTime value={row.expires_at} /></>
+        }}
+        actions={canWrite ? [
+          { key: "restore", label: pick(language, COPY.restore), icon: RestoreFromTrashRoundedIcon, onClick: (row) => void restore(row) },
+          { key: "delete", label: pick(language, COPY.deleteForever), icon: DeleteOutlineRoundedIcon, onClick: (row) => void deleteForever(row), danger: true, advancedOnly: true }
+        ] : undefined}
+        empty={<EmptyState compact icon={RestoreFromTrashRoundedIcon} title={pick(language, COPY.trashEmpty)} body={pick(language, COPY.trashEmptyBody)} />}
+      />
+      {dialog}
+      {snackbar}
+    </SectionCard>
+  );
+}
+
+// ── Download ahead (prefetch) ────────────────────────────────────────────────
+
+export function PrefetchTab({ permissions }: PackagesTabProps) {
+  const { language, isAdvanced } = useKit();
+  const canRun = hasPermission(permissions, "task:write") && hasPermission(permissions, "cache:write");
+  const jobsNotice = useJobsNotice();
+  const [ecosystem, setEcosystem] = useState<Ecosystem>("pypi");
+  const [manifest, setManifest] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [notice, setNotice] = useState<{ message: string; action: ReactNode } | null>(null);
+
+  const submit = async () => {
+    if (!manifest.trim()) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await mutateJson<{ task_id: string }>("/api/v1/packages/prefetch", { method: "POST", body: { ecosystem, content: manifest } });
+      setManifest("");
+      setNotice(jobsNotice(pick(language, COPY.prefetchStarted)));
+    } catch (caught) {
+      if (!(caught instanceof ApiError && caught.status === 401)) setError(caught);
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
+    <SectionCard title={pick(language, COPY.prefetchTitle)} hint={pick(language, COPY.prefetchHint)}>
+      <Stack spacing={2}>
+        <Box>
+          <Typography variant="body2" sx={{ mb: 1, fontWeight: 650 }}>{pick(language, COPY.fileKind)}</Typography>
+          <ToggleButtonGroup exclusive value={ecosystem} onChange={(_event, value: Ecosystem | null) => value && setEcosystem(value)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 2.5, textTransform: "none" } }}>
+            <ToggleButton value="pypi">{pick(language, COPY.pythonFile)} · <Ltr>requirements.txt</Ltr></ToggleButton>
+            <ToggleButton value="npm">{pick(language, COPY.nodeFile)} · <Ltr>package-lock.json</Ltr></ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+        <TextField
+          fullWidth
+          multiline
+          minRows={5}
+          maxRows={14}
+          label={pick(language, COPY.manifest)}
+          helperText={pick(language, ecosystem === "pypi" ? COPY.manifestHelpPy : COPY.manifestHelpNpm)}
+          value={manifest}
+          onChange={(event) => setManifest(event.target.value)}
+          disabled={!canRun}
+          slotProps={{ htmlInput: { dir: "ltr", maxLength: 1_000_000, spellCheck: false } }}
+        />
+        {isAdvanced && <Notice>{pick(language, COPY.prefetchLimits)}</Notice>}
+        {error !== null && <FriendlyError error={error} onClose={() => setError(null)} />}
+        {notice && <Notice tone="success" action={notice.action}>{notice.message}</Notice>}
+        {!canRun && <NoAccess needs={["task:write", "cache:write"]} />}
+        <Box>
+          <Button
+            variant="contained"
+            size="large"
+            startIcon={busy ? <CircularProgress size={18} color="inherit" /> : <CloudDownloadRoundedIcon />}
+            disabled={!canRun || busy || !manifest.trim()}
+            onClick={() => void submit()}
+            sx={{ minHeight: 48 }}
+          >
+            {busy ? pick(language, COPY.enqueuing) : pick(language, COPY.enqueue)}
+          </Button>
+        </Box>
+      </Stack>
+    </SectionCard>
+  );
+}
+
+/** Legacy entry point (old `#packages` page); the shell now mounts PackagesPage. */
+export function PackagesPanel({ permissions }: { language?: Language; permissions: string[]; onUnauthorized?: () => void }) {
+  return (
     <Stack spacing={3}>
-      <Box><Typography variant="h4" component="h1">{copy.title}</Typography><Typography color="text.secondary" sx={{ mt: 0.8 }}>{copy.hint}</Typography></Box>
-      {error && <Alert severity="error">{copy.error}</Alert>}
-      {!canWrite && <Alert severity="info">{copy.readOnly}</Alert>}
-      {!canRunTasks && <Alert severity="info">{copy.taskOnly}</Alert>}
-      {taskNotice && <Alert severity="success" onClose={() => setTaskNotice(null)}><Typography sx={{ overflowWrap: "anywhere" }}>{taskNotice}</Typography></Alert>}
-      {preview && <Alert severity={preview.blocked_by_pin ? "warning" : "info"}><Typography fontWeight={750}>{copy.purgeTitle}</Typography><Typography variant="body2" sx={{ mt: 0.5 }}>{preview.artifact_count} {copy.artifacts} · {bytes(preview.size_bytes)}</Typography>{preview.blocked_by_pin ? <Typography variant="body2">{copy.blocked}</Typography> : <Stack spacing={1.2} sx={{ mt: 1.2 }}><Typography component="code" dir="ltr" variant="body2" sx={{ overflowWrap: "anywhere" }}>{preview.confirmation}</Typography><TextField size="small" label={copy.confirmation} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} error={confirmation.length > 0 && confirmation !== preview.confirmation} helperText={confirmation.length > 0 && confirmation !== preview.confirmation ? copy.confirmationMismatch : " "} inputProps={{ dir: "ltr" }} /><Button color="error" variant="contained" disabled={!canRunTasks || operationPending || confirmation !== preview.confirmation} onClick={() => { const item = items.find((entry) => entry.ecosystem === preview.ecosystem && entry.name === preview.name); if (item) void queuePackageTask(item, "purge"); }}>{copy.executePurge}</Button></Stack>}</Alert>}
-
-      <Card><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Grid container spacing={2}><Grid size={{ xs: 12, md: 8 }}><TextField fullWidth value={query} onChange={(event) => setQuery(event.target.value)} label={copy.search} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment>, endAdornment: loading ? <CircularProgress size={18} /> : null } }} /></Grid><Grid size={{ xs: 12, md: 4 }}><TextField select fullWidth value={ecosystem} onChange={(event) => setEcosystem(event.target.value)} label={copy.all}><MenuItem value="">{copy.all}</MenuItem><MenuItem value="npm">npm</MenuItem><MenuItem value="pypi">PyPI</MenuItem></TextField></Grid></Grid>{canWrite && <TextField fullWidth size="small" label={copy.reason} value={reason} onChange={(event) => setReason(event.target.value)} sx={{ mt: 2 }} />}</CardContent></Card>
-
-      <Card><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Stack direction="row" spacing={1} alignItems="center"><CloudDownloadRoundedIcon color="primary" /><Box><Typography fontWeight={760}>{copy.prefetchTitle}</Typography><Typography variant="body2" color="text.secondary">{copy.prefetchHint}</Typography></Box></Stack><Grid container spacing={2} sx={{ mt: 0.5 }}><Grid size={{ xs: 12, md: 3 }}><TextField select fullWidth label={copy.all} value={prefetchEcosystem} onChange={(event) => setPrefetchEcosystem(event.target.value as "npm" | "pypi")}><MenuItem value="pypi">requirements.txt</MenuItem><MenuItem value="npm">package-lock.json</MenuItem></TextField></Grid><Grid size={{ xs: 12, md: 9 }}><TextField fullWidth multiline minRows={3} maxRows={9} label={copy.manifest} value={manifest} onChange={(event) => setManifest(event.target.value)} inputProps={{ dir: "ltr" }} /></Grid></Grid><Stack direction="row" justifyContent="flex-end" sx={{ mt: 1.5 }}><Button variant="contained" startIcon={<CloudDownloadRoundedIcon />} disabled={!canRunTasks || operationPending || !manifest.trim()} onClick={() => void queuePrefetch()}>{copy.enqueue}</Button></Stack></CardContent></Card>
-
-      <Grid container spacing={2}>{items.length === 0 && !loading && <Grid size={12}><Alert severity="info">{copy.empty}</Alert></Grid>}{items.map((item) => <Grid key={`${item.ecosystem}:${item.name}`} size={{ xs: 12, lg: 6 }}><Card sx={{ height: "100%" }}><CardContent sx={{ p: 3, "&:last-child": { pb: 3 } }}><Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}><Box sx={{ minWidth: 0 }}><Stack direction="row" spacing={1} alignItems="center"><Tooltip title={item.name}><Typography variant="h6" noWrap sx={{ maxWidth: 300 }}>{item.name}</Typography></Tooltip><Chip size="small" label={item.ecosystem} /></Stack><Tooltip title={item.versions.join(", ")}><Typography variant="body2" color="text.secondary" noWrap dir="ltr" sx={{ mt: 0.8 }}>{copy.versions}: {item.versions.slice(0, 4).join(", ") || "—"}</Typography></Tooltip></Box><Stack direction="row" spacing={0.7}>{item.pinned && <Chip size="small" color="primary" label={copy.pin} />}{item.quarantined && <Chip size="small" color="error" label={copy.quarantine} />}</Stack></Stack><Divider sx={{ my: 2 }} /><Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}><Typography variant="body2">{item.artifact_count} {copy.artifacts} · {bytes(item.size_bytes)}</Typography>{canWrite && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap><Button size="small" startIcon={<PushPinRoundedIcon />} onClick={() => void policy(item, { pinned: !item.pinned })}>{item.pinned ? copy.unpin : copy.pin}</Button><Button size="small" color={item.quarantined ? "success" : "error"} startIcon={<GppBadRoundedIcon />} onClick={() => void policy(item, { quarantined: !item.quarantined, quarantine_reason: item.quarantined ? null : reason })}>{item.quarantined ? copy.release : copy.quarantine}</Button><Button size="small" disabled={!canRunTasks || operationPending || item.pinned} startIcon={<SyncRoundedIcon />} onClick={() => void queuePackageTask(item, "revalidate")}>{copy.revalidate}</Button><Button size="small" color="warning" disabled={!canRunTasks || operationPending} startIcon={<DeleteSweepRoundedIcon />} onClick={() => void purgePreview(item)}>{copy.preview}</Button></Stack>}</Stack></CardContent></Card></Grid>)}</Grid>
+      <SearchTab permissions={permissions} />
+      <PrefetchTab permissions={permissions} />
     </Stack>
   );
 }
+

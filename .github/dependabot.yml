@@ -1,0 +1,59 @@
+# Dependency update PRs only; nothing is auto-merged. Every update must pass CI
+# and human review like any other change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: pip
+    directory: /apps/control-plane
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+
+  # Runtime pins shared by the image and CI (deploy/appliance/requirements.txt).
+  - package-ecosystem: pip
+    directory: /deploy/appliance
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: npm
+    directory: /apps/admin-ui
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: npm
+    directory: /deploy/verdaccio
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: npm
+    directory: /deploy/pglite
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+
+  # Base image digests. scripts/validate_release.py fails if the node/python
+  # digests used by workflow `docker run` steps drift from the Dockerfile's, so
+  # update those in the same PR.
+  - package-ecosystem: docker
+    directory: /deploy/appliance
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps

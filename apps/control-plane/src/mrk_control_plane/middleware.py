@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from typing import Any
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -55,5 +53,3 @@ class RequestSecurityMiddleware:
         finally:
             correlation_id_context.reset(token)
 
-
-ErrorHandler = Callable[[Any, Exception], Awaitable[Any]]

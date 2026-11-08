@@ -4,10 +4,17 @@ import ipaddress
 import json
 import os
 import secrets
+import socket
 import threading
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from .netresolve import upstream_address_allowed
+from .outbound import validate_reference
+
+# LAN-style names; allowed only with the allow_private_upstreams setting.
+_LOCAL_SUFFIXES = (".local", ".internal", ".lan", ".home.arpa", ".intranet")
 
 
 class UpstreamStore:
@@ -22,17 +29,42 @@ class UpstreamStore:
         self._lock = threading.RLock()
 
     @staticmethod
-    def validate_url(value: str) -> str:
+    def validate_url(value: str, allow_private: bool = False) -> str:
+        """Check an upstream URL.
+
+        ``allow_private`` is the operator's ``allow_private_upstreams`` setting:
+        it admits RFC1918/ULA/CGNAT addresses and LAN-style names (nexus.lan,
+        single-label hosts). Loopback, link-local/metadata and ``localhost``
+        stay forbidden either way.
+        """
         parsed = urlsplit(value.strip())
         if parsed.scheme != "https" or not parsed.hostname:
             raise ValueError("upstream URL must be HTTPS")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("credentials, query strings and fragments are forbidden")
+        hostname = parsed.hostname.lower().rstrip(".")
         try:
-            address = ipaddress.ip_address(parsed.hostname)
+            address = ipaddress.ip_address(hostname)
         except ValueError:
             address = None
-        if address is not None and not address.is_global:
+        if address is None and hostname[:1].isdigit():
+            # Shorthand IPv4 forms ("127.1", "2130706433", "0x7f.1") are not IP
+            # literals to ipaddress, but every resolver (and Node) maps them to IPs.
+            try:
+                address = ipaddress.IPv4Address(socket.inet_aton(hostname))
+            except OSError:
+                address = None
+        if address is not None and not upstream_address_allowed(str(address), allow_private):
+            raise ValueError("private and local upstream addresses are forbidden")
+        if address is None and (hostname == "localhost" or hostname.endswith(".localhost")):
+            raise ValueError("private and local upstream addresses are forbidden")
+        if (
+            address is None
+            and not allow_private
+            and ("." not in hostname or hostname.endswith(_LOCAL_SUFFIXES))
+        ):
+            # Verdaccio fetches npm uplinks itself, without the router's
+            # resolved-address check, so obviously-internal names stop here.
             raise ValueError("private and local upstream addresses are forbidden")
         return value.strip().rstrip("/") + "/"
 
@@ -101,7 +133,16 @@ class UpstreamStore:
                     "updated_at": now,
                 },
             ]
+            # Seed each ecosystem only once. Matching by name alone brought back
+            # (enabled) any default the operator had deleted or renamed.
+            seeded_marker = self.root / "upstream-defaults-seeded.json"
+            try:
+                seeded = set(json.loads(seeded_marker.read_text(encoding="utf-8")))
+            except (OSError, ValueError, TypeError):
+                seeded = set()
             for default in defaults:
+                if default["ecosystem"] in seeded:
+                    continue
                 if any(
                     item.get("ecosystem") == default["ecosystem"]
                     and item.get("name") == default["name"]
@@ -112,6 +153,12 @@ class UpstreamStore:
                 changed = True
             if changed or not self.path.exists():
                 self._write(items)
+            all_ecosystems = {str(item["ecosystem"]) for item in defaults}
+            if not all_ecosystems <= seeded:
+                temporary = seeded_marker.with_name(f".{seeded_marker.name}.tmp")
+                temporary.write_text(json.dumps(sorted(all_ecosystems)), encoding="utf-8")
+                temporary.chmod(0o600)
+                os.replace(temporary, seeded_marker)
 
     def _read(self) -> list[dict[str, object]]:
         if not self.path.exists():
@@ -148,6 +195,8 @@ class UpstreamStore:
     def public(item: dict[str, object]) -> dict[str, object]:
         result = dict(item)
         result["credential_configured"] = bool(result.pop("credential_ref", None))
+        # None = direct, "default" = the default proxy, otherwise a proxy profile id.
+        result["proxy_id"] = result.get("proxy_id") or None
         return result
 
     def get(self, upstream_id: str) -> dict[str, object]:
@@ -166,7 +215,10 @@ class UpstreamStore:
         url: str,
         priority: int,
         timeout_seconds: int,
+        allow_private: bool = False,
+        proxy_id: str | None = None,
     ) -> dict[str, object]:
+        """``proxy_id`` must already be checked against the proxy profiles."""
         normalized_name = name.strip()
         if not 2 <= len(normalized_name) <= 80:
             raise ValueError("upstream name must be between 2 and 80 characters")
@@ -179,12 +231,13 @@ class UpstreamStore:
             "id": secrets.token_hex(8),
             "name": normalized_name,
             "ecosystem": ecosystem,
-            "url": self.validate_url(url),
+            "url": self.validate_url(url, allow_private),
             "priority": priority,
             "timeout_seconds": timeout_seconds,
             "enabled": True,
             "blocked_until": None,
             "blocked_reason": None,
+            "proxy_id": validate_reference(proxy_id),
             "created_at": now,
             "updated_at": now,
         }
@@ -200,7 +253,9 @@ class UpstreamStore:
             self._write(items)
         return item
 
-    def update(self, upstream_id: str, changes: dict[str, object]) -> dict[str, object]:
+    def update(
+        self, upstream_id: str, changes: dict[str, object], allow_private: bool = False
+    ) -> dict[str, object]:
         allowed = {
             "name",
             "url",
@@ -212,6 +267,7 @@ class UpstreamStore:
             "credential_ref",
             "credential_type",
             "credential_updated_at",
+            "proxy_id",
         }
         if set(changes) - allowed:
             raise ValueError("unsupported upstream field")
@@ -220,8 +276,35 @@ class UpstreamStore:
             target = next((item for item in items if item["id"] == upstream_id), None)
             if target is None:
                 raise KeyError(upstream_id)
+            if "name" in changes:
+                normalized_name = str(changes["name"]).strip()
+                if not 2 <= len(normalized_name) <= 80:
+                    raise ValueError("upstream name must be between 2 and 80 characters")
+                if any(
+                    item["id"] != upstream_id
+                    and item["ecosystem"] == target["ecosystem"]
+                    and str(item["name"]).lower() == normalized_name.lower()
+                    for item in items
+                ):
+                    # create() already refused duplicates; a rename must too.
+                    raise ValueError("upstream name already exists in this ecosystem")
+                changes["name"] = normalized_name
             if "url" in changes:
-                changes["url"] = self.validate_url(str(changes["url"]))
+                changes["url"] = self.validate_url(str(changes["url"]), allow_private)
+                old_host = (urlsplit(str(target["url"])).hostname or "").lower()
+                new_host = (urlsplit(str(changes["url"])).hostname or "").lower()
+                if (
+                    old_host != new_host
+                    and target.get("credential_ref")
+                    and "credential_ref" not in changes
+                ):
+                    # Otherwise an admin who cannot read the secret could point the
+                    # URL at their own host and receive it via a connection test.
+                    raise ValueError(
+                        "remove the stored credential before moving an upstream to another host"
+                    )
+            if "proxy_id" in changes:
+                changes["proxy_id"] = validate_reference(changes["proxy_id"])
             if "priority" in changes and not 1 <= int(changes["priority"]) <= 10000:
                 raise ValueError("priority is outside the supported range")
             if "timeout_seconds" in changes and not 1 <= int(changes["timeout_seconds"]) <= 300:
@@ -236,6 +319,26 @@ class UpstreamStore:
                 if not other_enabled and not self.offline(str(target["ecosystem"])):
                     raise ValueError(
                         "the last enabled upstream can only be disabled in offline mode"
+                    )
+            now = int(time.time())
+            blocking = changes.get("blocked_until") is not None and int(
+                str(changes["blocked_until"])
+            ) > now
+            if blocking and target.get("enabled") is True:
+                # Blocking is the same as disabling for traffic, so it gets the same guard.
+                other_usable = any(
+                    item["id"] != upstream_id
+                    and item["ecosystem"] == target["ecosystem"]
+                    and item.get("enabled") is True
+                    and (
+                        item.get("blocked_until") is None
+                        or int(item["blocked_until"]) <= now
+                    )
+                    for item in items
+                )
+                if not other_usable and not self.offline(str(target["ecosystem"])):
+                    raise ValueError(
+                        "the last usable upstream can only be blocked in offline mode"
                     )
             target.update(changes)
             target["updated_at"] = int(time.time())

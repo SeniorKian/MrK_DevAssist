@@ -92,10 +92,44 @@ def main(arguments: list[str] | None = None) -> None:
         os.setgid(APP_GID)
         os.setuid(APP_UID)
     os.umask(0o027)
-    os.execv(  # noqa: S606 - direct exec preserves PID 1 and never invokes a shell
-        "/usr/local/bin/supervisord",
-        ("supervisord", "-c", "/opt/mrk/supervisord.conf"),
+    sys.exit(_run_supervisor())
+
+
+FATAL_MARKER = Path("/tmp/mrk-fatal")  # noqa: S108 - private tmpfs, written by the listener
+
+
+def _run_supervisor() -> int:
+    """Run supervisord as a child and turn a FATAL shutdown into a failing exit code.
+
+    supervisord exits 0 when the FATAL listener stops it, so `on-failure` restart
+    policies (Swarm, Kubernetes, systemd) would never restart the container.
+    Signals are forwarded unchanged so graceful shutdown keeps working.
+    """
+    import signal
+    import subprocess
+
+    FATAL_MARKER.unlink(missing_ok=True)
+    child = subprocess.Popen(  # noqa: S603 - fixed binary and arguments, no shell
+        ["/usr/local/bin/supervisord", "-c", "/opt/mrk/supervisord.conf"]
     )
+
+    def forward(signum: int, _frame: object) -> None:
+        if child.poll() is None:
+            child.send_signal(signum)
+
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        signal.signal(signum, forward)
+    while True:
+        try:
+            code = child.wait()
+            break
+        except InterruptedError:  # pragma: no cover - PEP 475 normally retries
+            continue
+    if FATAL_MARKER.exists():
+        reason = FATAL_MARKER.read_text(encoding="utf-8", errors="replace").strip()
+        print(f"mrk: appliance stopped because a service went FATAL: {reason}", file=sys.stderr)
+        return 1
+    return code
 
 
 if __name__ == "__main__":

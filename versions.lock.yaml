@@ -1,5 +1,5 @@
 schema_version: 1
-reviewed_at: 2026-11-07
+reviewed_at: 2026-11-08
 policy:
   allow_latest_tags: false
   allow_prereleases: false
@@ -8,12 +8,12 @@ policy:
 components:
   python:
     version: "3.13.18"
-    image: "python:3.13-slim-bookworm"
-    digest: "sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72"
+    image: "python:3.13-slim-trixie"
+    digest: "sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90"
   node:
     version: "24.18.0"
-    image: "node:24.18.0-bookworm-slim"
-    digest: "sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+    image: "node:24.18.0-trixie-slim"
+    digest: "sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573"
   fastapi:
     version: "0.162.0"
     source: "https://github.com/fastapi/fastapi"

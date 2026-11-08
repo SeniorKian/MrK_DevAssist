@@ -8,10 +8,30 @@ import urllib.error
 import urllib.request
 
 
+def probe_host() -> str:
+    """Pick a Host header that TrustedHostMiddleware accepts.
+
+    Production usually trusts only the public domain, so a fixed "localhost"
+    would be rejected with 400 and the container would always look unhealthy.
+    """
+    entries = [
+        item.strip()
+        for item in os.getenv("MRK_TRUSTED_HOSTS", "localhost").split(",")
+        if item.strip()
+    ]
+    for entry in entries:
+        if "*" not in entry:
+            return entry
+    for entry in entries:
+        if entry.startswith("*.") and len(entry) > 2:
+            return f"healthcheck.{entry[2:]}"
+    return "localhost"
+
+
 def _check_once(port: int) -> bool:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/health/ready",
-        headers={"Host": "localhost", "User-Agent": "mrk-container-healthcheck/1"},
+        headers={"Host": probe_host(), "User-Agent": "mrk-container-healthcheck/1"},
     )
     try:
         # The URL is fixed to loopback and the only variable is a range-checked integer port.

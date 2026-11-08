@@ -11,7 +11,11 @@ def test_upstream_crud_block_offline_and_health_timeline(tmp_path: Path, monkeyp
     app = create_app(Settings.for_test(tmp_path))
 
     async def fake_probe(
-        url: str, timeout_seconds: int, authorization: str | None
+        url: str,
+        timeout_seconds: int,
+        authorization: str | None,
+        dns: object = None,
+        allow_private: bool = False,
     ) -> dict[str, object]:
         assert url == "https://packages.example.com/simple/"
         assert timeout_seconds == 10

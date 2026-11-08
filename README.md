@@ -79,6 +79,18 @@ Core موتورهای Verdaccio و devpi مستقیماً تغییر داده ن
 20. [معماری Modular Appliance و مسیریابی دامنه](docs/20-modular-appliance-and-domain-routing.md)
 21. [طراحی سرویس Uptime Monitoring](docs/21-uptime-monitoring-module.md)
 22. [طراحی سرویس DNS Management](docs/22-dns-management-module.md)
+23. [ADR موتورهای بومی و بودجه منابع](docs/23-adr-native-modules-and-resource-budget.md)
+24. [Spec موتور بومی Uptime](docs/24-native-uptime-engine-spec.md)
+25. [Spec موتور بومی DNS](docs/25-native-dns-engine-spec.md)
+26. [Spec ماژول Docker/OCI Registry](docs/26-oci-registry-module-spec.md)
+27. [اصل تنظیم‌پذیری و فهرست تنظیمات](docs/27-configurability-and-settings.md)
+28. [ماژول‌های کنترل سرور در کنار Dokploy](docs/28-server-control-modules.md)
+29. [قراردادهای Gate 17](docs/29-gate17-contracts.md)
+30. [مشخصات سرویس S3 بومی](docs/30-s3-object-storage-spec.md)
+31. [قراردادهای Gate 18](docs/31-gate18-contracts.md)
+32. [قراردادهای Gate 19](docs/32-gate19-contracts.md)
+33. [طرح بازطراحی پنل](docs/33-ux-redesign-plan.md)
+34. [APIهای پنل جدید](docs/34-ui-backend-contracts.md)
 
 ## Definition of Success
 

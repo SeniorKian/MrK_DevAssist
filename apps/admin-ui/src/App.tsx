@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, CircularProgress, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
-import { Dashboard } from "./Dashboard";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Alert, Box, Button, CircularProgress, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
+import { CacheProvider } from "@emotion/react";
+import createCache from "@emotion/cache";
+import { prefixer } from "stylis";
+import rtlPlugin from "stylis-plugin-rtl";
+import { apiMutate, refreshCsrf, refreshSession, setCsrfToken, setUnauthorizedHandler } from "./api";
+import { ConfirmProvider } from "./ConfirmDialog";
+import { AppShell } from "./AppShell";
+import { UiModeProvider } from "./uiMode";
 import { Login } from "./Login";
 import { Setup, type SetupValues } from "./Setup";
-import type { Language } from "./i18n";
+import { DEFAULT_PASSWORD_POLICY, readAuthFailure, readPasswordPolicy, type AuthFailure, type PasswordPolicy } from "./AuthShell";
+import ChangePasswordPage from "./ChangePasswordPage";
+import InvitePage, { inviteTokenFromHash } from "./InvitePage";
+import { resetHome } from "./homeSummary";
+import { translate, type Language } from "./i18n";
 
 type ColorMode = "dark" | "light";
 export type AuthUser = {
@@ -13,40 +24,82 @@ export type AuthUser = {
   permissions: string[];
   display_name?: string | null;
   email?: string | null;
+  /** Invited accounts must choose their own password before anything else works. */
+  must_change_password?: boolean;
 };
 
-function storedValue<T extends string>(key: string, fallback: T): T {
-  const value = window.localStorage.getItem(key);
-  return (value as T | null) ?? fallback;
+function storedValue<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value !== null && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
+function storeValue(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // storage may be unavailable (private mode, blocked site data)
+  }
+}
+
+const rtlCache = createCache({ key: "muirtl", stylisPlugins: [prefixer, rtlPlugin] });
+const ltrCache = createCache({ key: "muiltr", stylisPlugins: [prefixer] });
+
 export function App() {
-  const [language, setLanguage] = useState<Language>(() => storedValue("mrk-language", "fa"));
-  const [mode, setMode] = useState<ColorMode>(() => storedValue("mrk-theme", "dark"));
+  const [language, setLanguage] = useState<Language>(() => storedValue<Language>("mrk-language", ["fa", "en"], "fa"));
+  const [mode, setMode] = useState<ColorMode>(() => storedValue<ColorMode>("mrk-theme", ["dark", "light"], "dark"));
   const [user, setUser] = useState<AuthUser | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
+  const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy>(DEFAULT_PASSWORD_POLICY);
   const [registrationEnabled, setRegistrationEnabled] = useState(false);
   const [authView, setAuthView] = useState<"login" | "register">("login");
-  const [csrf, setCsrf] = useState("");
   const [authLoading, setAuthLoading] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [connectionError, setConnectionError] = useState(false);
+  const [inviteToken, setInviteToken] = useState<string | null>(() => inviteTokenFromHash(window.location.hash));
+
+  const setCsrf = useCallback((token: string) => setCsrfToken(token), []);
+
+  const handleUnauthorized = useCallback(() => {
+    setSessionExpired(true);
+    setUser(null);
+    setCsrfToken("");
+    resetHome();
+  }, []);
 
   useEffect(() => {
-    window.localStorage.setItem("mrk-language", language);
+    setUnauthorizedHandler(handleUnauthorized);
+  }, [handleUnauthorized]);
+
+  useEffect(() => {
+    storeValue("mrk-language", language);
     document.documentElement.lang = language;
     document.documentElement.dir = language === "fa" ? "rtl" : "ltr";
   }, [language]);
 
-  useEffect(() => window.localStorage.setItem("mrk-theme", mode), [mode]);
+  useEffect(() => storeValue("mrk-theme", mode), [mode]);
+
+  // The public invite link (#/invite/<token>) can be opened at any time, signed in or not.
+  useEffect(() => {
+    const onHash = () => setInviteToken(inviteTokenFromHash(window.location.hash));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   const loadSession = useCallback(async () => {
+    setAuthLoading(true);
+    setConnectionError(false);
     try {
       const setupResponse = await fetch("/api/v1/auth/setup-status", {
         headers: { Accept: "application/json" },
         cache: "no-store"
       });
       if (setupResponse.ok) {
-        const setup = (await setupResponse.json()) as { required: boolean };
+        const setup = (await setupResponse.json()) as { required: boolean; password_policy?: unknown };
+        setPasswordPolicy(readPasswordPolicy(setup));
         setSetupRequired(setup.required);
         if (setup.required) return;
       }
@@ -66,82 +119,125 @@ export function App() {
       const payload = (await response.json()) as { user: AuthUser; csrf_token: string };
       setUser(payload.user);
       setCsrf(payload.csrf_token);
+    } catch {
+      setConnectionError(true);
     } finally {
       setAuthLoading(false);
     }
-  }, []);
+  }, [setCsrf]);
 
   useEffect(() => void loadSession(), [loadSession]);
 
-  const login = async (username: string, password: string) => {
+  // Sessions have a fixed TTL; rotate the session while the operator is active so
+  // long working sessions are not cut off (and unsaved forms lost) mid-task.
+  const lastActivity = useRef(Date.now());
+  const lastRefresh = useRef(Date.now());
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    if (userId === null) return;
+    lastRefresh.current = Date.now();
+    const markActive = () => {
+      lastActivity.current = Date.now();
+    };
+    const maybeRefresh = () => {
+      const now = Date.now();
+      const active = now - lastActivity.current < 30 * 60_000;
+      if (document.visibilityState !== "visible" || !active || now - lastRefresh.current < 25 * 60_000) return;
+      lastRefresh.current = now;
+      void refreshSession();
+    };
+    const events = ["pointerdown", "keydown"] as const;
+    events.forEach((name) => window.addEventListener(name, markActive, { passive: true }));
+    document.addEventListener("visibilitychange", maybeRefresh);
+    const timer = window.setInterval(maybeRefresh, 60_000);
+    return () => {
+      events.forEach((name) => window.removeEventListener(name, markActive));
+      document.removeEventListener("visibilitychange", maybeRefresh);
+      window.clearInterval(timer);
+    };
+  }, [userId]);
+
+  const adoptSession = useCallback(
+    (payload: { user: AuthUser; csrf_token: string; must_change_password?: boolean }) => {
+      resetHome();
+      setUser({ ...payload.user, must_change_password: payload.user.must_change_password ?? payload.must_change_password });
+      setCsrf(payload.csrf_token);
+      setSessionExpired(false);
+    },
+    [setCsrf]
+  );
+
+  const login = async (username: string, password: string): Promise<true | AuthFailure> => {
     const response = await fetch("/api/v1/auth/login", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ username, password })
     });
-    if (!response.ok) return false;
-    const payload = (await response.json()) as { user: AuthUser; csrf_token: string };
-    setUser(payload.user);
-    setCsrf(payload.csrf_token);
-    setSessionExpired(false);
+    if (!response.ok) return readAuthFailure(response);
+    adoptSession((await response.json()) as { user: AuthUser; csrf_token: string; must_change_password?: boolean });
+    return true;
+  };
+
+  const createAccount = async (path: string, values: SetupValues): Promise<true | AuthFailure> => {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        display_name: values.displayName,
+        email: values.email,
+        password: values.password,
+        password_confirmation: values.passwordConfirmation
+      })
+    });
+    if (!response.ok) return readAuthFailure(response);
+    adoptSession((await response.json()) as { user: AuthUser; csrf_token: string });
     return true;
   };
 
   const setup = async (values: SetupValues) => {
-    const response = await fetch("/api/v1/auth/setup", {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({
-        display_name: values.displayName,
-        email: values.email,
-        password: values.password,
-        password_confirmation: values.passwordConfirmation
-      })
-    });
-    if (!response.ok) return false;
-    const payload = (await response.json()) as { user: AuthUser; csrf_token: string };
-    setUser(payload.user);
-    setCsrf(payload.csrf_token);
-    setSetupRequired(false);
-    setSessionExpired(false);
-    return true;
+    const result = await createAccount("/api/v1/auth/setup", values);
+    if (result === true) setSetupRequired(false);
+    return result;
   };
 
   const register = async (values: SetupValues) => {
-    const response = await fetch("/api/v1/auth/register", {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({
-        display_name: values.displayName,
-        email: values.email,
-        password: values.password,
-        password_confirmation: values.passwordConfirmation
-      })
-    });
-    if (!response.ok) return false;
-    const payload = (await response.json()) as { user: AuthUser; csrf_token: string };
-    setUser(payload.user);
-    setCsrf(payload.csrf_token);
-    setAuthView("login");
-    setSessionExpired(false);
-    return true;
+    const result = await createAccount("/api/v1/auth/register", values);
+    if (result === true) setAuthView("login");
+    return result;
   };
 
-  const logout = async () => {
-    await fetch("/api/v1/auth/logout", {
-      method: "POST",
-      headers: { Accept: "application/json", "X-CSRF-Token": csrf }
-    });
-    setUser(null);
-    setCsrf("");
-    setAuthView("login");
-  };
+  const leaveInvite = useCallback(() => {
+    setInviteToken(null);
+    window.history.replaceState(null, "", "#/");
+  }, []);
 
-  const handleUnauthorized = () => {
-    setSessionExpired(true);
-    setUser(null);
-    setCsrf("");
-  };
+  const logout = useCallback(async () => {
+    try {
+      const options = { silentUnauthorized: true, retryOnForbidden: false } as const;
+      const response = await apiMutate("/api/v1/auth/logout", options);
+      // A stale CSRF token (or transient failure) gets one retry after refreshing the token.
+      if (!response.ok && response.status !== 401 && (await refreshCsrf())) {
+        await apiMutate("/api/v1/auth/logout", options);
+      }
+    } catch {
+      // network failure: still clear local state below
+    } finally {
+      setUser(null);
+      setCsrfToken("");
+      setSessionExpired(false);
+      setAuthView("login");
+      resetHome();
+    }
+  }, []);
+
+  /** Merge a fresh user payload (e.g. after a password change). */
+  const onUserChange = useCallback((next: AuthUser | null) => {
+    setUser((current) => (current ? { ...current, ...(next ?? {}), must_change_password: next?.must_change_password ?? false } : current));
+  }, []);
+
+  const toggleLanguage = useCallback(() => setLanguage((value) => (value === "fa" ? "en" : "fa")), []);
+  const toggleMode = useCallback(() => setMode((value) => (value === "dark" ? "light" : "dark")), []);
+  const onLogout = useCallback(() => void logout(), [logout]);
 
   const theme = useMemo(() => {
     const dark = mode === "dark";
@@ -212,48 +308,100 @@ export function App() {
     });
   }, [language, mode]);
 
+  const centered = (children: ReactNode) => (
+    <Box dir={language === "fa" ? "rtl" : "ltr"} sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 2 }}>
+      {children}
+    </Box>
+  );
+
+  let content: ReactNode;
+  if (inviteToken) {
+    content = (
+      <InvitePage
+        language={language}
+        token={inviteToken}
+        onLanguageChange={toggleLanguage}
+        onAccepted={(acceptedUser, csrf) => {
+          adoptSession({ user: { ...acceptedUser, must_change_password: false }, csrf_token: csrf });
+          setSetupRequired(false);
+          leaveInvite();
+        }}
+        onGoToSignIn={() => {
+          leaveInvite();
+          void loadSession();
+        }}
+      />
+    );
+  } else if (authLoading) {
+    content = centered(<CircularProgress size={30} aria-label={translate(language, "refreshing")} />);
+  } else if (connectionError && !user) {
+    content = centered(
+      <Alert
+        severity="error"
+        action={<Button color="inherit" size="small" onClick={() => void loadSession()}>{translate(language, "retry")}</Button>}
+        sx={{ maxWidth: 520, width: "100%" }}
+      >
+        {translate(language, "connectionError")}
+      </Alert>
+    );
+  } else if (setupRequired) {
+    content = <Setup language={language} onSetup={setup} onLanguageChange={toggleLanguage} passwordPolicy={passwordPolicy} />;
+  } else if (!user && authView === "register" && registrationEnabled) {
+    content = (
+      <Setup
+        language={language}
+        variant="public"
+        onSetup={register}
+        onBack={() => setAuthView("login")}
+        onLanguageChange={toggleLanguage}
+        passwordPolicy={passwordPolicy}
+      />
+    );
+  } else if (user?.must_change_password) {
+    content = (
+      <ChangePasswordPage
+        language={language}
+        onLanguageChange={toggleLanguage}
+        onChanged={(next) => onUserChange(next)}
+        onSignOut={onLogout}
+      />
+    );
+  } else if (user) {
+    content = (
+      <UiModeProvider userId={user.id} language={language}>
+        <ConfirmProvider>
+          <AppShell
+            language={language}
+            colorMode={mode}
+            user={user}
+            onUnauthorized={handleUnauthorized}
+            onLogout={onLogout}
+            onLanguageChange={toggleLanguage}
+            onColorModeChange={toggleMode}
+            onUserChange={onUserChange}
+          />
+        </ConfirmProvider>
+      </UiModeProvider>
+    );
+  } else {
+    content = (
+      <Login
+        language={language}
+        expired={sessionExpired}
+        onLogin={login}
+        registrationEnabled={registrationEnabled}
+        onRegister={() => setAuthView("register")}
+        onLanguageChange={toggleLanguage}
+      />
+    );
+  }
+
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      {authLoading ? (
-        <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-          <CircularProgress size={30} />
-        </Box>
-      ) : setupRequired ? (
-        <Setup
-          language={language}
-          onSetup={setup}
-          onLanguageChange={() => setLanguage((value) => (value === "fa" ? "en" : "fa"))}
-        />
-      ) : authView === "register" && registrationEnabled ? (
-        <Setup
-          language={language}
-          variant="public"
-          onSetup={register}
-          onBack={() => setAuthView("login")}
-          onLanguageChange={() => setLanguage((value) => (value === "fa" ? "en" : "fa"))}
-        />
-      ) : user ? (
-        <Dashboard
-          language={language}
-          mode={mode}
-          user={user}
-          csrf={csrf}
-          onUnauthorized={handleUnauthorized}
-          onLogout={() => void logout()}
-          onLanguageChange={() => setLanguage((value) => (value === "fa" ? "en" : "fa"))}
-          onModeChange={() => setMode((value) => (value === "dark" ? "light" : "dark"))}
-        />
-      ) : (
-        <Login
-          language={language}
-          expired={sessionExpired}
-          onLogin={login}
-          registrationEnabled={registrationEnabled}
-          onRegister={() => setAuthView("register")}
-          onLanguageChange={() => setLanguage((value) => (value === "fa" ? "en" : "fa"))}
-        />
-      )}
-    </ThemeProvider>
+    <CacheProvider value={language === "fa" ? rtlCache : ltrCache}>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        {content}
+      </ThemeProvider>
+    </CacheProvider>
   );
 }

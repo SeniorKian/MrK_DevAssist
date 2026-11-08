@@ -7,9 +7,9 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import time
 import zipfile
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Literal
@@ -18,26 +18,53 @@ import uvicorn
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
-from .auth import ROLE_PERMISSIONS, AuthStore, Principal
+from .auth import (
+    AuthStore,
+    FieldError,
+    PermissionEscalationError,
+    Principal,
+    RoleInUseError,
+    password_policy,
+    permission_catalog,
+)
 from .backup import BackupManager
 from .catalog import PackageCatalog
 from .components import check_http_component, fetch_json_component
-from .config import Settings
+from .config import Settings, apply_startup_overrides
 from .database import Database, database_health
 from .logging_config import configure_logging
 from .middleware import RequestSecurityMiddleware, correlation_id_context
-from .process_control import restart_verdaccio_if_managed
+from .module_context import Event, EventBus, ModuleContext
+from .netresolve import NetworkSettingsStore, resolve_host, validate_config
+from .outbound import (
+    ALL_PROXY_TYPES,
+    HTTP_PROXY_TYPES,
+    OutboundError,
+    OutboundProvider,
+    check_reference,
+    outbound_registry,
+    resolve_route,
+)
+from .outbound_api import build_router as build_outbound_router
+from .package_policy import pep503, valid_package_name
+from .process_control import reload_verdaccio_best_effort
 from .secret_store import SecretStore
-from .tasks import TaskManager
+from .tasks import (
+    MAX_CLEANUP_CANDIDATES,
+    TRASH_ID,
+    RetryRejected,
+    TaskManager,
+    cleanup_confirmation,
+)
 from .upstream_health import UpstreamHealthStore
-from .upstream_probe import probe_upstream
+from .upstream_probe import probe_upstream, reject_private_destination
 from .upstream_store import UpstreamStore
 
 LOGGER = logging.getLogger(__name__)
@@ -54,28 +81,80 @@ DATA_DIRECTORIES = (
     "tmp",
 )
 SESSION_COOKIE = "mrk_session"
+CSRF_FAILED = "csrf_failed"
+PASSWORD_CHANGE_REQUIRED = "password_change_required"  # noqa: S105 - an error code
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
+    username: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=1, max_length=256)
 
 
 class SetupOwnerRequest(BaseModel):
     display_name: str = Field(min_length=2, max_length=100)
     email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=14, max_length=256)
-    password_confirmation: str = Field(min_length=14, max_length=256)
+    password: str = Field(min_length=1, max_length=256)
+    password_confirmation: str = Field(min_length=1, max_length=256)
 
 
 class RegistrationPolicyRequest(BaseModel):
     enabled: bool
 
 
+class DnsSettingsRequest(BaseModel):
+    mode: Literal["system", "custom"]
+    servers: list[str] = Field(default_factory=list, max_length=6)
+    timeout_seconds: float = Field(default=2.0, ge=0.2, le=10)
+    prefer_ipv4: bool = True
+
+
+class UpstreamPolicyRequest(BaseModel):
+    allow_private_upstreams: bool
+
+
+class DnsTestRequest(BaseModel):
+    hostname: str = Field(min_length=1, max_length=253, pattern=r"^[A-Za-z0-9.-]+$")
+    mode: Literal["system", "custom"] | None = None
+    servers: list[str] | None = Field(default=None, max_length=6)
+
+
 class CreateUserRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
-    password: str = Field(min_length=14, max_length=256)
-    role: str
+    password: str = Field(min_length=1, max_length=256)
+    role: str = Field(min_length=1, max_length=32)
+    display_name: str | None = Field(default=None, max_length=100)
+    email: str | None = Field(default=None, max_length=254)
+    must_change_password: bool = False
+
+
+class InviteUserRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=100)
+    email: str | None = Field(default=None, max_length=254)
+    role: str = Field(default="viewer", min_length=1, max_length=32)
+    username: str | None = Field(default=None, max_length=64)
+    create_link: bool = True
+
+
+class AcceptInviteRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+    password_confirmation: str | None = Field(default=None, max_length=256)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class CreateRoleRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    permissions: list[str] = Field(max_length=64)
+
+
+class UpdateRoleRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    permissions: list[str] | None = Field(default=None, max_length=64)
 
 
 class UpdateUserRequest(BaseModel):
@@ -95,6 +174,8 @@ class CreateUpstreamRequest(BaseModel):
     url: str = Field(min_length=8, max_length=2048)
     priority: int = Field(ge=1, le=10000)
     timeout_seconds: int = Field(default=30, ge=1, le=300)
+    # None = direct, "default" = default proxy, otherwise a proxy profile id.
+    proxy_id: str | None = Field(default=None, max_length=64)
 
 
 class UpdateUpstreamRequest(BaseModel):
@@ -103,6 +184,17 @@ class UpdateUpstreamRequest(BaseModel):
     priority: int | None = Field(default=None, ge=1, le=10000)
     timeout_seconds: int | None = Field(default=None, ge=1, le=300)
     enabled: bool | None = None
+    # Sent explicitly as null: switch back to a direct connection.
+    proxy_id: str | None = Field(default=None, max_length=64)
+
+
+def upstream_proxy_types(ecosystem: str) -> frozenset[str]:
+    # Verdaccio (npm) supports only HTTP(S) proxies on uplinks.
+    return HTTP_PROXY_TYPES if ecosystem == "npm" else ALL_PROXY_TYPES
+
+
+def upstream_proxy_code(ecosystem: str) -> str:
+    return "proxy_type_unsupported_for_npm" if ecosystem == "npm" else "proxy_type_unsupported"
 
 
 class DeleteUpstreamRequest(BaseModel):
@@ -122,6 +214,8 @@ class TestUpstreamRequest(BaseModel):
     upstream_id: str | None = Field(default=None, min_length=1, max_length=64)
     url: str | None = Field(default=None, min_length=8, max_length=2048)
     timeout_seconds: int = Field(default=10, ge=1, le=30)
+    # For an unsaved URL; a saved upstream (upstream_id) uses its own proxy_id.
+    proxy_id: str | None = Field(default=None, max_length=64)
 
 
 class ReplaceUpstreamCredentialRequest(BaseModel):
@@ -135,6 +229,20 @@ class PackagePolicyRequest(BaseModel):
     pinned: bool | None = None
     quarantined: bool | None = None
     quarantine_reason: str | None = Field(default=None, max_length=256)
+
+
+class CleanupCandidateRequest(BaseModel):
+    ecosystem: Literal["npm", "pypi"]
+    name: str = Field(min_length=1, max_length=214)
+
+
+class LifecycleCleanupRequest(BaseModel):
+    target_bytes: int | None = Field(default=None, ge=1, le=2**62)
+    target_percent: int | None = Field(default=None, ge=20, le=90)
+    candidates: list[CleanupCandidateRequest] | None = Field(
+        default=None, min_length=1, max_length=500
+    )
+    confirmation: str = Field(min_length=1, max_length=64)
 
 
 class PurgePackageRequest(BaseModel):
@@ -154,6 +262,18 @@ class RestorePlanRequest(BackupSecretRequest):
     confirmation: str = Field(min_length=8, max_length=256)
 
 
+class BackupCreateRequest(BackupSecretRequest):
+    profile: Literal["config", "full"] = "config"
+
+
+class TaskRetryRequest(BaseModel):
+    confirmation: str | None = Field(default=None, max_length=300)
+
+
+class TrashDeleteRequest(BaseModel):
+    confirmation: str = Field(min_length=8, max_length=64)
+
+
 def _prepare_data_directories(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     for relative_path in DATA_DIRECTORIES:
@@ -165,27 +285,128 @@ def _prepare_data_directories(root: Path) -> None:
             LOGGER.warning("unable to enforce directory mode", extra={"directory": relative_path})
 
 
-def _error_payload(code: str, message: str, status_code: int) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "error": {
-                "code": code,
-                "message": message,
-                "request_id": correlation_id_context.get(),
-            }
-        },
+def _error_payload(
+    code: str,
+    message: str,
+    status_code: int,
+    *,
+    fields: list[dict[str, object]] | None = None,
+    **extra: object,
+) -> JSONResponse:
+    """The one error envelope: {error: {code, message, request_id, ...}}.
+
+    ``fields`` ([{field, reason_code, params?}]) lets the panel attach the
+    message to the exact input (docs/33 §2.3); ``field``/``reason`` mirror the
+    first entry for clients that read only one.
+    """
+    error: dict[str, object] = {
+        "code": code,
+        "message": message,
+        "request_id": correlation_id_context.get(),
+    }
+    if fields:
+        error["fields"] = fields
+        error["field"] = fields[0].get("field")
+        error["reason"] = fields[0].get("reason_code")
+    error.update(extra)
+    return JSONResponse(status_code=status_code, content={"error": error})
+
+
+def _field_error(
+    exc: FieldError, code: str | None = None, status_code: int | None = None, **extra: object
+) -> JSONResponse:
+    return _error_payload(
+        code or exc.code,
+        exc.message,
+        status_code or exc.status_code,
+        fields=exc.fields,
+        **extra,
     )
+
+
+_REASON_CODES = {
+    "missing": "required",
+    "string_too_short": "too_short",
+    "string_too_long": "too_long",
+    "too_short": "too_short",
+    "too_long": "too_long",
+    "greater_than_equal": "too_small",
+    "greater_than": "too_small",
+    "less_than_equal": "too_large",
+    "less_than": "too_large",
+    "string_pattern_mismatch": "invalid_format",
+    "literal_error": "invalid_choice",
+    "enum": "invalid_choice",
+    "json_invalid": "invalid_json",
+    "extra_forbidden": "unknown_field",
+}
+
+
+def _validation_fields(exc: RequestValidationError) -> list[dict[str, object]]:
+    """Turn pydantic errors into [{field, reason_code, params?}] with stable codes."""
+    result: list[dict[str, object]] = []
+    for item in exc.errors():
+        location = [str(part) for part in item.get("loc", ())]
+        if location and location[0] in {"body", "query", "path", "header", "cookie"}:
+            location = location[1:]
+        kind = str(item.get("type", ""))
+        reason = _REASON_CODES.get(kind)
+        if reason is None:
+            reason = (
+                "invalid_type"
+                if kind.endswith(("_type", "_parsing")) or kind.startswith("model_")
+                else "invalid"
+            )
+        entry: dict[str, object] = {
+            "field": ".".join(location) or "body",
+            "reason_code": reason,
+        }
+        context = item.get("ctx")
+        if isinstance(context, dict):
+            params = {
+                key: value
+                for key, value in context.items()
+                if key in {"min_length", "max_length", "ge", "gt", "le", "lt", "expected",
+                           "pattern"}
+                and isinstance(value, str | int | float | bool)
+            }
+            if params:
+                entry["params"] = params
+        result.append(entry)
+    return result[:50]
 
 
 def _csv_cell(value: object) -> str:
     text = "" if value is None else str(value)
-    if text.startswith(("=", "+", "-", "@")):
+    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
         return f"'{text}"
     return text
 
 
+def _account_error(exc: ValueError, fallback: str) -> JSONResponse:
+    """Map account validation failures to a specific code the panel can explain."""
+    if isinstance(exc, FieldError) and exc.fields:
+        return _field_error(exc)
+    text = str(exc)
+    if text.startswith("password must"):
+        return _error_payload("weak_password", text, 422)
+    if "rate limited" in text:
+        return _error_payload("rate_limited", "Too many attempts; try again later", 429)
+    if "already initialized" in text:
+        return _error_payload("already_initialized", "The owner account already exists", 409)
+    if "email" in text:
+        return _error_payload("invalid_email", "The email address is not valid", 422)
+    if "display name" in text:
+        return _error_payload("invalid_name", "The name must be 2 to 100 characters", 422)
+    if "already exists" in text:
+        return _error_payload("account_exists", "An account with this email already exists", 409)
+    return _error_payload(fallback, "The request was rejected", 409)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
+    if settings is None:
+        # Panel startup overrides (settings registry) for readers using os.getenv.
+        apply_startup_overrides()
     active_settings = settings or Settings.from_env()
     configure_logging(active_settings.log_level)
     database = Database(active_settings.data_dir, active_settings.database_url)
@@ -193,17 +414,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         active_settings.data_dir,
         active_settings.session_ttl_seconds,
         database=database,
+        rate_limit_attempts=active_settings.login_rate_limit_attempts,
+        rate_limit_window_seconds=active_settings.login_rate_limit_window_seconds,
+        session_prune_age_seconds=active_settings.session_prune_age_seconds,
     )
     upstream_store = UpstreamStore(active_settings.data_dir)
+    network_settings = NetworkSettingsStore(active_settings.data_dir)
+    events = EventBus()
+    module_state: dict[str, ModuleContext] = {}
     upstream_health = UpstreamHealthStore(database)
     secret_store = SecretStore(active_settings.data_dir)
     package_catalog = PackageCatalog(active_settings.data_dir)
-    task_manager = TaskManager(active_settings.data_dir, package_catalog, database=database)
     backup_manager = BackupManager(active_settings.data_dir, __version__, database=database)
+    task_manager = TaskManager(
+        active_settings.data_dir,
+        package_catalog,
+        database=database,
+        backup_manager=backup_manager,
+        audit=lambda *args: _task_audit(*args),
+    )
+
+    def _task_audit(
+        actor_user_id: int | None,
+        action: str,
+        object_type: str,
+        object_id: str | None,
+        result: str = "success",
+    ) -> None:
+        auth_store.record_audit(actor_user_id, action, object_type, object_id, result)
+        # Turn task outcomes into platform events for notifications.
+        if not action.startswith("task.") or object_type != "task":
+            return
+        kind = action.removeprefix("task.")
+        if result in {"failure", "failed"}:
+            severity = "error"
+            title = f"Task failed: {kind}"
+        elif kind == "backup.create" and result == "succeeded":
+            severity = "info"
+            title = "Backup created"
+        else:
+            return
+        events.publish(
+            Event(
+                type=f"{kind}.{'failed' if severity == 'error' else 'succeeded'}",
+                severity=severity,
+                title=title,
+                message=f"task {object_id}",
+                module="tasks",
+                dedupe_key=f"{kind}:{result}",
+                details={"task_id": object_id, "kind": kind},
+            )
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         _prepare_data_directories(active_settings.data_dir)
+        from .restore import restore_in_progress
+
+        if restore_in_progress(active_settings.data_dir):
+            # Serving while `mrk-restore apply` swaps directories would corrupt data.
+            raise RuntimeError("an offline restore is in progress; refusing to start")
         upstream_store.ensure_defaults(
             os.getenv("MRK_PYPI_PRIMARY_UPSTREAM", "https://pypi.org/simple/"),
             os.getenv(
@@ -219,27 +489,101 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not auth_store.has_users():
             LOGGER.warning("first-run owner registration is required")
         app.state.started_at = time.monotonic()
+        events.bind(asyncio.get_running_loop())
+        module_ctx = module_state.get("ctx")
+        for hook in module_ctx.start_hooks if module_ctx else []:
+            try:
+                await hook()
+            except Exception:
+                LOGGER.exception("module start hook failed")
         app.state.ready = True
         heartbeat_path = active_settings.data_dir / "control-plane" / "runtime-heartbeat"
 
         async def heartbeat() -> None:
             while True:
-                temporary = heartbeat_path.with_suffix(".tmp")
-                temporary.write_text(f"{int(time.time())}\n", encoding="utf-8")
-                temporary.chmod(0o600)
-                temporary.replace(heartbeat_path)
+                try:
+                    temporary = heartbeat_path.with_suffix(".tmp")
+                    temporary.write_text(f"{int(time.time())}\n", encoding="utf-8")
+                    temporary.chmod(0o600)
+                    temporary.replace(heartbeat_path)
+                except OSError:
+                    # A full disk must not kill the heartbeat for good; restore relies on it.
+                    LOGGER.exception("cannot write the runtime heartbeat")
                 await asyncio.sleep(5)
 
+        async def npm_block_expiry() -> None:
+            # Verdaccio reads its uplinks only at start, so a timed block would
+            # otherwise last until the next restart. Reload when one expires.
+            blocked: set[str] = set()
+            while True:
+                try:
+                    now = int(time.time())
+                    items = await asyncio.to_thread(upstream_store.raw_list)
+                    timed = [
+                        item
+                        for item in items
+                        if item.get("ecosystem") == "npm"
+                        and item.get("blocked_until") is not None
+                    ]
+                    current = {
+                        str(item["id"]) for item in timed if int(item["blocked_until"]) > now
+                    }
+                    expired = {
+                        str(item["id"]) for item in timed if int(item["blocked_until"]) <= now
+                    }
+                    # Only a block that ran out needs a reload; an API unblock
+                    # already reloaded, and a deleted upstream needs nothing.
+                    if blocked & expired:
+                        await asyncio.to_thread(reload_verdaccio_best_effort)
+                    blocked = current
+                except Exception:
+                    LOGGER.exception("npm block expiry check failed")
+                await asyncio.sleep(active_settings.npm_block_poll_seconds)
+
+        async def retention() -> None:
+            days = int(os.getenv("MRK_AUDIT_RETENTION_DAYS", "365"))
+            vacuum_hours = float(os.getenv("MRK_DB_VACUUM_INTERVAL_HOURS", "24"))
+            last_vacuum = time.monotonic()
+            while True:
+                try:
+                    removed = await asyncio.to_thread(auth_store.prune, days)
+                    LOGGER.info("retention cleanup finished", extra=removed)
+                except Exception:
+                    LOGGER.exception("retention cleanup failed")
+                if vacuum_hours > 0 and time.monotonic() - last_vacuum >= vacuum_hours * 3600:
+                    last_vacuum = time.monotonic()
+                    try:
+                        # PGlite is single-user, so autovacuum never runs on its own.
+                        await asyncio.to_thread(database.maintenance)
+                        LOGGER.info("database maintenance finished")
+                    except Exception:
+                        LOGGER.exception("database maintenance failed")
+                await asyncio.sleep(min(6 * 3600, max(vacuum_hours, 0.25) * 3600))
+
         heartbeat_worker = asyncio.create_task(heartbeat(), name="mrk-heartbeat")
+        retention_worker = asyncio.create_task(retention(), name="mrk-retention")
+        block_worker = asyncio.create_task(npm_block_expiry(), name="mrk-npm-block-expiry")
         task_worker = asyncio.create_task(task_manager.run(), name="mrk-task-worker")
         LOGGER.info("control plane started")
         try:
             yield
         finally:
             app.state.ready = False
+            module_ctx = module_state.get("ctx")
+            for hook in reversed(module_ctx.stop_hooks if module_ctx else []):
+                try:
+                    await hook()
+                except Exception:
+                    LOGGER.exception("module stop hook failed")
             heartbeat_worker.cancel()
+            block_worker.cancel()
+            retention_worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await retention_worker
             with suppress(asyncio.CancelledError):
                 await heartbeat_worker
+            with suppress(asyncio.CancelledError):
+                await block_worker
             heartbeat_path.unlink(missing_ok=True)
             await task_manager.stop()
             await task_worker
@@ -273,12 +617,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        if exc.status_code == 403:
+            # The UI refreshes its token and retries only on csrf_failed; a
+            # permission denial ("forbidden") must not be retried.
+            if exc.detail == CSRF_FAILED:
+                return _error_payload(CSRF_FAILED, "CSRF token is missing or invalid", 403)
+            if exc.detail == PASSWORD_CHANGE_REQUIRED:
+                return _error_payload(
+                    PASSWORD_CHANGE_REQUIRED, "Choose a new password before continuing", 403
+                )
+            return _error_payload("forbidden", "Permission denied", 403)
         public_message = "Not found" if exc.status_code == 404 else "Request failed"
         return _error_payload("http_error", public_message, exc.status_code)
 
     @app.exception_handler(RequestValidationError)
-    async def validation_error(_request: Request, _exc: RequestValidationError) -> JSONResponse:
-        return _error_payload("validation_error", "Request validation failed", 422)
+    async def validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        return _error_payload(
+            "validation_error", "Request validation failed", 422,
+            fields=_validation_fields(exc),
+        )
 
     @app.exception_handler(Exception)
     async def unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
@@ -338,6 +695,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=503,
                 content={"status": "not_ready", "component": "pypi_registry"},
             )
+        if active_settings.pypi_enabled and not await asyncio.to_thread(
+            check_http_component,
+            active_settings.pypi_router_health_host,
+            active_settings.pypi_router_health_port,
+            "/health",
+        ):
+            # Without the router every PyPI cache miss fails, even when upstreams are fine.
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "component": "pypi_upstream_router"},
+            )
+        try:
+            database_ok = await asyncio.wait_for(
+                asyncio.to_thread(database_health, database.engine), timeout=3
+            )
+        except TimeoutError:
+            # PGlite has a single connection; a long backup or scan holds it.
+            # A busy database is alive, so this must not mark the appliance unready.
+            database_ok = True
+        if not database_ok:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "component": "database"},
+            )
         return {"status": "ready"}
 
     def require_principal(request: Request, permission: str | None = None) -> Principal:
@@ -348,6 +729,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 principal = auth_store.principal_for_api_token(authorization[7:].strip())
         if principal is None:
             raise StarletteHTTPException(status_code=401)
+        if permission is not None and principal.must_change_password:
+            # An invited account signs in with a one-time password and may only
+            # read itself, change the password or sign out until it picks one.
+            raise StarletteHTTPException(status_code=403, detail=PASSWORD_CHANGE_REQUIRED)
         if permission is not None and not principal.allows(permission):
             raise StarletteHTTPException(status_code=403)
         return principal
@@ -356,7 +741,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if principal.token_id is not None:
             return
         if not auth_store.verify_csrf(principal, request.headers.get("x-csrf-token")):
-            raise StarletteHTTPException(status_code=403)
+            raise StarletteHTTPException(status_code=403, detail=CSRF_FAILED)
+
+    async def reload_npm(actor_user_id: int) -> bool:
+        """Best-effort Verdaccio reload after a change that is already saved.
+
+        A failed reload used to raise after the write and before the audit
+        record, so the client saw a 500 for a change that had been applied.
+        """
+        reloaded = await asyncio.to_thread(reload_verdaccio_best_effort)
+        if not reloaded:
+            await asyncio.to_thread(
+                auth_store.record_audit,
+                actor_user_id,
+                "npm.reload",
+                "service",
+                "verdaccio",
+                "failure",
+            )
+        return reloaded
+
+    async def purge_quarantined_pypi(name: str, actor_user_id: int) -> str | None:
+        """Queue a purge of a newly quarantined PyPI project from the devpi cache.
+
+        Reuses the regular purge task with the confirmation it expects. The
+        router already 404s the project, so this only removes cached copies;
+        it is best effort (nothing cached, or the project is pinned: no purge).
+        """
+        preview: dict[str, object] | None = None
+        for candidate in dict.fromkeys((name, pep503(name))):
+            try:
+                preview = await asyncio.to_thread(
+                    package_catalog.purge_preview, "pypi", candidate
+                )
+                break
+            except KeyError:
+                continue
+        if preview is None or preview.get("blocked_by_pin"):
+            return None
+        try:
+            task_id = await asyncio.to_thread(
+                task_manager.enqueue,
+                "package.purge",
+                {
+                    "ecosystem": "pypi",
+                    "name": str(preview["name"]),
+                    "confirmation": str(preview["confirmation"]),
+                },
+                actor_user_id,
+            )
+        except Exception:
+            LOGGER.exception("cannot queue the purge of a quarantined PyPI project")
+            return None
+        await asyncio.to_thread(
+            auth_store.record_audit,
+            actor_user_id,
+            "package.quarantine.purge.enqueue",
+            "task",
+            task_id,
+        )
+        return task_id
 
     def set_session_cookie(response: JSONResponse, token: str) -> None:
         response.set_cookie(
@@ -377,12 +821,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "email": principal.email,
             "role": principal.role,
             "permissions": sorted(principal.permissions),
+            "must_change_password": principal.must_change_password,
         }
 
     @app.get("/api/v1/auth/setup-status", include_in_schema=False)
     async def setup_status() -> dict[str, object]:
         required = not await asyncio.to_thread(auth_store.has_users)
-        return {"required": required}
+        return {"required": required, "password_policy": password_policy()}
 
     @app.get("/api/v1/auth/registration-status", include_in_schema=False)
     async def registration_status() -> dict[str, bool]:
@@ -397,7 +842,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: SetupOwnerRequest, request: Request
     ) -> JSONResponse:
         if payload.password != payload.password_confirmation:
-            return _error_payload("password_mismatch", "Passwords do not match", 422)
+            return _error_payload(
+                "password_mismatch", "Passwords do not match", 422,
+                fields=[{"field": "password_confirmation", "reason_code": "mismatch"}],
+            )
         try:
             identifier = await asyncio.to_thread(
                 auth_store.setup_owner,
@@ -407,8 +855,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request.client.host if request.client else None,
                 correlation_id_context.get(),
             )
-        except (ValueError, sqlite3.IntegrityError):
-            return _error_payload("setup_rejected", "First-run setup was rejected", 409)
+        except ValueError as exc:
+            return _account_error(exc, "setup_rejected")
         result = await asyncio.to_thread(
             auth_store.authenticate,
             identifier,
@@ -430,7 +878,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: SetupOwnerRequest, request: Request
     ) -> JSONResponse:
         if payload.password != payload.password_confirmation:
-            return _error_payload("password_mismatch", "Passwords do not match", 422)
+            return _error_payload(
+                "password_mismatch", "Passwords do not match", 422,
+                fields=[{"field": "password_confirmation", "reason_code": "mismatch"}],
+            )
         try:
             identifier = await asyncio.to_thread(
                 auth_store.register_public_user,
@@ -440,10 +891,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request.client.host if request.client else None,
                 correlation_id_context.get(),
             )
-        except ValueError:
-            return _error_payload(
-                "registration_rejected", "Registration is unavailable", 409
-            )
+        except ValueError as exc:
+            return _account_error(exc, "registration_rejected")
         result = await asyncio.to_thread(
             auth_store.authenticate,
             identifier,
@@ -477,9 +926,76 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {
                 "user": principal_payload(principal),
                 "csrf_token": csrf,
+                "must_change_password": principal.must_change_password,
             }
         )
         set_session_cookie(response, token)
+        return response
+
+    @app.post("/api/v1/auth/change-password", include_in_schema=False, response_model=None)
+    async def change_password(
+        payload: ChangePasswordRequest, request: Request
+    ) -> JSONResponse:
+        principal = require_principal(request)
+        if principal.session_id is None:
+            # App keys cannot change the password of the person who made them.
+            raise StarletteHTTPException(status_code=403)
+        require_csrf(request, principal)
+        try:
+            updated = await asyncio.to_thread(
+                auth_store.change_password,
+                principal,
+                payload.current_password,
+                payload.new_password,
+                request.client.host if request.client else None,
+                correlation_id_context.get(),
+            )
+        except FieldError as exc:
+            return _field_error(exc)
+        return JSONResponse({"status": "changed", "user": principal_payload(updated)})
+
+    @app.get("/api/v1/auth/invite/{token}", include_in_schema=False, response_model=None)
+    async def invite_details(token: str, request: Request) -> JSONResponse:
+        try:
+            details = await asyncio.to_thread(
+                auth_store.get_invite, token, request.client.host if request.client else None
+            )
+        except FieldError as exc:
+            return _field_error(exc)
+        return JSONResponse(details)
+
+    @app.post(
+        "/api/v1/auth/invite/{token}/accept", include_in_schema=False, response_model=None
+    )
+    async def accept_invite(
+        token: str, payload: AcceptInviteRequest, request: Request
+    ) -> JSONResponse:
+        if (
+            payload.password_confirmation is not None
+            and payload.password != payload.password_confirmation
+        ):
+            return _error_payload(
+                "password_mismatch", "Passwords do not match", 422,
+                fields=[{"field": "password_confirmation", "reason_code": "mismatch"}],
+            )
+        try:
+            session_token, csrf, principal = await asyncio.to_thread(
+                auth_store.accept_invite,
+                token,
+                payload.password,
+                request.client.host if request.client else None,
+                correlation_id_context.get(),
+            )
+        except FieldError as exc:
+            return _field_error(exc)
+        response = JSONResponse(
+            {
+                "user": principal_payload(principal),
+                "csrf_token": csrf,
+                "must_change_password": False,
+            }
+        )
+        set_session_cookie(response, session_token)
         return response
 
     @app.get("/api/v1/auth/capabilities", include_in_schema=False)
@@ -493,7 +1009,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/auth/me", include_in_schema=False)
     async def auth_me(request: Request) -> dict[str, object]:
         principal = require_principal(request)
-        csrf = await asyncio.to_thread(auth_store.issue_csrf, principal)
+        csrf = (
+            await asyncio.to_thread(
+                auth_store.issue_csrf, principal, str(request.cookies.get(SESSION_COOKIE))
+            )
+            if principal.session_id is not None
+            else None
+        )
         return {
             "user": principal_payload(principal),
             "csrf_token": csrf,
@@ -536,7 +1058,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if active_settings.pypi_enabled:
             pypi_status = "ready" if await pypi_is_ready() else "unavailable"
         router_status = await pypi_router_status()
-        database_ready = await asyncio.to_thread(database_health, database.engine)
+        try:
+            database_ready = await asyncio.wait_for(
+                asyncio.to_thread(database_health, database.engine), timeout=3
+            )
+        except TimeoutError:
+            database_ready = True  # busy (backup/scan holds the connection), not down
         total_bytes, used_bytes, free_bytes = await asyncio.to_thread(
             shutil.disk_usage, active_settings.data_dir
         )
@@ -603,7 +1130,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> JSONResponse | dict[str, object]:
         principal = require_principal(request, "upstream:write")
         require_csrf(request, principal)
+        allow_private = network_settings.allow_private_upstreams()
         try:
+            proxy_id = check_reference(
+                network_settings,
+                payload.proxy_id,
+                upstream_proxy_types(payload.ecosystem),
+                upstream_proxy_code(payload.ecosystem),
+            )
+        except OutboundError as exc:
+            return _error_payload(exc.code, exc.message, 422)
+        try:
+            if payload.ecosystem == "npm":
+                await reject_private_destination(
+                    payload.url,
+                    network_settings.dns(),
+                    allow_private=allow_private,
+                    proxied=proxy_id is not None,
+                )
             item = await asyncio.to_thread(
                 upstream_store.create,
                 payload.name,
@@ -611,11 +1155,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.url,
                 payload.priority,
                 payload.timeout_seconds,
+                allow_private,
+                proxy_id,
             )
         except ValueError as exc:
             return _error_payload("invalid_upstream", str(exc), 409)
         if item["ecosystem"] == "npm":
-            await asyncio.to_thread(restart_verdaccio_if_managed)
+            await reload_npm(principal.user_id)
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -637,11 +1183,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal = require_principal(request, "upstream:write")
         require_csrf(request, principal)
         item: dict[str, object] | None = None
+        probe_proxy_ref: str | None = None
         try:
             if payload.upstream_id is not None:
                 item = await asyncio.to_thread(upstream_store.get, payload.upstream_id)
                 probe_url = str(item["url"])
                 probe_timeout = min(int(item["timeout_seconds"]), 30)
+                probe_proxy_ref = str(item["proxy_id"]) if item.get("proxy_id") else None
                 authorization = None
                 if item.get("credential_ref") and item.get("credential_type"):
                     authorization = await asyncio.to_thread(
@@ -652,14 +1200,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             elif payload.url is not None:
                 probe_url = payload.url
                 probe_timeout = payload.timeout_seconds
+                probe_proxy_ref = payload.proxy_id or None
                 authorization = None
             else:
                 return _error_payload(
                     "invalid_upstream", "upstream_id or url is required", 422
                 )
-            result = await probe_upstream(probe_url, probe_timeout, authorization)
+            proxy_kwargs: dict[str, object] = {}
+            if probe_proxy_ref is not None:
+                route = await asyncio.to_thread(
+                    resolve_route, network_settings, secret_store, probe_proxy_ref
+                )
+                if route is not None:
+                    proxy_kwargs["proxy"] = route
+            result = await probe_upstream(
+                probe_url,
+                probe_timeout,
+                authorization,
+                dns=network_settings.dns(),
+                allow_private=network_settings.allow_private_upstreams(),
+                **proxy_kwargs,
+            )
         except KeyError:
             raise StarletteHTTPException(status_code=404) from None
+        except OutboundError as exc:
+            return _error_payload(exc.code, exc.message, 409)
         except ValueError as exc:
             return _error_payload("invalid_upstream", str(exc), 409)
         if item is not None:
@@ -734,7 +1299,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
         if item["ecosystem"] == "npm":
-            await asyncio.to_thread(restart_verdaccio_if_managed)
+            await reload_npm(principal.user_id)
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -775,7 +1340,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if item.get("credential_ref"):
             await asyncio.to_thread(secret_store.delete, str(item["credential_ref"]))
         if item["ecosystem"] == "npm":
-            await asyncio.to_thread(restart_verdaccio_if_managed)
+            await reload_npm(principal.user_id)
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -817,14 +1382,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal = require_principal(request, "upstream:write")
         require_csrf(request, principal)
         changes = payload.model_dump(exclude_none=True)
+        if "proxy_id" in payload.model_fields_set:
+            changes["proxy_id"] = payload.proxy_id or None
         try:
-            item = await asyncio.to_thread(upstream_store.update, upstream_id, changes)
+            if "proxy_id" in changes:
+                current = await asyncio.to_thread(upstream_store.get, upstream_id)
+                ecosystem = str(current["ecosystem"])
+                try:
+                    changes["proxy_id"] = check_reference(
+                        network_settings,
+                        changes["proxy_id"],
+                        upstream_proxy_types(ecosystem),
+                        upstream_proxy_code(ecosystem),
+                    )
+                except OutboundError as exc:
+                    return _error_payload(exc.code, exc.message, 422)
+            if "url" in changes:
+                current = await asyncio.to_thread(upstream_store.get, upstream_id)
+                if current["ecosystem"] == "npm":
+                    proxied = (
+                        changes["proxy_id"] if "proxy_id" in changes else current.get("proxy_id")
+                    )
+                    await reject_private_destination(
+                        str(changes["url"]),
+                        network_settings.dns(),
+                        allow_private=network_settings.allow_private_upstreams(),
+                        proxied=bool(proxied),
+                    )
+            item = await asyncio.to_thread(
+                upstream_store.update,
+                upstream_id,
+                changes,
+                network_settings.allow_private_upstreams(),
+            )
         except KeyError:
             raise StarletteHTTPException(status_code=404) from None
         except ValueError as exc:
             return _error_payload("invalid_upstream", str(exc), 409)
         if item["ecosystem"] == "npm":
-            await asyncio.to_thread(restart_verdaccio_if_managed)
+            await reload_npm(principal.user_id)
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -860,7 +1456,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if item.get("credential_ref"):
             await asyncio.to_thread(secret_store.delete, str(item["credential_ref"]))
         if item["ecosystem"] == "npm":
-            await asyncio.to_thread(restart_verdaccio_if_managed)
+            await reload_npm(principal.user_id)
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -896,8 +1492,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except KeyError:
             raise StarletteHTTPException(status_code=404) from None
+        except ValueError as exc:
+            return _error_payload("invalid_upstream", str(exc), 409)
         if item["ecosystem"] == "npm":
-            await asyncio.to_thread(restart_verdaccio_if_managed)
+            await reload_npm(principal.user_id)
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -920,7 +1518,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except KeyError:
             raise StarletteHTTPException(status_code=404) from None
         if item["ecosystem"] == "npm":
-            await asyncio.to_thread(restart_verdaccio_if_managed)
+            await reload_npm(principal.user_id)
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -947,7 +1545,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             return _error_payload("invalid_ecosystem", str(exc), 404)
         if ecosystem == "npm":
-            await asyncio.to_thread(restart_verdaccio_if_managed)
+            await reload_npm(principal.user_id)
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -957,15 +1555,103 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return {"ecosystem": ecosystem, "offline": payload.offline}
 
+    # ---- roles & permission catalogue (docs/33 §5) ----
+
+    def escalation_error(exc: PermissionEscalationError) -> JSONResponse:
+        return _error_payload(
+            "permission_escalation", exc.message, 403, permissions=exc.permissions,
+            fields=[{"field": "permissions" if exc.permissions else "role",
+                     "reason_code": "exceeds_own_permissions",
+                     "params": {"permissions": exc.permissions}}],
+        )
+
+    def require_owner(request: Request) -> Principal:
+        principal = require_principal(request, "user:write")
+        if "*" not in principal.permissions:
+            raise StarletteHTTPException(status_code=403)
+        require_csrf(request, principal)
+        return principal
+
+    @app.get("/api/v1/permissions", include_in_schema=False)
+    async def permissions_catalog(request: Request) -> dict[str, object]:
+        # Any signed-in person: the token wizard and "see all permissions" use it.
+        require_principal(request)
+        return permission_catalog()
+
     @app.get("/api/v1/roles", include_in_schema=False)
     async def roles(request: Request) -> dict[str, object]:
         require_principal(request, "user:read")
-        return {
-            "items": [
-                {"name": name, "permissions": sorted(permissions)}
-                for name, permissions in ROLE_PERMISSIONS.items()
-            ]
-        }
+        return {"items": await asyncio.to_thread(auth_store.list_roles)}
+
+    @app.get("/api/v1/roles/{role_id}", include_in_schema=False, response_model=None)
+    async def role_detail(role_id: str, request: Request) -> dict[str, object]:
+        require_principal(request, "user:read")
+        role = await asyncio.to_thread(auth_store.get_role, role_id)
+        if role is None:
+            raise StarletteHTTPException(status_code=404)
+        return role
+
+    @app.post("/api/v1/roles", include_in_schema=False, status_code=201, response_model=None)
+    async def create_role(
+        payload: CreateRoleRequest, request: Request
+    ) -> dict[str, object] | JSONResponse:
+        principal = require_owner(request)
+        try:
+            return await asyncio.to_thread(
+                auth_store.create_custom_role,
+                payload.name,
+                payload.description,
+                payload.permissions,
+                principal,
+            )
+        except FieldError as exc:
+            return _field_error(exc)
+        except PermissionEscalationError as exc:
+            return escalation_error(exc)
+
+    @app.patch("/api/v1/roles/{role_id}", include_in_schema=False, response_model=None)
+    async def update_role(
+        role_id: str, payload: UpdateRoleRequest, request: Request
+    ) -> dict[str, object] | JSONResponse:
+        principal = require_owner(request)
+        try:
+            role = await asyncio.to_thread(
+                auth_store.update_custom_role,
+                role_id,
+                principal,
+                payload.name,
+                payload.description,
+                payload.permissions,
+            )
+        except FieldError as exc:
+            return _field_error(exc)
+        except PermissionEscalationError as exc:
+            return escalation_error(exc)
+        if role is None:
+            raise StarletteHTTPException(status_code=404)
+        return role
+
+    @app.delete("/api/v1/roles/{role_id}", include_in_schema=False, response_model=None)
+    async def delete_role(role_id: str, request: Request) -> dict[str, str] | JSONResponse:
+        principal = require_owner(request)
+        try:
+            deleted = await asyncio.to_thread(
+                auth_store.delete_custom_role, role_id, principal
+            )
+        except FieldError as exc:
+            return _field_error(exc)
+        except RoleInUseError as exc:
+            return _error_payload(
+                "role_in_use",
+                "Move these people to another role first",
+                409,
+                users=exc.users,
+                fields=[{"field": "role", "reason_code": "in_use",
+                         "params": {"users": len(exc.users)}}],
+            )
+        if not deleted:
+            raise StarletteHTTPException(status_code=404)
+        return {"status": "deleted"}
 
     @app.get("/api/v1/settings/registration", include_in_schema=False)
     async def registration_policy(request: Request) -> dict[str, object]:
@@ -990,6 +1676,155 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return {"enabled": enabled, "default_role": "viewer"}
 
+    # ---- outbound proxies (outbound.py / outbound_api.py) ----
+
+    outbound_services = outbound_registry(active_settings.data_dir)
+
+    def upstream_outbound_entries() -> list[dict[str, object]]:
+        return [
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "group": item["ecosystem"],
+                "proxy_id": item.get("proxy_id"),
+            }
+            for item in upstream_store.list()
+        ]
+
+    def set_upstream_proxy(upstream_id: str, proxy_id: str | None) -> None:
+        upstream_store.update(upstream_id, {"proxy_id": proxy_id})
+
+    async def upstream_proxy_changed(entries: list[dict[str, object]]) -> None:
+        # The PyPI router re-reads its files per request; Verdaccio needs a reload.
+        if any(entry.get("group") == "npm" for entry in entries):
+            reloaded = await asyncio.to_thread(reload_verdaccio_best_effort)
+            if not reloaded:
+                LOGGER.warning("Verdaccio reload after a proxy change failed")
+
+    outbound_services.register(
+        OutboundProvider(
+            kind="upstream",
+            list_entries=upstream_outbound_entries,
+            supported_types=lambda entry: upstream_proxy_types(str(entry.get("group"))),
+            unsupported_code="proxy_type_unsupported_for_npm",
+            set_proxy=set_upstream_proxy,
+            read_permission="upstream:read",
+            write_permission="upstream:write",
+            on_change=upstream_proxy_changed,
+        )
+    )
+    app.include_router(
+        build_outbound_router(
+            network=network_settings,
+            secret_store=secret_store,
+            registry=outbound_services,
+            require_principal=require_principal,
+            require_csrf=require_csrf,
+            error_payload=_error_payload,
+            record_audit=auth_store.record_audit,
+        )
+    )
+
+    @app.get("/api/v1/settings/network", include_in_schema=False)
+    async def network_policy(request: Request) -> dict[str, object]:
+        require_principal(request, "upstream:read")
+        return {
+            "dns": network_settings.dns().public(),
+            "upstream_policy": {
+                "allow_private_upstreams": network_settings.allow_private_upstreams()
+            },
+        }
+
+    @app.get("/api/v1/settings/network/upstream-policy", include_in_schema=False)
+    async def upstream_policy(request: Request) -> dict[str, object]:
+        require_principal(request, "upstream:write")
+        return {"allow_private_upstreams": network_settings.allow_private_upstreams()}
+
+    @app.put("/api/v1/settings/network/upstream-policy", include_in_schema=False)
+    async def update_upstream_policy(
+        payload: UpstreamPolicyRequest, request: Request
+    ) -> dict[str, object]:
+        # Opt-in for internal mirrors (RFC1918/ULA/CGNAT, LAN names). Loopback,
+        # link-local and metadata addresses stay forbidden regardless.
+        principal = require_principal(request, "upstream:write")
+        require_csrf(request, principal)
+        allowed = await asyncio.to_thread(
+            network_settings.save_upstream_policy, payload.allow_private_upstreams
+        )
+        await asyncio.to_thread(
+            auth_store.record_audit,
+            principal.user_id,
+            "settings.network.upstream_policy",
+            "settings",
+            f"allow_private_upstreams={str(allowed).lower()}",
+            "success",
+            request.client.host if request.client else None,
+            correlation_id_context.get(),
+        )
+        return {"allow_private_upstreams": allowed}
+
+    @app.put("/api/v1/settings/network/dns", include_in_schema=False, response_model=None)
+    async def update_dns_policy(
+        payload: DnsSettingsRequest, request: Request
+    ) -> JSONResponse | dict[str, object]:
+        # Applies on the next upstream request in every process; no restart needed.
+        principal = require_principal(request, "upstream:write")
+        require_csrf(request, principal)
+        try:
+            config = validate_config(payload.model_dump())
+        except ValueError as exc:
+            return _error_payload("invalid_dns_settings", str(exc), 422)
+        await asyncio.to_thread(network_settings.save_dns, config)
+        await asyncio.to_thread(
+            auth_store.record_audit,
+            principal.user_id,
+            "settings.network.dns",
+            "settings",
+            config.mode,
+        )
+        return {"dns": config.public()}
+
+    @app.post("/api/v1/settings/network/dns-test", include_in_schema=False, response_model=None)
+    async def test_dns_policy(
+        payload: DnsTestRequest, request: Request
+    ) -> JSONResponse | dict[str, object]:
+        """Resolve a name with the saved settings, or with unsaved ones to try first."""
+        principal = require_principal(request, "upstream:write")
+        require_csrf(request, principal)
+        current = network_settings.dns()
+        try:
+            config = (
+                validate_config(
+                    {
+                        "mode": payload.mode or current.mode,
+                        "servers": payload.servers
+                        if payload.servers is not None
+                        else [item.label() for item in current.servers],
+                        "timeout_seconds": current.timeout_seconds,
+                        "prefer_ipv4": current.prefer_ipv4,
+                    }
+                )
+                if payload.mode or payload.servers is not None
+                else current
+            )
+        except ValueError as exc:
+            return _error_payload("invalid_dns_settings", str(exc), 422)
+        started = time.perf_counter()
+        try:
+            addresses = await asyncio.wait_for(
+                asyncio.to_thread(resolve_host, payload.hostname, 443, config),
+                timeout=config.timeout_seconds * 4 + 1,
+            )
+            ok = bool(addresses)
+        except (OSError, ValueError, TimeoutError):
+            addresses, ok = [], False
+        return {
+            "ok": ok,
+            "mode": config.mode,
+            "addresses": addresses[:16],
+            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
     @app.get("/api/v1/users", include_in_schema=False)
     async def users(request: Request) -> dict[str, object]:
         require_principal(request, "user:read")
@@ -1008,10 +1843,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.password,
                 payload.role,
                 principal.user_id,
+                payload.display_name,
+                payload.email,
+                principal.permissions,
+                payload.must_change_password,
             )
-        except (ValueError, sqlite3.IntegrityError) as exc:
+        except PermissionEscalationError as exc:
+            return escalation_error(exc)
+        except FieldError as exc:
+            # The historical code/status stay; "fields" names the input.
+            return _field_error(exc, "invalid_user", 409)
+        except ValueError as exc:
             return _error_payload("invalid_user", str(exc), 409)
         return {"id": user_id}
+
+    @app.post("/api/v1/users/invite", include_in_schema=False, status_code=201,
+              response_model=None)
+    async def invite_user(
+        payload: InviteUserRequest, request: Request
+    ) -> dict[str, object] | JSONResponse:
+        principal = require_principal(request, "user:write")
+        require_csrf(request, principal)
+        if payload.role == "owner" and principal.role != "owner":
+            raise StarletteHTTPException(status_code=403)
+        try:
+            # The one-time password and link token are in this response only.
+            return await asyncio.to_thread(
+                auth_store.invite_user,
+                payload.display_name,
+                payload.email,
+                payload.role,
+                principal,
+                payload.username,
+                payload.create_link,
+                request.client.host if request.client else None,
+                correlation_id_context.get(),
+            )
+        except PermissionEscalationError as exc:
+            return escalation_error(exc)
+        except FieldError as exc:
+            return _field_error(exc)
 
     @app.patch("/api/v1/users/{user_id}", include_in_schema=False)
     async def update_user(
@@ -1034,7 +1905,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.role,
                 payload.enabled,
                 principal.user_id,
+                principal.permissions,
             )
+        except PermissionEscalationError as exc:
+            return escalation_error(exc)
+        except FieldError as exc:
+            if exc.status_code == 404:
+                raise StarletteHTTPException(status_code=404) from None
+            return _field_error(exc, "invalid_user_update", 409)
         except ValueError as exc:
             return _error_payload("invalid_user_update", str(exc), 409)
         return {"status": "updated"}
@@ -1054,6 +1932,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         principal = require_principal(request, "token:write")
         require_csrf(request, principal)
+        if principal.token_id is not None:
+            # Scopes were only checked against the role, so a narrow, short-lived
+            # token could mint a 365-day token with every role permission.
+            raise StarletteHTTPException(status_code=403)
         try:
             token_id, token = await asyncio.to_thread(
                 auth_store.create_api_token,
@@ -1062,6 +1944,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.scopes,
                 payload.expires_in_seconds,
             )
+        except FieldError as exc:
+            return _field_error(exc, "invalid_token", 409)
         except ValueError as exc:
             return _error_payload("invalid_token", str(exc), 409)
         return {"id": token_id, "token": token}
@@ -1252,6 +2136,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _error_payload(
                 "quarantine_reason_required", "A quarantine reason is required", 409
             )
+        if not valid_package_name(ecosystem, name):
+            # The name ends up in the Verdaccio config and the audit log.
+            return _error_payload("invalid_package", "Invalid package name", 409)
         try:
             policy = await asyncio.to_thread(
                 package_catalog.set_policy,
@@ -1270,7 +2157,87 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "package",
             f"{ecosystem}:{name}",
         )
+        if payload.quarantined is not None:
+            # Quarantine is enforced on the serving path: Verdaccio denies the
+            # name after a reload, and the PyPI router 404s it immediately.
+            if ecosystem == "npm":
+                await reload_npm(principal.user_id)
+            elif payload.quarantined:
+                await purge_quarantined_pypi(name, principal.user_id)
         return policy
+
+    async def audit_op(
+        principal: Principal,
+        action: str,
+        object_type: str,
+        object_id: str | None,
+        result: str = "success",
+    ) -> None:
+        await asyncio.to_thread(
+            auth_store.record_audit,
+            principal.user_id,
+            action,
+            object_type,
+            None if object_id is None else object_id[:255],
+            result,
+        )
+
+    @app.get("/api/v1/packages/trash", include_in_schema=False)
+    async def package_trash(request: Request) -> dict[str, object]:
+        require_principal(request, "cache:read")
+        return {"items": await asyncio.to_thread(task_manager.list_trash)}
+
+    @app.post(
+        "/api/v1/packages/trash/{trash_id}/restore",
+        include_in_schema=False,
+        response_model=None,
+    )
+    async def restore_package_trash(
+        trash_id: str, request: Request
+    ) -> JSONResponse | dict[str, object]:
+        principal = require_principal(request, "cache:write")
+        require_csrf(request, principal)
+        if not TRASH_ID.match(trash_id):
+            raise StarletteHTTPException(status_code=404)
+        await audit_op(principal, "package.trash.restore", "trash", trash_id, "attempt")
+        try:
+            restored = await asyncio.to_thread(task_manager.restore_trash, trash_id)
+        except KeyError:
+            await audit_op(principal, "package.trash.restore", "trash", trash_id, "failure")
+            raise StarletteHTTPException(status_code=404) from None
+        except (FileExistsError, FileNotFoundError, OSError) as exc:
+            await audit_op(principal, "package.trash.restore", "trash", trash_id, "failure")
+            return _error_payload("trash_restore_conflict", str(exc), 409)
+        await audit_op(principal, "package.trash.restore", "trash", trash_id)
+        return {**restored, "status": "restored"}
+
+    @app.delete(
+        "/api/v1/packages/trash/{trash_id}",
+        include_in_schema=False,
+        response_model=None,
+    )
+    async def delete_package_trash(
+        trash_id: str, payload: TrashDeleteRequest, request: Request
+    ) -> JSONResponse | dict[str, object]:
+        principal = require_principal(request, "cache:write")
+        require_csrf(request, principal)
+        if not TRASH_ID.match(trash_id):
+            raise StarletteHTTPException(status_code=404)
+        if payload.confirmation.strip() != f"DELETE {trash_id}":
+            return _error_payload(
+                "confirmation_mismatch", f"Type DELETE {trash_id} to confirm", 400
+            )
+        await audit_op(principal, "package.trash.delete", "trash", trash_id, "attempt")
+        try:
+            deleted = await asyncio.to_thread(task_manager.delete_trash, trash_id)
+        except KeyError:
+            await audit_op(principal, "package.trash.delete", "trash", trash_id, "failure")
+            raise StarletteHTTPException(status_code=404) from None
+        except OSError as exc:
+            await audit_op(principal, "package.trash.delete", "trash", trash_id, "failure")
+            return _error_payload("trash_delete_failed", str(exc), 409)
+        await audit_op(principal, "package.trash.delete", "trash", trash_id)
+        return {**deleted, "status": "deleted"}
 
     @app.post(
         "/api/v1/packages/{ecosystem}/{name:path}/purge-preview",
@@ -1293,50 +2260,71 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/packages/{ecosystem}/{name:path}/purge",
         include_in_schema=False,
         status_code=202,
+        response_model=None,
     )
     async def purge_package(
         ecosystem: str,
         name: str,
         payload: PurgePackageRequest,
         request: Request,
-    ) -> dict[str, str]:
+    ) -> JSONResponse | dict[str, str]:
         principal = require_principal(request, "task:write")
         require_csrf(request, principal)
+        try:
+            preview = await asyncio.to_thread(
+                package_catalog.purge_preview, ecosystem, name
+            )
+        except KeyError:
+            raise StarletteHTTPException(status_code=404) from None
+        object_id = f"{ecosystem}:{preview['name']}"
+        if payload.confirmation.strip() != preview["confirmation"]:
+            await audit_op(principal, "package.purge", "package", object_id, "failure")
+            return _error_payload(
+                "confirmation_mismatch", "Purge confirmation does not match", 409
+            )
+        if preview["blocked_by_pin"]:
+            await audit_op(principal, "package.purge", "package", object_id, "failure")
+            return _error_payload("package_pinned", "Package is pinned", 409)
+        await audit_op(principal, "package.purge", "package", object_id, "attempt")
         task_id = await asyncio.to_thread(
             task_manager.enqueue,
             "package.purge",
             {
                 "ecosystem": ecosystem,
-                "name": name,
-                "confirmation": payload.confirmation,
+                "name": str(preview["name"]),
+                "confirmation": str(preview["confirmation"]),
             },
             principal.user_id,
         )
-        await asyncio.to_thread(
-            auth_store.record_audit,
-            principal.user_id,
-            "package.purge.enqueue",
-            "task",
-            task_id,
-        )
+        await audit_op(principal, "package.purge.enqueue", "task", task_id)
         return {"task_id": task_id, "state": "pending"}
 
     @app.post(
         "/api/v1/packages/{ecosystem}/{name:path}/revalidate",
         include_in_schema=False,
         status_code=202,
+        response_model=None,
     )
     async def revalidate_package(
         ecosystem: str, name: str, request: Request
-    ) -> dict[str, str]:
+    ) -> JSONResponse | dict[str, str]:
         principal = require_principal(request, "task:write")
         require_csrf(request, principal)
+        if ecosystem not in {"npm", "pypi"} or not valid_package_name(ecosystem, name):
+            raise StarletteHTTPException(status_code=404)
+        object_id = f"{ecosystem}:{name}"
+        if await asyncio.to_thread(package_catalog.is_quarantined, ecosystem, name):
+            await audit_op(principal, "package.revalidate", "package", object_id, "failure")
+            return _error_payload("package_quarantined", "Package is quarantined", 409)
+        # Revalidate deletes the cached copy before re-fetching it.
+        await audit_op(principal, "package.revalidate", "package", object_id, "attempt")
         task_id = await asyncio.to_thread(
             task_manager.enqueue,
             "package.revalidate",
             {"ecosystem": ecosystem, "name": name},
             principal.user_id,
         )
+        await audit_op(principal, "package.revalidate.enqueue", "task", task_id)
         return {"task_id": task_id, "state": "pending"}
 
     @app.post(
@@ -1358,6 +2346,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"ecosystem": payload.ecosystem, "content": payload.content},
             principal.user_id,
         )
+        await audit_op(principal, "package.prefetch.enqueue", "task", task_id)
         return {"task_id": task_id, "state": "pending"}
 
     @app.get("/api/v1/tasks", include_in_schema=False)
@@ -1369,42 +2358,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def cancel_task(task_id: str, request: Request) -> dict[str, str]:
         principal = require_principal(request, "task:write")
         require_csrf(request, principal)
-        if not await asyncio.to_thread(task_manager.cancel, task_id):
+        if len(task_id) > 48 or not await asyncio.to_thread(task_manager.cancel, task_id):
             raise StarletteHTTPException(status_code=409)
-        await asyncio.to_thread(
-            auth_store.record_audit,
-            principal.user_id,
-            "task.cancel",
-            "task",
-            task_id,
-        )
+        await audit_op(principal, "task.cancel", "task", task_id)
         return {"status": "cancel_requested"}
 
-    @app.post("/api/v1/tasks/{task_id}/retry", include_in_schema=False, status_code=202)
-    async def retry_task(task_id: str, request: Request) -> dict[str, str]:
+    @app.post(
+        "/api/v1/tasks/{task_id}/retry",
+        include_in_schema=False,
+        status_code=202,
+        response_model=None,
+    )
+    async def retry_task(
+        task_id: str, request: Request, payload: TaskRetryRequest | None = None
+    ) -> JSONResponse | dict[str, str]:
         principal = require_principal(request, "task:write")
         require_csrf(request, principal)
-        original = await asyncio.to_thread(task_manager.get_retry_payload, task_id)
-        if original is None:
+        if len(task_id) > 48:
             raise StarletteHTTPException(status_code=409)
-        kind, payload, _actor = original
-        retry_id = await asyncio.to_thread(
-            task_manager.enqueue, kind, payload, principal.user_id, task_id
-        )
+        await audit_op(principal, "task.retry", "task", task_id, "attempt")
+        try:
+            retry_id = await asyncio.to_thread(
+                task_manager.retry,
+                task_id,
+                principal.user_id,
+                payload.confirmation if payload is not None else None,
+            )
+        except RetryRejected as exc:
+            await audit_op(principal, "task.retry", "task", task_id, "failure")
+            return _error_payload(exc.code, str(exc), exc.status_code)
+        await audit_op(principal, "task.retry", "task", retry_id)
         return {"task_id": retry_id, "state": "pending"}
 
-    @app.get("/api/v1/lifecycle/cleanup-preview", include_in_schema=False)
-    async def cleanup_preview(
-        request: Request,
-        target_percent: int = Query(default=75, ge=20, le=90),
-    ) -> dict[str, object]:
-        require_principal(request, "cache:read")
-        total_bytes, used_bytes, free_bytes = await asyncio.to_thread(
-            shutil.disk_usage, active_settings.data_dir
-        )
-        target_used = int(total_bytes * (target_percent / 100))
-        required = max(0, used_bytes - target_used)
-        packages = await asyncio.to_thread(package_catalog.search, "", None, 500)
+    async def cleanup_candidates(
+        required: int,
+    ) -> tuple[list[dict[str, object]], int]:
+        """Oldest unpinned, unquarantined packages until ``required`` bytes add up."""
+        if required <= 0:
+            return [], 0
+        packages = await asyncio.to_thread(package_catalog.all_packages)
         eligible = sorted(
             (
                 package
@@ -1416,7 +2408,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         candidates: list[dict[str, object]] = []
         reclaimable = 0
         for package in eligible:
-            if reclaimable >= required and required > 0:
+            if reclaimable >= required:
                 break
             size = int(package.get("size_bytes", 0))
             candidates.append(
@@ -1425,12 +2417,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "name": package["name"],
                     "size_bytes": size,
                     "latest_mtime": package["latest_mtime"],
+                    # npm purges go to trash (same disk) until it expires.
+                    "frees_space_immediately": package["ecosystem"] == "pypi",
                 }
             )
             reclaimable += size
-        if required == 0:
-            candidates = []
-            reclaimable = 0
+        return candidates, reclaimable
+
+    async def required_reclaim(target_percent: int) -> tuple[int, int, int, int]:
+        total_bytes, used_bytes, free_bytes = await asyncio.to_thread(
+            shutil.disk_usage, active_settings.data_dir
+        )
+        target_used = int(total_bytes * (target_percent / 100))
+        return total_bytes, used_bytes, free_bytes, max(0, used_bytes - target_used)
+
+    @app.get("/api/v1/lifecycle/cleanup-preview", include_in_schema=False)
+    async def cleanup_preview(
+        request: Request,
+        target_percent: int = Query(default=75, ge=20, le=90),
+    ) -> dict[str, object]:
+        require_principal(request, "cache:read")
+        total_bytes, used_bytes, free_bytes, required = await required_reclaim(
+            target_percent
+        )
+        candidates, reclaimable = await cleanup_candidates(required)
+        trash = await asyncio.to_thread(task_manager.list_trash)
         return {
             "target_percent": target_percent,
             "current_percent": round((used_bytes / total_bytes) * 100, 1)
@@ -1441,27 +2452,146 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "free_bytes": free_bytes,
             "required_reclaim_bytes": required,
             "candidate_reclaim_bytes": reclaimable,
-            "candidates": candidates,
-            "truncated": len(packages) >= 500,
+            "candidates": candidates[:500],
+            "truncated": len(candidates) > 500,
+            "trash_bytes": sum(int(item.get("size_bytes") or 0) for item in trash),
             "dry_run": True,
+            # POST /api/v1/lifecycle/cleanup {target_percent, confirmation} purges these.
+            "confirmation": cleanup_confirmation(min(len(candidates), MAX_CLEANUP_CANDIDATES)),
+        }
+
+    @app.post(
+        "/api/v1/lifecycle/cleanup",
+        include_in_schema=False,
+        status_code=202,
+        response_model=None,
+    )
+    async def start_cleanup(
+        payload: LifecycleCleanupRequest, request: Request
+    ) -> JSONResponse | dict[str, object]:
+        """Enqueue ONE ``lifecycle.cleanup`` task that purges the candidates server-side.
+
+        Candidates come from ``candidates`` (explicit), ``target_bytes`` (oldest
+        first until that many bytes) or ``target_percent`` (same as the preview).
+        Pinned / quarantined / uncached packages are dropped here and re-checked
+        by the worker before each purge.
+        """
+        principal = require_principal(request, "task:write")
+        require_csrf(request, principal)
+        modes = [
+            payload.candidates is not None,
+            payload.target_bytes is not None,
+            payload.target_percent is not None,
+        ]
+        if sum(modes) != 1:
+            return _error_payload(
+                "cleanup_target_required",
+                "Give exactly one of candidates, target_bytes or target_percent",
+                422,
+            )
+        selected: list[dict[str, object]] = []
+        skipped: list[dict[str, object]] = []
+        if payload.candidates is not None:
+            seen: set[str] = set()
+            for item in payload.candidates:
+                try:
+                    preview = await asyncio.to_thread(
+                        package_catalog.purge_preview, item.ecosystem, item.name
+                    )
+                except KeyError:
+                    skipped.append(
+                        {"ecosystem": item.ecosystem, "name": item.name, "reason": "not_cached"}
+                    )
+                    continue
+                name = str(preview["name"])
+                key = f"{item.ecosystem}:{name}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                if preview["blocked_by_pin"] or preview.get("quarantined"):
+                    skipped.append(
+                        {
+                            "ecosystem": item.ecosystem,
+                            "name": name,
+                            "reason": "package_pinned"
+                            if preview["blocked_by_pin"]
+                            else "package_quarantined",
+                        }
+                    )
+                    continue
+                selected.append(
+                    {
+                        "ecosystem": item.ecosystem,
+                        "name": name,
+                        "size_bytes": preview.get("size_bytes", 0),
+                    }
+                )
+        else:
+            if payload.target_bytes is not None:
+                required = payload.target_bytes
+            else:
+                _total, _used, _free, required = await required_reclaim(
+                    int(payload.target_percent or 75)
+                )
+            candidates, _reclaimable = await cleanup_candidates(required)
+            selected = [
+                {
+                    "ecosystem": item["ecosystem"],
+                    "name": item["name"],
+                    "size_bytes": item["size_bytes"],
+                }
+                for item in candidates[:MAX_CLEANUP_CANDIDATES]
+            ]
+        if not selected:
+            return _error_payload(
+                "nothing_to_clean", "No package can be cleaned up", 409, skipped=skipped
+            )
+        expected = cleanup_confirmation(len(selected))
+        if payload.confirmation.strip() != expected:
+            await audit_op(principal, "lifecycle.cleanup", "lifecycle", "cleanup", "failure")
+            return _error_payload(
+                "confirmation_mismatch",
+                f"Type {expected} to confirm",
+                409,
+                expected_confirmation=expected,
+                candidate_count=len(selected),
+            )
+        await audit_op(principal, "lifecycle.cleanup", "lifecycle", "cleanup", "attempt")
+        task_id = await asyncio.to_thread(
+            task_manager.enqueue,
+            "lifecycle.cleanup",
+            {
+                "candidates": [
+                    {"ecosystem": item["ecosystem"], "name": item["name"]} for item in selected
+                ],
+                "target_bytes": payload.target_bytes,
+                "target_percent": payload.target_percent,
+            },
+            principal.user_id,
+        )
+        await audit_op(principal, "lifecycle.cleanup.enqueue", "task", task_id)
+        return {
+            "task_id": task_id,
+            "state": "pending",
+            "kind": "lifecycle.cleanup",
+            "candidate_count": len(selected),
+            "candidate_reclaim_bytes": sum(
+                int(item.get("size_bytes") or 0) for item in selected  # type: ignore[call-overload]
+            ),
+            "skipped": skipped,
         }
 
     @app.post("/api/v1/lifecycle/integrity-scan", include_in_schema=False, status_code=202)
     async def enqueue_integrity_scan(
         request: Request,
+        full: bool = Query(default=False),
     ) -> dict[str, str]:
         principal = require_principal(request, "task:write")
         require_csrf(request, principal)
         task_id = await asyncio.to_thread(
-            task_manager.enqueue, "integrity.scan", {}, principal.user_id
+            task_manager.enqueue, "integrity.scan", {"full": full}, principal.user_id
         )
-        await asyncio.to_thread(
-            auth_store.record_audit,
-            principal.user_id,
-            "integrity.scan.enqueue",
-            "task",
-            task_id,
-        )
+        await audit_op(principal, "integrity.scan.enqueue", "task", task_id)
         return {"task_id": task_id, "state": "pending"}
 
     @app.get("/api/v1/backups", include_in_schema=False)
@@ -1469,21 +2599,81 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_principal(request, "backup:read")
         return {"items": await asyncio.to_thread(backup_manager.list)}
 
-    @app.post("/api/v1/backups", include_in_schema=False, status_code=201)
+    @app.post(
+        "/api/v1/backups",
+        include_in_schema=False,
+        status_code=202,
+        response_model=None,
+    )
     async def create_backup(
-        payload: BackupSecretRequest, request: Request
-    ) -> dict[str, object]:
+        payload: BackupCreateRequest, request: Request
+    ) -> JSONResponse | dict[str, object]:
         principal = require_principal(request, "backup:write")
         require_csrf(request, principal)
-        result = await asyncio.to_thread(backup_manager.create, payload.passphrase)
-        await asyncio.to_thread(
-            auth_store.record_audit,
-            principal.user_id,
-            "backup.create",
-            "backup",
-            str(result["backup_id"]),
+        await audit_op(principal, "backup.create", "backup", payload.profile, "attempt")
+        try:
+            task_id = await asyncio.to_thread(
+                task_manager.enqueue_backup,
+                payload.profile,
+                payload.passphrase,
+                principal.user_id,
+            )
+        except ValueError as exc:
+            await audit_op(principal, "backup.create", "backup", payload.profile, "failure")
+            return _error_payload("backup_rejected", str(exc), 409)
+        await audit_op(principal, "backup.create.enqueue", "task", task_id)
+        return {"task_id": task_id, "state": "pending", "profile": payload.profile}
+
+    @app.get(
+        "/api/v1/backups/{backup_ref}/download",
+        include_in_schema=False,
+        response_model=None,
+    )
+    async def download_backup(
+        backup_ref: str, request: Request
+    ) -> StreamingResponse | JSONResponse:
+        """Stream one encrypted MRKBKP archive (by filename or backup_id).
+
+        backup:write, not backup:read: the file is the whole appliance's state.
+        It is already encrypted and is served byte-for-byte, never decrypted.
+        """
+        principal = require_principal(request, "backup:write")
+        object_id = backup_ref[:128]
+        try:
+            path, filename, size = await asyncio.to_thread(
+                backup_manager.resolve_download, backup_ref
+            )
+            # Opened before responding so a concurrent prune cannot cut the stream.
+            handle = await asyncio.to_thread(path.open, "rb")
+        except FileNotFoundError:
+            await audit_op(principal, "backup.download", "backup", object_id, "failure")
+            return _error_payload("backup_not_found", "Backup was not found", 404)
+        except (OSError, ValueError):
+            await audit_op(principal, "backup.download", "backup", object_id, "failure")
+            return _error_payload("backup_download_rejected", "Invalid backup", 409)
+        await audit_op(principal, "backup.download", "backup", filename)
+        safe_name = "".join(
+            char if char.isalnum() or char in "._-" else "_" for char in filename
         )
-        return result
+
+        async def body() -> AsyncIterator[bytes]:
+            try:
+                while True:
+                    chunk = await asyncio.to_thread(handle.read, 1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                await asyncio.to_thread(handle.close)
+
+        return StreamingResponse(
+            body(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_name}"',
+                "Content-Length": str(size),
+            },
+        )
 
     @app.post(
         "/api/v1/backups/{filename}/validate",
@@ -1495,11 +2685,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> JSONResponse | dict[str, object]:
         principal = require_principal(request, "backup:write")
         require_csrf(request, principal)
+        if len(filename) > 128:
+            return _error_payload("backup_validation_failed", "Invalid backup filename", 409)
         try:
             result = await asyncio.to_thread(
                 backup_manager.validate, filename, payload.passphrase
             )
-        except (FileNotFoundError, ValueError):
+        except (OSError, ValueError, KeyError):
             await asyncio.to_thread(
                 auth_store.record_audit,
                 principal.user_id,
@@ -1530,6 +2722,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> JSONResponse | dict[str, object]:
         principal = require_principal(request, "backup:write")
         require_csrf(request, principal)
+        if len(filename) > 128:
+            return _error_payload("restore_plan_rejected", "Invalid backup filename", 409)
         try:
             plan = await asyncio.to_thread(
                 backup_manager.create_restore_plan,
@@ -1538,7 +2732,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.confirmation,
                 principal.user_id,
             )
-        except (FileNotFoundError, ValueError):
+        except (OSError, ValueError, KeyError):
             await asyncio.to_thread(
                 auth_store.record_audit,
                 principal.user_id,
@@ -1569,6 +2763,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         }
 
+    from .modules import register_all
+
+    module_ctx = ModuleContext(
+        settings=active_settings,
+        data_dir=active_settings.data_dir,
+        database=database,
+        auth_store=auth_store,
+        secret_store=secret_store,
+        network_settings=network_settings,
+        events=events,
+        require_principal=require_principal,
+        require_csrf=require_csrf,
+        error_payload=_error_payload,
+    )
+    app.state.modules = register_all(module_ctx)
+    app.state.events = events
+    module_state["ctx"] = module_ctx
+    for router in module_ctx.routers:
+        app.include_router(router)
+
+    # ---- settings registry (settings_registry*.py, docs/27 §1.6) ----
+    from .settings_registry_api import build_registry_router, collect_module_services
+
+    app.include_router(
+        build_registry_router(
+            data_dir=active_settings.data_dir,
+            services=collect_module_services(),
+            network=network_settings,
+            auth_store=auth_store,
+            require_principal=require_principal,
+            require_csrf=require_csrf,
+            error_payload=_error_payload,
+            client_context=lambda request: (
+                request.client.host if request.client else None,
+                correlation_id_context.get(),
+            ),
+        )
+    )
+    # ---- end settings registry ----
+
     if active_settings.admin_ui_dir and active_settings.admin_ui_dir.is_dir():
         app.mount(
             "/",
@@ -1584,10 +2818,14 @@ app = create_app()
 
 def run() -> None:
     settings = Settings.from_env()
+    # Behind a reverse proxy, client IPs (login throttling, audit) are only
+    # trustworthy when forwarded headers come from a known proxy address.
     uvicorn.run(
         "mrk_control_plane.main:app",
         host=settings.host,
         port=settings.port,
         log_config=None,
         access_log=True,
+        proxy_headers=True,
+        forwarded_allow_ips=os.getenv("MRK_TRUSTED_PROXIES", "127.0.0.1"),
     )

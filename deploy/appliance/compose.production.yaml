@@ -8,6 +8,13 @@ services:
       MRK_ENV: production
       MRK_DATA_DIR: /data
       MRK_UPSTREAM_SECRET_KEY_FILE: ${MRK_UPSTREAM_SECRET_KEY_FILE:-}
+      # Host Agent pairing from the environment (optional; both must be set, and the
+      # key file must be mounted into this container). Otherwise pair in the Admin UI.
+      MRK_AGENT_URL: ${MRK_AGENT_URL:-}
+      MRK_AGENT_KEY_FILE: ${MRK_AGENT_KEY_FILE:-}
+      # Firewall helper pairing from the environment (optional, like the agent).
+      MRK_FIREWALL_URL: ${MRK_FIREWALL_URL:-}
+      MRK_FIREWALL_KEY_FILE: ${MRK_FIREWALL_KEY_FILE:-}
       MRK_LOG_LEVEL: ${MRK_LOG_LEVEL:-INFO}
       MRK_ADMIN_UI_DIR: /opt/mrk/admin-ui
       MRK_CORS_ORIGINS: ${MRK_CORS_ORIGINS:-https://packages.example.com}
@@ -24,15 +31,30 @@ services:
       MRK_PYPI_ROUTER_PORT: "3142"
       MRK_PYPI_ROUTER_HEALTH_HOST: 127.0.0.1
       MRK_PYPI_ROUTER_READ_TIMEOUT: ${MRK_PYPI_ROUTER_READ_TIMEOUT:-90}
-      MRK_PYPI_REQUEST_TIMEOUT: ${MRK_PYPI_REQUEST_TIMEOUT:-90}
+      MRK_PYPI_REQUEST_TIMEOUT: ${MRK_PYPI_REQUEST_TIMEOUT:-900}
       MRK_AUTH_COOKIE_SECURE: ${MRK_AUTH_COOKIE_SECURE:-true}
       MRK_SESSION_TTL_SECONDS: ${MRK_SESSION_TTL_SECONDS:-28800}
     volumes:
       - /opt/mirrors/pypi:/data
+      # Optional: linked-folder S3 buckets (docs/30 §3.2). Mount host folders under
+      # /mnt/links (readable/writable by UID 10001; add :ro for read-only buckets),
+      # then link them in the panel. One parent mount lets you add folders without
+      # recreating the container.
+      # - /srv/files:/mnt/links/files
+      # Unix socket of the optional mrk-firewall helper (Gate 19 S7). Read-only is
+      # enough to connect; the volume stays empty unless the `firewall` profile runs.
+      - mrk-firewall-run:/run/mrk-firewall:ro
     expose:
       - "8080"
       - "4873"
       - "3141"
+      # Native S3 API (s3-engine). Like npm/PyPI it is reached only through the
+      # reverse proxy (Dokploy/Traefik): route s3.<domain> (and *.s3.<domain>) to
+      # port 9000 with the original Host header and no request-body buffering.
+      - "9000"
+    networks:
+      - default
+      - mrk-agent
     init: true
     read_only: true
     tmpfs:
@@ -41,16 +63,187 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    pids_limit: 256
-    stop_grace_period: 45s
+    # Resource ceilings for one node (PGlite, Verdaccio, devpi, control plane,
+    # router). Threads count against pids_limit; devpi alone runs MRK_PYPI_THREADS.
+    mem_limit: ${MRK_MEM_LIMIT:-2g}
+    memswap_limit: ${MRK_MEM_LIMIT:-2g}
+    cpus: ${MRK_CPUS:-2.0}
+    pids_limit: 512
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # Supervisor stops services one priority group at a time, PGlite last
+    # (worst case ~115s, see supervisord.conf); SIGKILL earlier risks the database.
+    stop_grace_period: 180s
     healthcheck:
       test: ["CMD", "python", "-m", "mrk_control_plane.healthcheck"]
       interval: 30s
       timeout: 8s
       retries: 3
-      start_period: 45s
+      # First boot (PGlite initdb, devpi-init, migrations) can take minutes.
+      start_period: 300s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Optional native Host Agent (Gate 16, read-only). Not started unless you run
+  # `docker compose --profile agent up -d`. Same image, different entrypoint.
+  # SECURITY: access to the Docker socket is equivalent to root on the host. The
+  # agent only ever issues the read-only GET calls on its in-code allowlist, only
+  # answers HMAC-signed requests, and has NO published ports (private network only).
+  mrk-agent:
+    image: ${MRK_IMAGE:?Set MRK_IMAGE to an immutable ghcr.io image digest}
+    pull_policy: always
+    profiles: ["agent"]
+    entrypoint: ["mrk-agent"]
+    restart: unless-stopped
+    # Default "0:0" with every capability dropped except DAC_READ_SEARCH/
+    # DAC_OVERRIDE: Docker keeps volume data in root-only directories, so this is
+    # what lets server backups read volumes. All host mounts stay read-only and the
+    # Docker socket already equals host root. Set MRK_AGENT_USER="10001:<docker gid>"
+    # to run fully unprivileged (volume backups are then unavailable).
+    user: "${MRK_AGENT_USER:-0:0}"
+    group_add:
+      - "${MRK_DOCKER_GID:-999}"
+    environment:
+      MRK_LOG_LEVEL: ${MRK_LOG_LEVEL:-INFO}
+      MRK_AGENT_LISTEN: 0.0.0.0:7070
+      MRK_AGENT_STATE_DIR: /data/agent
+      MRK_AGENT_DOCKER_SOCKET: /var/run/docker.sock
+      MRK_AGENT_HOST_PROC: /host/proc
+      # Read-only cgroup v2 tree for per-container CPU/memory/IO counters (Gate 17).
+      MRK_AGENT_HOST_CGROUP: /host/cgroup
+      # Read-only Docker volumes tree for server backups (Gate 18 S6).
+      MRK_AGENT_HOST_VOLUMES: /host/volumes
+      # Containers matching these are reported as protected (Dokploy is never touched).
+      MRK_AGENT_PROTECTED_NAME_REGEX: ${MRK_AGENT_PROTECTED_NAME_REGEX:-}
+    volumes:
+      # Agent state (pairing key, mode 0600). Docker seeds the new volume from the
+      # image's 10001-owned /data, so the unprivileged user can write it.
+      - mrk-agent-state:/data
+      # `:ro` would NOT restrict the Docker API; the in-code allowlist does.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/cgroup:ro
+      # Gate 18 server backups: volumes are archived from here, read-only (needs
+      # the default root user + DAC capabilities above). Remove this line to
+      # disable volume backups; database dumps do not need it.
+      - /var/lib/docker/volumes:/host/volumes:ro
+      # Optional: host root, read-only, used only for statvfs disk usage and the
+      # host name. Remove this line to hide the host filesystem from the agent; disk
+      # usage then falls back to the container's own root filesystem.
+      - /:/host/root:ro
+    networks:
+      - mrk-agent
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+      - DAC_OVERRIDE
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7070/v1/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional native firewall helper (Gate 19 S7). Not started unless you run
+  # `docker compose --profile firewall up -d mrk-firewall`. Same image.
+  # SECURITY: root with ONLY CAP_NET_ADMIN (Docker grants added capabilities to
+  # root only; nftables needs netlink with NET_ADMIN), in the host network
+  # namespace (nftables rules are per namespace), read-only root fs and read-only
+  # log mounts. It manages exactly one nftables table, `inet mrk` (hook prerouting,
+  # priority raw), and never touches Docker/Dokploy chains. NO ports: it listens on
+  # a Unix socket in the `mrk-firewall-run` volume, which only mrk-mirror mounts,
+  # and every request must be HMAC-signed with its own pairing key. Dry-run is the
+  # default; enforcing needs the typed confirmation "ENFORCE" in the panel.
+  mrk-firewall:
+    image: ${MRK_IMAGE:?Set MRK_IMAGE to an immutable ghcr.io image digest}
+    pull_policy: always
+    profiles: ["firewall"]
+    entrypoint: ["mrk-firewall"]
+    restart: unless-stopped
+    user: "0:0"
+    network_mode: host
+    environment:
+      MRK_LOG_LEVEL: ${MRK_LOG_LEVEL:-INFO}
+      MRK_FIREWALL_LISTEN: unix:/run/mrk-firewall/firewall.sock
+      MRK_FIREWALL_STATE_DIR: /var/lib/mrk-firewall
+      MRK_FIREWALL_LOG_ROOT: /host/log
+      # true = never install rules, whatever the panel says (emergency brake).
+      MRK_FIREWALL_FORCE_DRY_RUN: ${MRK_FIREWALL_FORCE_DRY_RUN:-false}
+    volumes:
+      # Pairing key (firewall.key, mode 0600) and the last applied desired state,
+      # re-applied on start so blocks survive a restart.
+      - mrk-firewall-state:/var/lib/mrk-firewall
+      - mrk-firewall-run:/run/mrk-firewall
+      # Read-only log sources. Only parsed signals (ip, kind, short detail) ever
+      # leave the helper, never raw lines. /var/log/auth.log -> sshd source
+      # /host/log/system/auth.log (journald-only hosts: see deploy/appliance/README.md).
+      - /var/log:/host/log/system:ro
+      # Optional Traefik (Dokploy) access log, JSON or common format; set the same
+      # path (/host/log/traefik/access.log) in the panel and enable the source.
+      # - /etc/dokploy/traefik/dynamic/access.log:/host/log/traefik/access.log:ro
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import httpx; httpx.Client(transport=httpx.HTTPTransport(uds='/run/mrk-firewall/firewall.sock'), timeout=3).get('http://mrk-firewall/v1/health').raise_for_status()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mrk-agent-state:
+  mrk-firewall-state:
+  mrk-firewall-run:
+
+networks:
+  # Internal-only network between mrk-mirror and the optional mrk-agent; no egress.
+  mrk-agent:
+    internal: true

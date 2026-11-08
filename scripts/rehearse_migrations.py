@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import secrets
 import tempfile
@@ -27,10 +28,29 @@ def _config(database: Database) -> Config:
     return config
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Rehearse Alembic downgrade/upgrade")
+    parser.add_argument(
+        "--database-url",
+        default=None,
+        help=(
+            "SQLAlchemy URL of an empty database to rehearse against "
+            "(e.g. PGlite on 127.0.0.1:5433); defaults to a temporary SQLite file"
+        ),
+    )
+    args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory(prefix="mrk-migration-rehearsal-") as temporary:
         data_dir = Path(temporary)
-        database = Database(data_dir)
+        database = Database(data_dir, args.database_url)
+        if not database.is_embedded_sqlite:
+            database.wait_until_reachable()
+        existing = inspect(database.engine).get_table_names()
+        if existing:
+            database.dispose()
+            # The rehearsal downgrades the schema; never run it against real data.
+            raise SystemExit(
+                f"refusing to rehearse migrations on a non-empty database ({len(existing)} tables)"
+            )
         database.initialize()
         auth = AuthStore(data_dir, database=database)
         password = f"migration-rehearsal-{secrets.token_urlsafe(18)}"
@@ -51,6 +71,7 @@ def main() -> None:
         print(
             json.dumps(
                 {
+                    "dialect": database.dialect,
                     "downgrade": "20261107_0001",
                     "upgrade": revision,
                     "data_preserved": True,

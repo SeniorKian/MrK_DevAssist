@@ -1,0 +1,18 @@
+# Runtime packages installed into the appliance image next to the control plane.
+# Single source of truth for deploy/appliance/Dockerfile and the CI workflows;
+# Dependabot (pip, /deploy/appliance) proposes updates. The image build fails if
+# the control plane's own requirements resolve any of these to another version.
+# Versions only, no hashes yet (see the TODO in the Dockerfile).
+supervisor==4.3.0
+setuptools==81.0.0
+msgpack==1.2.4
+urllib3==2.8.0
+devpi-server==6.21.0
+devpi-web==5.2.0
+devpi-client==7.3.0
+socksio==1.0.0
+awscrt==0.38.1
+PyMySQL==1.2.3
+pymongo==4.19.0
+dnspython==2.9.2
+redis==8.1.0
