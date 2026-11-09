@@ -10,8 +10,11 @@ PyPI (devpi): the control plane acts as devpi ``root`` (``--restrict-modify root
 creates user ``<slug>`` with index ``<slug>/dev`` (bases ``root/pypi``) and one devpi
 user ``<slug>-t<hex>`` per token, listed in the index ``acl_upload``.
 
-Size quotas (``npm_bytes``/``pypi_bytes``) are checked after the fact: once a workspace is
-at or over its limit, publishing is switched off for it until it deletes versions.
+Size quotas (``npm_bytes``/``pypi_bytes``) are enforced before a publish is stored: the
+limits go to ``npm/config/tenancy.json`` (``quota_bytes``, read by the Verdaccio plugin
+``deploy/verdaccio/plugins/verdaccio-mrk-quota``) and ``pypi/quotas.json`` (read by the
+devpi tween in ``devpi_quota``). After the fact, a workspace at or over its limit also has
+publishing switched off until it deletes versions (docs/43 §0.1).
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from ..catalog import PYPI_NAME, normalize_pypi
+from ..devpi_quota import quota_file as pypi_quota_file
 from ..models import ServiceDomain
 from ..process_control import reload_verdaccio_best_effort
 from ..tenancy import TenancyError, WorkspaceContext, not_found
@@ -206,6 +210,13 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
                           "bytes": _dir_bytes(package)})
         return items
 
+    def size_limit(workspace_id: str, ecosystem: str) -> int | None:
+        try:
+            value = store.limits_for(workspace_id)["quotas"].get(f"{ecosystem}_bytes")
+        except TenancyError:
+            return 0  # workspace gone: nothing may be stored any more
+        return None if value is None else int(value)
+
     def write_npm_config() -> None:
         """htpasswd (managed users) + tenancy.json from every workspace's npm scope."""
         owners = store.all_owned(("npm_scope",))
@@ -217,7 +228,8 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
                 managed.append(f"{token['username']}:{token['hash']}")
             scopes.append({"scope": owner["resource_id"],
                            "users": [token["username"] for token in tokens],
-                           "publish": bool(owner["meta"].get("publish", True))})
+                           "publish": bool(owner["meta"].get("publish", True)),
+                           "quota_bytes": size_limit(owner["workspace_id"], "npm")})
         htpasswd = npm_root / "auth" / "htpasswd"
         htpasswd.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         kept = []
@@ -228,6 +240,29 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
         target = npm_root / "config" / "tenancy.json"
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         _atomic(target, json.dumps({"scopes": scopes}, indent=1))
+
+    def pypi_quota_target() -> Path:
+        # devpi reads MRK_PYPI_QUOTA_FILE, else $MRK_DATA_DIR/pypi/quotas.json.
+        return pypi_quota_file() if os.getenv("MRK_PYPI_QUOTA_FILE") \
+            else data_dir / "pypi" / "quotas.json"
+
+    def write_pypi_quotas() -> None:
+        """pypi/quotas.json: the pre-upload limit of every workspace index (devpi_quota)."""
+        indexes = {owner["resource_id"]: size_limit(owner["workspace_id"], "pypi")
+                   for owner in store.all_owned(("pypi_index",))}
+        target = pypi_quota_target()
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _atomic(target, json.dumps({"indexes": indexes}, indent=1))
+
+    def refresh_quota_files() -> None:
+        """Plans or overrides changed (or start-up): rewrite the limit files in use."""
+        if store.all_owned(("npm_scope",)) or (npm_root / "config" / "tenancy.json").exists():
+            write_npm_config()
+        if store.all_owned(("pypi_index",)) or pypi_quota_target().exists():
+            write_pypi_quotas()
+
+    async def refresh_quotas() -> None:
+        await asyncio.to_thread(refresh_quota_files)
 
     # ---------------------------------------------------------------- helpers
     def owner_row(wctx: WorkspaceContext, ecosystem: str) -> dict[str, Any] | None:
@@ -360,6 +395,8 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
                     entry["hash"] = npm_hash(secret)
                 tokens.append(entry)
                 if ecosystem == "pypi":
+                    # The limit is in place before the index can take its first upload.
+                    await asyncio.to_thread(write_pypi_quotas)
                     await devpi().create_user(username, secret)
                     await devpi().ensure_index(wctx.slug, [t["username"] for t in tokens])
                 await asyncio.to_thread(store.set_meta, kind, rid, {"tokens": tokens})
@@ -468,10 +505,19 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
         for token in item["meta"].get("tokens") or []:
             await devpi().delete_user(token["username"])
         await devpi().delete_user(slug)
+        await asyncio.to_thread(write_pypi_quotas)
+
+    async def start() -> None:
+        try:
+            await refresh_quotas()
+        except Exception:  # noqa: BLE001 - registries keep their last files
+            LOGGER.exception("could not write the package quota files")
 
     space.usage_providers.append(usage)
     space.cleanup["npm_scope"] = cleanup_npm
     space.cleanup["pypi_index"] = cleanup_pypi
+    space.after_quota_change.append(refresh_quotas)
+    ctx.start_hooks.append(start)
 
 
 def _atomic(path: Path, text: str) -> None:

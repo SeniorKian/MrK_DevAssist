@@ -19,6 +19,16 @@ from .upstream_store import UpstreamStore
 LOGGER = logging.getLogger(__name__)
 
 VERDACCIO_BINARY = "/opt/verdaccio/node_modules/.bin/verdaccio"
+# docs/43 §0.1: pre-publish size quota for workspace scopes (deploy/verdaccio/plugins).
+QUOTA_PLUGIN = "verdaccio-mrk-quota"
+
+
+def plugins_dir() -> Path:
+    return Path(os.getenv("MRK_NPM_PLUGINS_DIR", "/opt/verdaccio/plugins"))
+
+
+def quota_plugin_available() -> bool:
+    return (plugins_dir() / QUOTA_PLUGIN / "index.js").is_file()
 
 
 QUARANTINE_GROUP = "mrk-quarantine-none"
@@ -138,8 +148,11 @@ def _tenancy_rules(data_dir: Path) -> tuple[list[dict[str, object]], str]:
             continue
         users = [user for user in item.get("users") or [] if isinstance(user, str)
                  and _USER.fullmatch(user) and user.startswith(MANAGED_USER_PREFIX)]
+        quota = item.get("quota_bytes")
         scopes.append({"scope": item["scope"], "users": users,
-                       "publish": item.get("publish", True) is True})
+                       "publish": item.get("publish", True) is True,
+                       "quota_bytes": quota if isinstance(quota, int)
+                       and not isinstance(quota, bool) and quota >= 0 else None})
     if not scopes:
         return [], "$authenticated"
     others: list[str] = []
@@ -151,6 +164,20 @@ def _tenancy_rules(data_dir: Path) -> tuple[list[dict[str, object]], str]:
     except OSError:
         pass
     return scopes, " ".join(others) or QUARANTINE_GROUP
+
+
+def _quota_plugin_lines(data_dir: Path) -> list[str]:
+    if not quota_plugin_available():
+        return []
+    tenancy_file = data_dir / "npm" / "config" / "tenancy.json"
+    return [
+        f"plugins: {_yaml_scalar(str(plugins_dir()))}",
+        "middlewares:",
+        "  mrk-quota:",
+        f"    tenancy_file: {_yaml_scalar(str(tenancy_file))}",
+        "    storage_dir: /data/npm/storage",
+        "",
+    ]
 
 
 def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
@@ -176,6 +203,7 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
     lines = [
         "storage: /data/npm/storage",
         "",
+        *_quota_plugin_lines(data_dir),
         "auth:",
         "  htpasswd:",
         "    file: /data/npm/auth/htpasswd",
@@ -221,7 +249,12 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
             ]
         )
     scopes, generic_publish = _tenancy_rules(data_dir)
+    quota_plugin = quota_plugin_available()
     for scope in scopes:
+        if scope["quota_bytes"] is not None and not quota_plugin:
+            # Fail closed: without the quota plugin a single publish could pass the limit.
+            LOGGER.error("npm quota plugin missing; publishing to %s is off", scope["scope"])
+            scope["publish"] = False
         # docs/43: a workspace's private scope, before the generic rules. Only its
         # token users may read or publish; never fetched from an uplink.
         users = " ".join(scope["users"]) or QUARANTINE_GROUP

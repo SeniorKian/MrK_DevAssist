@@ -557,6 +557,8 @@ build_node_parts() {
         run cp "$REPO_ROOT/deploy/$part/package.json" "$REPO_ROOT/deploy/$part/package-lock.json" "$RELEASE_DIR/$part/"
         npm_in "$RELEASE_DIR/$part" ci --omit=dev --ignore-scripts
     done
+    # docs/43 §0.1: Verdaccio's pre-publish quota plugin (no dependencies).
+    run cp -R "$REPO_ROOT/deploy/verdaccio/plugins" "$RELEASE_DIR/verdaccio/plugins"
     local build="$CACHE_DIR/build/admin-ui"
     run rm -rf "$build"
     run install -d -m 0755 "$build"

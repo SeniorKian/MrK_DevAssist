@@ -50,9 +50,12 @@ from .models import (
 
 SETTINGS_KEY: Final = "tenancy.settings"
 SIGNUP_MODES: Final = ("off", "approval", "open")
+# docs/43 §0.1: may a workspace invite create an account? "follow" = as ``signup``.
+INVITE_SIGNUP_MODES: Final = ("follow", "off", "approval", "open")
 DEFAULT_SETTINGS: Final[dict[str, Any]] = {
     "enabled": False,
     "signup": "off",
+    "invite_signup": "follow",
     "default_plan_id": "basic",
     "verify_domains": True,
     "admin_area_local_only": False,
@@ -302,6 +305,10 @@ def validate_settings(payload: Any, current: dict[str, Any]) -> dict[str, Any]:
             if value not in SIGNUP_MODES:
                 raise _invalid(key, "invalid_choice", "Choose off, approval or open",
                                choices=list(SIGNUP_MODES))
+        elif key == "invite_signup":
+            if value not in INVITE_SIGNUP_MODES:
+                raise _invalid(key, "invalid_choice", "Choose follow, off, approval or open",
+                               choices=list(INVITE_SIGNUP_MODES))
         elif key == "default_plan_id":
             if not isinstance(value, str) or not _PLAN_ID.fullmatch(value):
                 raise _invalid(key, "invalid_format", "Unknown plan")
@@ -1135,33 +1142,87 @@ class TenancyStore:
             self.auth._audit_db(db, ctx.user_id, "tenancy.invite.revoke", "workspace_invite",
                                 invite_id, "success", workspace_id=ctx.workspace_id)
 
-    def accept_invite(self, principal: Principal, token: Any) -> dict[str, Any]:
+    @staticmethod
+    def _open_invite(db: OrmSession, token: Any, now: int) -> WorkspaceInvite:
         if not isinstance(token, str) or not 10 <= len(token) <= 200:
             raise not_found()
+        row = db.scalar(select(WorkspaceInvite).where(
+            WorkspaceInvite.token_hash == _digest(token)))
+        if row is None or row.revoked_at is not None or row.accepted_at is not None \
+                or row.expires_at <= now:
+            raise not_found()
+        return row
+
+    def accept_invite(self, principal: Principal, token: Any) -> dict[str, Any]:
+        return self._accept(principal.user_id, principal.email, token)
+
+    def _accept(self, user_id: int, email: str | None, token: Any) -> dict[str, Any]:
         now = _now()
         with self.db.session() as db, db.begin():
-            row = db.scalar(select(WorkspaceInvite).where(
-                WorkspaceInvite.token_hash == _digest(token)))
-            if row is None or row.revoked_at is not None or row.accepted_at is not None \
-                    or row.expires_at <= now:
-                raise not_found()
-            if not principal.email or principal.email.lower() != row.email.lower():
+            row = self._open_invite(db, token, now)
+            if not email or email.lower() != row.email.lower():
                 raise not_found()
             workspace = db.get(Workspace, row.workspace_id, with_for_update=True)
             if workspace is None:
                 raise not_found()
-            if db.get(WorkspaceMember, (row.workspace_id, principal.user_id)) is not None:
+            if db.get(WorkspaceMember, (row.workspace_id, user_id)) is not None:
                 raise TenancyError("already_member", 409, "Already a member")
             count = db.scalar(select(func.count()).select_from(WorkspaceMember).where(
                 WorkspaceMember.workspace_id == row.workspace_id)) or 0
             check_quota(self._limits(db, workspace), "members", int(count))
-            db.add(WorkspaceMember(workspace_id=row.workspace_id, user_id=principal.user_id,
+            db.add(WorkspaceMember(workspace_id=row.workspace_id, user_id=user_id,
                                    role=row.role, created_at=now))
             row.accepted_at = now
-            self.auth._audit_db(db, principal.user_id, "tenancy.invite.accept",
+            self.auth._audit_db(db, user_id, "tenancy.invite.accept",
                                 "workspace_invite", row.id, "success",
                                 workspace_id=row.workspace_id)
             return {"workspace_id": row.workspace_id, "role": row.role}
+
+    # ------------------------------------------------------------------ invite sign-up
+    def invite_signup_mode(self) -> str:
+        """off / approval / open for people who come with a workspace invite."""
+        settings = self.get_settings()
+        mode = settings.get("invite_signup", "follow")
+        return str(settings["signup"] if mode == "follow" else mode)
+
+    def invite_preview(self, token: Any) -> dict[str, Any]:
+        """Public view of an invite link: who is invited where, and what they can do."""
+        with self.db.session() as db:
+            row = self._open_invite(db, token, _now())
+            workspace = db.get(Workspace, row.workspace_id)
+            if workspace is None:
+                raise not_found()
+            exists = db.scalar(select(func.count()).select_from(User).where(
+                func.lower(User.email) == row.email.lower())) or 0
+            return {"email": row.email, "role": row.role, "expires_at": row.expires_at,
+                    "workspace": {"name": workspace.name, "slug": workspace.slug},
+                    "account_exists": bool(exists), "signup": self.invite_signup_mode()}
+
+    def check_invite_signup(self, token: Any) -> dict[str, Any]:
+        """Everything a new account from this invite needs, checked before it is created."""
+        preview = self.invite_preview(token)
+        if preview["account_exists"]:
+            raise TenancyError("account_exists", 409,
+                               "An account with this email exists; sign in to join")
+        if preview["signup"] not in ("approval", "open"):
+            raise TenancyError("invite_signup_off", 403,
+                               "Accounts cannot be created from invites here")
+        with self.db.session() as db:
+            row = self._open_invite(db, token, _now())
+            workspace = db.get(Workspace, row.workspace_id)
+            if workspace is None:
+                raise not_found()
+            count = db.scalar(select(func.count()).select_from(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == row.workspace_id)) or 0
+            check_quota(self._limits(db, workspace), "members", int(count))
+        return preview
+
+    def accept_invite_as_new_user(self, user_id: int, token: Any) -> dict[str, Any]:
+        """Join the account just created from this invite (its email came from the invite)."""
+        with self.db.session() as db:
+            user = db.get(User, user_id)
+            email = user.email if user is not None else None
+        return self._accept(user_id, email, token)
 
     # ------------------------------------------------------------------ API tokens
     def list_tokens(self, ctx: WorkspaceContext) -> list[dict[str, Any]]:
@@ -1338,6 +1399,8 @@ class TenancyStore:
             self.auth._audit_db(db, actor, f"tenancy.signup.{'approve' if approve else 'reject'}",
                                 "user", str(user_id), "success")
             if not approve and user is not None:
+                # An invite sign-up already joined its team (docs/43 §0.1): leave it too.
+                db.execute(delete(WorkspaceMember).where(WorkspaceMember.user_id == user_id))
                 db.delete(user)
         if not approve:
             return {"status": "rejected"}

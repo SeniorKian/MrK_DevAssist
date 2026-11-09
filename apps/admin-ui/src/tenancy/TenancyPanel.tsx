@@ -46,7 +46,7 @@ import { UsageBar } from "../my/MyKit";
 import {
   approveSignup, deletePlan, fetchPlans, fetchSignups, fetchWorkspaceDetail, fetchWorkspaces, patchWorkspace, rejectSignup, removeWorkspace, savePlan,
   fetchTenancySettings, saveTenancySettings, startViewAs, transferOwnership, type AdminWorkspace, type ResourceRow, type Signup, type TenancySettings,
-  type WorkspaceDetail
+  type WorkspaceDetail, type InviteSignupMode
 } from "./tenancyApi";
 
 const featureOf = (key: string) => QUOTA_WORDS[key as QuotaKey]?.feature;
@@ -826,6 +826,17 @@ function SettingsTab() {
               ]}
             />
           </Box>
+          <TextField
+            select
+            label={pick(language, TENANCY.inviteSignup)}
+            helperText={pick(language, TENANCY.inviteSignupHint)}
+            value={settings.invite_signup}
+            disabled={busy}
+            onChange={(event) => { const next = event.target.value as InviteSignupMode; if (next !== settings.invite_signup) void save({ invite_signup: next }); }}
+            fullWidth
+          >
+            {(["follow", "off", "approval", "open"] as const).map((mode) => <MenuItem key={mode} value={mode}>{pick(language, TENANCY[`invite_${mode}`])}</MenuItem>)}
+          </TextField>
           <TextField select label={pick(language, TENANCY.defaultPlan)} value={settings.default_plan_id ?? ""} disabled={busy} onChange={(event) => void save({ default_plan_id: event.target.value || null })} fullWidth>
             <MenuItem value="">{pick(language, TENANCY.noDefault)}</MenuItem>
             {(plans.items ?? []).map((plan) => <MenuItem key={plan.id} value={plan.id}>{planName(language, plan)}</MenuItem>)}

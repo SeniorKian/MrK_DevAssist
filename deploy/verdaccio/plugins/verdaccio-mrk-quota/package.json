@@ -1,0 +1,8 @@
+{
+  "name": "verdaccio-mrk-quota",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pre-publish size quota for My space npm scopes (MRK appliance)",
+  "license": "MIT",
+  "main": "index.js"
+}
