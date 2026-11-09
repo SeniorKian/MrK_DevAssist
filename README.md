@@ -1,112 +1,164 @@
-# MRK Modular Infrastructure Appliance
+# Pishkar
 
-نسخه سند: 0.1  
-تاریخ مبنا: 2026-11-07  
-وضعیت: پیاده‌سازی فعال — پیش‌نمایش لوکال در حال اجرا
+**English** · [فارسی](README.fa.md)
 
-## هدف
+**Pishkar** (Persian «پیشکار», the steward who runs the house for you) is a free,
+self-hosted server assistant that runs next to [Dokploy](https://dokploy.com).
+It keeps your builds working when the Internet does not: private npm and PyPI
+mirrors with automatic failover, a native S3 store, a native DNS server, backups,
+monitoring, a firewall and Docker tools, all in one Persian-first admin panel.
 
-ساخت یک Appliance خودمیزبان و ماژولار برای npm، PyPI، پایش uptime و DNS با پنل مدیریتی یکپارچه، دامنه‌های مستقل، lifecycle کنترل‌شده و معماری قابل توسعه برای سرویس‌های آینده.
+> The project was developed under the name *MRK*. Repository, package, image and
+> container names (`mrk-mirror`, `mrk-dns`, `MRK_*` variables, `/opt/mrk`) keep that
+> prefix; only the product name changed.
 
-این محصول پروتکل npm یا PyPI را از صفر بازنویسی نمی‌کند. موتورهای بالغ و پرکاربرد به‌صورت وابستگی version-pinned استفاده می‌شوند و توسعه اختصاصی روی Control Plane، پنل، مشاهده‌پذیری و سیاست failover متمرکز است.
+- License: [MIT](LICENSE). Free for everyone, no paid edition.
+- Status: active development (version 0.1). Read [SECURITY.md](SECURITY.md) before exposing it to the Internet.
 
-## تصمیم فنی اولیه
+## Screenshots
 
-- موتور npm: Verdaccio stable 6.x
-- موتور PyPI: devpi-server/devpi-web
-- Control Plane API: FastAPI
-- پنل: React 19 + TypeScript + Material UI با feature panelهای lazy-loaded
-- ORM و migration: SQLAlchemy 2 + Alembic
-- پایگاه داده تک‌نودی داخل Appliance: PGlite پایدار روی loopback با داده در `/data/database/pglite`
-- PostgreSQL خارجی: با `MRK_DATABASE_URL` و بدون تغییر کد یا مدل‌ها
-- صف و cache کنترل‌پلین: Redis، فقط در صورت نیاز عملیاتی
-- Metrics: Prometheus/OpenMetrics
-- Dashboard عملیاتی: پنل داخلی؛ Grafana به‌عنوان ابزار مکمل اختیاری
-- خروجی اصلی: یک Docker Image واحد با یک bind mount روی `/data`
-- استقرار: یک service در Docker Compose؛ پنل، API، Verdaccio و devpi داخل Appliance
-- ماژول‌های مصوب بعدی: Uptime Monitoring و DNS Management
-- مسیریابی وب: یک entrypoint و نگاشت hostname به پنل، npm، PyPI، status page و DoH
-- DNS کلاسیک: listener مستقل UDP/TCP روی پورت 53؛ به دلیل نبود Host header با دامنه HTTP route نمی‌شود
+Screenshots are not in the repository yet. They will live in [`docs/images/`](docs/images/):
 
-## راه‌اندازی اولین کاربر
+| Planned file | Shows |
+|---|---|
+| `docs/images/home.png` | home page: only what needs attention |
+| `docs/images/services.png` | "My services": state, usage, domains |
+| `docs/images/packages.png` | npm/PyPI sources and failover |
+| `docs/images/dns.png` | DNS names, test and monitor |
+| `docs/images/files.png` | S3 file manager |
 
-- اگر جدول کاربران خالی باشد، پنل فقط فرم `First Time Setup` را نشان می‌دهد.
-- فرم نام، ایمیل، رمز و تکرار رمز را می‌گیرد و اولین حساب را به‌صورت اتمیک با نقش `owner` می‌سازد.
-- هیچ کد یک‌بارمصرف یا رمز پیش‌فرضی تولید نمی‌شود.
-- پس از ایجاد Owner، endpoint راه‌اندازی بسته می‌شود و ورود عادی نمایش داده می‌شود.
-- ثبت‌نام عمومی پیش‌فرض خاموش است؛ Owner/Admin می‌تواند آن را از «دسترسی‌ها» فعال یا غیرفعال کند. حساب عمومی همیشه با نقش `viewer` ساخته می‌شود.
+<!-- When the images exist, replace the table with e.g.:
+![Home](docs/images/home.png)
+-->
 
-## حالت‌های دیتابیس
+## Features
 
-- حالت پیش‌فرض ایمیج: PGlite داخل همان container، بدون پورت عمومی و با یک pool تک‌اتصالی.
-- حالت PostgreSQL خارجی: مقدار `MRK_DATABASE_URL` را به URL نوع `postgresql+psycopg://...` تغییر دهید.
-- تست‌های سورس می‌توانند از SQLite استفاده کنند؛ repositoryها و migrationها بین هر سه حالت مشترک‌اند.
-- برای چند replica یا HA از PostgreSQL خارجی استفاده کنید؛ PGlite برای appliance تک‌نودی طراحی شده است.
+**Package mirrors**
+- npm registry ([Verdaccio](https://verdaccio.org) 6) and PyPI mirror ([devpi](https://devpi.net)), served from your server.
+- Several upstreams per registry with health checks and failover (e.g. npmjs.org first, a regional mirror second); timeouts, network errors and 5xx move to the next one.
+- Cached packages install even with the Internet fully down.
+- Package policies and quarantine, integrity scan, purge with a trash, private npm sources.
+- Works with `npm`, `pnpm`, `yarn`, `pip`, `uv` and `poetry`.
 
-## پشتیبان‌گیری و بازیابی
+**Native services** (written for this project, no third-party server inside)
+- **S3-compatible object storage**: SigV4 and presigned URLs, multipart uploads, managed buckets and *linked folders* (a host folder exposed as a bucket), tagging, lifecycle rules, versioning, a file manager in the panel. Usable as a Dokploy backup destination.
+- **DNS server** (Go): authoritative zones, overrides, forwarding and full recursion with DNSSEC validation, DoT/DoH/DoQ in and out, a compressed query log, statistics, flood detection with automatic, reversible mitigations. It is never an open resolver.
 
-- backupها با AES-256-GCM و Scrypt رمزگذاری و تمام entryها با SHA-256 کنترل می‌شوند.
-- پنل می‌تواند backup را بسازد، فهرست کند، validate کند و plan کوتاه‌عمر restore بسازد؛ اجرای restore عمداً از پنل ممکن نیست.
-- restore فقط پس از توقف سرویس با فرمان `mrk-restore apply`، فایل passphrase جداگانه و دو عبارت تأیید انجام می‌شود.
-- برای PGlite/PostgreSQL، snapshot و restore دیتابیس منطقی و transaction-based است و revision مربوط به Alembic باید دقیقاً سازگار باشد.
-- پیش از اعمال، یک backup rollback رمزنگاری‌شده و journal ساخته می‌شود. دستور کامل در [Operations Runbooks](docs/18-operations-runbooks.md) آمده است.
+**Server control next to Dokploy**
+- Dokploy integration through its official API; domains for every service through Dokploy without touching ports 80/443.
+- Optional Host Agent: containers, live logs, start/stop/restart, image pull, safe prune with a preview (Dokploy's own containers are protected).
+- Resource monitoring, image update tracking, vulnerability scanning (OSV) with CycloneDX/SPDX SBOM export.
+- Database admin for PostgreSQL, MySQL/MariaDB, MongoDB and Redis (read-only by default).
+- Optional nftables firewall helper: brute-force detection from sshd/Traefik/panel logs, dry-run by default, every ban expires.
 
-## اصل مهم Fork
+**Operations**
+- Encrypted appliance backups (AES-256-GCM, scrypt) with an offline, journaled restore.
+- Server and database backups to a folder, any S3 service or the built-in S3, on a schedule, with restore tests.
+- Notifications: Telegram, Bale, email and signed webhooks, with rules and quiet hours.
+- Users, built-in and custom roles, invites, sessions, audit log with CSV export.
+- Outbound proxy profiles (HTTP, SOCKS5) per service.
+- Every tunable is listed in **Settings → All settings**, with a description, its default and where it is set.
+- Persian (RTL) and English interface, with a *Simple* and an *Advanced* mode on every page.
 
-Core موتورهای Verdaccio و devpi مستقیماً تغییر داده نمی‌شوند مگر یک Gap اثبات‌شده وجود داشته باشد. ادغام ترجیحاً از طریق plugin، API، config adapter یا sidecar انجام می‌شود تا ارتقای upstream ساده بماند.
+## Quick install (Docker)
 
-## نقشه مستندات
+Requirements: a Linux server (amd64 or arm64) with Docker Engine and the Compose plugin
+(Dokploy servers already have both), 2 GB of free RAM and disk space for your package cache.
 
-1. [محصول و دامنه](docs/01-product-and-scope.md)
-2. [معماری و ارزیابی ریپوها](docs/02-architecture-and-repository-selection.md)
-3. [تمام User Storyها و Acceptance Criteria](docs/03-user-stories.md)
-4. [Roadmap و برنامه تحویل](docs/04-roadmap-and-delivery.md)
-5. [API، مدل داده و امنیت](docs/05-api-data-security.md)
-6. [تست، مشاهده‌پذیری و عملیات](docs/06-testing-observability-operations.md)
-7. [شروع پیاده‌سازی](docs/07-implementation-start.md)
-8. [Scorecard انتخاب ریپوها](docs/08-repository-selection-scorecard.md)
-9. [بازبینی امنیت و دسترسی](docs/09-security-access-review.md)
-10. [Execution Plan و گزارش Gateها](docs/10-execution-plan.md)
-11. [قرارداد supervision و health](docs/11-process-supervision-and-health.md)
-12. [CI/CD و انتشار GHCR](docs/12-ci-cd-and-release.md)
-13. [Gate 2 و رجیستری npm](docs/13-gate2-npm-registry.md)
-14. [طراحی پنل مدیریت حرفه‌ای](docs/14-professional-admin-ui.md)
-15. [Gate 3 و رجیستری PyPI](docs/15-gate3-pypi-registry.md)
-16. [Gate 4 و failover چند upstream](docs/16-gate4-failover-router.md)
-17. [Gate 5 و Identity/Access](docs/17-gate5-identity-access.md)
-18. [Runbookهای عملیاتی](docs/18-operations-runbooks.md)
-19. [Production release gate و Go-live checklist](docs/19-production-release-gate.md)
-20. [معماری Modular Appliance و مسیریابی دامنه](docs/20-modular-appliance-and-domain-routing.md)
-21. [طراحی سرویس Uptime Monitoring](docs/21-uptime-monitoring-module.md)
-22. [طراحی سرویس DNS Management](docs/22-dns-management-module.md)
-23. [ADR موتورهای بومی و بودجه منابع](docs/23-adr-native-modules-and-resource-budget.md)
-24. [Spec موتور بومی Uptime](docs/24-native-uptime-engine-spec.md)
-25. [Spec موتور بومی DNS](docs/25-native-dns-engine-spec.md)
-26. [Spec ماژول Docker/OCI Registry](docs/26-oci-registry-module-spec.md)
-27. [اصل تنظیم‌پذیری و فهرست تنظیمات](docs/27-configurability-and-settings.md)
-28. [ماژول‌های کنترل سرور در کنار Dokploy](docs/28-server-control-modules.md)
-29. [قراردادهای Gate 17](docs/29-gate17-contracts.md)
-30. [مشخصات سرویس S3 بومی](docs/30-s3-object-storage-spec.md)
-31. [قراردادهای Gate 18](docs/31-gate18-contracts.md)
-32. [قراردادهای Gate 19](docs/32-gate19-contracts.md)
-33. [طرح بازطراحی پنل](docs/33-ux-redesign-plan.md)
-34. [APIهای پنل جدید](docs/34-ui-backend-contracts.md)
+```bash
+git clone https://github.com/SeniorKian/MrK_DevAssist.git pishkar && cd pishkar && docker compose up -d --build
+```
 
-## Definition of Success
+This builds the image from source and starts the panel, npm, PyPI and S3. Every port is bound
+to `127.0.0.1` only. From your computer, open a tunnel and visit <http://localhost:8080>:
 
-- نصب `pip`، `uv`، `poetry`، `npm`، `pnpm` و `yarn` از endpointهای محصول انجام شود.
-- در دسترس بودن upstream اصلی، ترافیک به آن هدایت شود.
-- در timeout، خطای شبکه یا 5xx، upstream بعدی طبق سیاست انتخاب شود.
-- پکیج کش‌شده در قطع کامل اینترنت قابل نصب باشد.
-- وضعیت upstream، cache، disk، task و خطاها از پنل دیده و مدیریت شود.
-- هیچ secret در log، UI یا Compose ذخیره‌شده در Git نمایش داده نشود.
-- ارتقای Verdaccio/devpi بدون merge سنگین با fork داخلی ممکن باشد.
+```bash
+ssh -L 8080:127.0.0.1:8080 you@your-server
+```
 
-## موارد خارج از MVP
+The first visit shows **First Time Setup**: create the owner account right away.
+For production (published image, real domains, TLS through Dokploy, the DNS/firewall/agent
+profiles and the port 53 guide) read **[docs/install-docker.md](docs/install-docker.md)**.
 
-- Mirror کامل همه PyPI یا npm
-- جایگزینی کامل Nexus یا Artifactory در تمام package formatها
-- اسکن امنیتی تجاری در سطح SCA
-- Multi-region active-active
-- Billing و multi-tenant SaaS عمومی
+## Native install (without Docker)
 
+Pishkar can also run directly on Debian 12/13 or Ubuntu 22.04/24.04 as systemd services,
+with the same processes, versions and hardening as the container:
+
+```bash
+git clone https://github.com/SeniorKian/MrK_DevAssist.git pishkar && cd pishkar
+sudo bash scripts/install-native.sh install --dry-run   # see the plan first
+sudo bash scripts/install-native.sh install            # add --with-dns, --with-firewall, --with-agent
+```
+
+Read **[docs/install-native.md](docs/install-native.md)** first.
+
+## Requirements
+
+| | Docker install | Native install |
+|---|---|---|
+| OS | any Linux with Docker Engine and the Compose v2 plugin | Debian 12/13, Ubuntu 22.04/24.04 with systemd |
+| CPU | amd64 or arm64 | amd64 or arm64 |
+| RAM | 2 GB for the main container (+512 MB DNS, +256 MB agent) | same limits as systemd `MemoryMax` |
+| Disk | a few GB plus your npm/PyPI/S3 data | the same, plus about 3 GB for the build |
+| Ports | 8080 panel, 4873 npm, 3141 PyPI, 9000 S3; 53 for DNS (optional) | the same |
+
+## Configuration overview
+
+- Settings come in three layers: the **panel** (most settings, applied without a restart),
+  **environment variables** `MRK_*` (read at start-up), and **build arguments** (download mirrors
+  for the image build). An explicit environment variable always wins.
+- **Settings → All settings** in the panel lists every setting with its description, default,
+  current source and whether it needs a restart. The source of truth is the settings registry in
+  `apps/control-plane/src/mrk_control_plane/settings_registry_entries_*.py`.
+- Docker: values Compose reads are in [`.env.example`](.env.example) (copy it to `.env`); the
+  container settings are in `compose.yaml` / `deploy/appliance/compose.production.yaml`.
+- Native: `/etc/pishkar/pishkar.env` (template: [`deploy/native/pishkar.env.example`](deploy/native/pishkar.env.example)).
+- Before going public set at least `MRK_TRUSTED_HOSTS`, `MRK_CORS_ORIGINS` and
+  `MRK_PYPI_OUTSIDE_URL` (or the domains in the panel) to your real HTTPS names.
+- Embedded PGlite is the default database; set `MRK_DATABASE_URL` to an external PostgreSQL
+  (`postgresql+psycopg://...`) for larger installs. More: [docs/27](docs/27-configurability-and-settings.md).
+
+## Security notes
+
+- **Claim the panel first.** Until an owner exists, whoever reaches the panel first can create it.
+  Keep the panel on `127.0.0.1` (the default) until you have done First Time Setup.
+- Put the panel behind TLS (Dokploy/Traefik or another reverse proxy) before using it over the
+  Internet, and set `MRK_TRUSTED_PROXIES` so the audit log sees real client addresses.
+- The main container runs as uid `10001`, with every capability dropped, a read-only root
+  filesystem and `no-new-privileges`. The native systemd units apply the same rules.
+- The optional **Host Agent** talks to the Docker socket, which is equivalent to root on the host.
+  It only sends calls on an in-code allowlist and only answers HMAC-signed requests.
+- The optional **firewall helper** runs as root with only `CAP_NET_ADMIN` and touches only its own
+  nftables table `inet mrk`. It starts in dry-run mode.
+- Keep the backup passphrase and `MRK_UPSTREAM_SECRET_KEY_FILE` outside the data directory.
+- Report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
+
+## Documentation
+
+- [Install with Docker](docs/install-docker.md) · [Native install](docs/install-native.md)
+- [Operations runbooks](docs/18-operations-runbooks.md) (restore, PGlite maintenance, PyPI bootstrap)
+- [Process supervision and health](docs/11-process-supervision-and-health.md)
+- [CI/CD and releases](docs/12-ci-cd-and-release.md)
+- [Settings](docs/27-configurability-and-settings.md) · [Appliance details](deploy/appliance/README.md)
+- Design documents and contracts: `docs/01` to `docs/43` (mostly in Persian); finished ones are
+  archived as user stories in [docs/03](docs/03-user-stories.md).
+
+## Contributing
+
+Contributions are welcome: bug reports, fixes, translations, docs and new modules.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md).
+Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Support the project
+
+Pishkar is and will stay free. If it saves you time or money, you can support its development
+with a donation. Donation links will be published here and in the GitHub *Sponsor* button
+(`.github/FUNDING.yml`) as soon as they are set up. Starring the repository, reporting bugs and
+sharing it with others help a lot too.
+
+## License
+
+[MIT](LICENSE). Third-party components keep their own licenses (Verdaccio MIT, devpi MIT,
+PGlite Apache-2.0/PostgreSQL, miekg/dns BSD-3-Clause, and others listed by
+`scripts/check_licenses.py`).

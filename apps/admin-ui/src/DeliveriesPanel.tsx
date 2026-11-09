@@ -25,7 +25,7 @@ const FILTERS = ["", "sent", "failed", "pending", "delayed", "suppressed"] as co
 
 const T = {
   title: { fa: "پیام‌های اخیر", en: "Recent messages" },
-  hint: { fa: "آخرین پیام‌هایی که MRK به کانال‌ها فرستاده یا خواسته بفرستد.", en: "The latest messages MRK sent, or tried to send, to your channels." },
+  hint: { fa: "آخرین پیام‌هایی که پیشکار به کانال‌ها فرستاده یا خواسته بفرستد.", en: "The latest messages Pishkar sent, or tried to send, to your channels." },
   titleAdvanced: { fa: "همه پیام‌ها", en: "All messages" },
   emptyTitle: { fa: "هنوز پیامی فرستاده نشده", en: "No messages sent yet" },
   emptyBody: { fa: "وقتی اتفاقی بیفتد که قاعده‌ای آن را بگیرد، این‌جا می‌بینید که پیامش رسید یا نه.", en: "When an event matches a rule, you'll see here whether its message got through." },

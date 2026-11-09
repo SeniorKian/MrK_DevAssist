@@ -424,6 +424,12 @@ func packTemplate(m *dns.Msg) (*wire.Template, error) {
 // store caches r (TTL policy per settings, DNSSEC status sec) and returns
 // the message to serve.
 func (e *Engine) store(p *policy, qname string, qtype uint16, r *dns.Msg, sec dnssec.Result) *dns.Msg {
+	return e.storeIn(e.Cache, p, qname, qtype, r, sec)
+}
+
+// storeIn is store into dst (client groups with their own upstreams keep a
+// separate cache, policy.go).
+func (e *Engine) storeIn(dst *cache.Cache, p *policy, qname string, qtype uint16, r *dns.Msg, sec dnssec.Result) *dns.Msg {
 	c := p.s.Cache
 	m := new(dns.Msg)
 	m.MsgHdr = r.MsgHdr
@@ -472,7 +478,7 @@ func (e *Engine) store(p *policy, qname string, qtype uint16, r *dns.Msg, sec dn
 		clamp(ttl, ttl)
 	case r.Rcode == dns.RcodeServerFailure:
 		// never replace a usable (possibly stale) answer with a failure
-		if old := e.Cache.Get(cacheKey(qname, qtype), time.Now().UnixNano()); old != nil && old.T.Rcode != dns.RcodeServerFailure {
+		if old := dst.Get(cacheKey(qname, qtype), time.Now().UnixNano()); old != nil && old.T.Rcode != dns.RcodeServerFailure {
 			return m
 		}
 		ttl = failureTTL
@@ -512,9 +518,9 @@ func (e *Engine) store(p *policy, qname string, qtype uint16, r *dns.Msg, sec dn
 		return m
 	}
 	now := time.Now().UnixNano()
-	ent := e.Cache.Put(cacheKey(qname, qtype), qname, t, ttl, stale, negative, now)
+	ent := dst.Put(cacheKey(qname, qtype), qname, t, ttl, stale, negative, now)
 	if r.Rcode == dns.RcodeNameError && !bogus {
-		e.Cache.Put(cacheKey(qname, nxType), qname, t, ttl, stale, true, now)
+		dst.Put(cacheKey(qname, nxType), qname, t, ttl, stale, true, now)
 	}
 	if ent != nil {
 		if out := fromEntry(ent, qname, qtype, now, false); out != nil {

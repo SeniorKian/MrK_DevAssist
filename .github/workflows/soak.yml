@@ -88,3 +88,49 @@ jobs:
       - if: always()
         continue-on-error: true
         run: docker volume rm mrk-soak-data
+
+  # docs/41 §4: optional 10-minute load test of the DNS engine alone (manual
+  # runs only): the engine serves cache hits and locally answered names under
+  # a sustained mrk-dnsbench load and must stay healthy afterwards.
+  dns-engine-load:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80
+    defaults:
+      run:
+        working-directory: apps/dns-engine
+    env:
+      GOFLAGS: -buildvcs=false
+      GOTOOLCHAIN: local
+      SOAK_DURATION: ${{ inputs.duration_seconds || '600' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Build the engine and the load generator
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o /tmp/mrk-dns ./cmd/mrk-dns
+          CGO_ENABLED=0 go build -trimpath -o /tmp/mrk-dnsbench ./cmd/mrk-dnsbench
+      - name: Start the engine
+        run: |
+          mkdir -p /tmp/dns-data /tmp/dns-run
+          chown -R 10001:10001 /tmp/dns-data /tmp/dns-run
+          MRK_DNS_DATA_DIR=/tmp/dns-data MRK_DNS_ADMIN_SOCKET=/tmp/dns-run/admin.sock \
+            MRK_DNS_LISTEN=127.0.0.1:5353 MRK_DNS_GOMEMLIMIT=256MiB nohup /tmp/mrk-dns serve > /tmp/mrk-dns.log 2>&1 &
+          for i in $(seq 1 30); do
+            MRK_DNS_ADMIN_SOCKET=/tmp/dns-run/admin.sock /tmp/mrk-dns health && exit 0
+            sleep 1
+          done
+          cat /tmp/mrk-dns.log
+          exit 1
+      - name: Sustained load
+        run: >-
+          /tmp/mrk-dnsbench -server 127.0.0.1:5353 -c 16 -window 16 -d "${SOAK_DURATION}s"
+          -names example.com,example.org,localhost,mrk-health.invalid -json | tee /tmp/bench.json
+      - name: Engine still healthy
+        run: MRK_DNS_ADMIN_SOCKET=/tmp/dns-run/admin.sock /tmp/mrk-dns health
+      - if: always()
+        continue-on-error: true
+        run: tail -n 200 /tmp/mrk-dns.log

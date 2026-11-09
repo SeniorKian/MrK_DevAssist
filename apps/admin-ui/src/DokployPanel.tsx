@@ -80,7 +80,7 @@ const POLL_MS = 30_000;
 
 const T = {
   openInDokploy: { fa: "باز کردن در Dokploy", en: "Open in Dokploy" },
-  unavailable: { fa: "این بخش روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "This section isn't on this server version. Update MRK." },
+  unavailable: { fa: "این بخش روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "This section isn't on this server version. Update Pishkar." },
   refresh: { fa: "تازه کردن", en: "Refresh" },
   appsTitle: { fa: "برنامه‌های Dokploy", en: "Dokploy apps" },
   appsHint: { fa: "هر برنامه را با یک دکمه دوباره منتشر کنید.", en: "Deploy any app again with one button." },
@@ -110,7 +110,7 @@ const T = {
   noHistory: { fa: "هنوز انتشاری برای این برنامه ثبت نشده است.", en: "No deploys recorded for this app yet." },
   viewLog: { fa: "دیدن لاگ", en: "View log" },
   logTitle: { fa: "لاگ انتشار", en: "Deploy log" },
-  logUnavailable: { fa: "Dokploy لاگ این انتشار را در اختیار MRK نمی‌گذارد. آن را در خود Dokploy ببینید.", en: "Dokploy doesn't share this deploy's log with MRK. See it in Dokploy itself." },
+  logUnavailable: { fa: "Dokploy لاگ این انتشار را در اختیار پیشکار نمی‌گذارد. آن را در خود Dokploy ببینید.", en: "Dokploy doesn't share this deploy's log with Pishkar. See it in Dokploy itself." },
   logEmpty: { fa: "لاگ این انتشار خالی است.", en: "This deploy's log is empty." },
   close: { fa: "بستن", en: "Close" },
   started: { fa: "شروع", en: "Started" },
@@ -141,14 +141,14 @@ const T = {
   keyKeep: { fa: "برای نگه‌داشتن کلید فعلی خالی بگذارید.", en: "Leave empty to keep the current key." },
   keyRequired: { fa: "کلید را از Dokploy کپی کنید و این‌جا بچسبانید.", en: "Copy the key from Dokploy and paste it here." },
   saveAndTest: { fa: "ذخیره و امتحان اتصال", en: "Save and test" },
-  safety: { fa: "MRK فقط از راه رسمی Dokploy کار می‌کند و به فایل‌ها و تنظیمات خود Dokploy دست نمی‌زند. کلید رمزدار نگه‌داری می‌شود.", en: "MRK only uses Dokploy's official interface and never touches Dokploy's own files or settings. The key is stored encrypted." },
+  safety: { fa: "پیشکار فقط از راه رسمی Dokploy کار می‌کند و به فایل‌ها و تنظیمات خود Dokploy دست نمی‌زند. کلید رمزدار نگه‌داری می‌شود.", en: "Pishkar only uses Dokploy's official interface and never touches Dokploy's own files or settings. The key is stored encrypted." },
   testHint: { fa: "اگر وصل نشد، برگردید و نشانی یا کلید را درست کنید.", en: "If it doesn't connect, go back and fix the address or key." },
   versionLine: { fa: "نسخه Dokploy: {version}", en: "Dokploy version: {version}" },
   wizardDone: { fa: "Dokploy وصل شد.", en: "Dokploy is connected." },
   noWrite: { fa: "وصل کردن Dokploy", en: "connecting Dokploy" },
   // advanced connection card
   connection: { fa: "اتصال Dokploy", en: "Dokploy connection" },
-  connectionHint: { fa: "MRK برای این‌که به Dokploy فشار نیاید، درخواست‌ها را محدود و موقتاً ذخیره می‌کند.", en: "MRK limits and briefly caches requests so Dokploy isn't put under extra load." },
+  connectionHint: { fa: "پیشکار برای این‌که به Dokploy فشار نیاید، درخواست‌ها را محدود و موقتاً ذخیره می‌کند.", en: "Pishkar limits and briefly caches requests so Dokploy isn't put under extra load." },
   source: { fa: "از کجا تنظیم شده", en: "Set from" },
   sourcePanel: { fa: "همین پنل", en: "This panel" },
   sourceEnv: { fa: "فایل Compose", en: "Compose file" },
@@ -159,7 +159,7 @@ const T = {
   edit: { fa: "تغییر نشانی یا کلید", en: "Change address or key" },
   disconnect: { fa: "قطع اتصال", en: "Disconnect" },
   disconnectTitle: { fa: "اتصال Dokploy قطع شود؟", en: "Disconnect Dokploy?" },
-  disconnectBody: { fa: "کلید از MRK پاک می‌شود. خود Dokploy و برنامه‌هایش هیچ تغییری نمی‌کنند.", en: "The key is removed from MRK. Dokploy and its apps don't change at all." },
+  disconnectBody: { fa: "کلید از پیشکار پاک می‌شود. خود Dokploy و برنامه‌هایش هیچ تغییری نمی‌کنند.", en: "The key is removed from Pishkar. Dokploy and its apps don't change at all." },
   disconnected: { fa: "اتصال Dokploy قطع شد.", en: "Dokploy was disconnected." },
   settingsTitle: { fa: "همه تنظیمات Dokploy", en: "Every Dokploy setting" }
 } satisfies Record<string, Bi>;

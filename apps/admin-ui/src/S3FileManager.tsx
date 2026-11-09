@@ -46,7 +46,7 @@ import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import FolderOpenRoundedIcon from "@mui/icons-material/FolderOpenRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
-import { ApiError, getCsrfToken, getJson, isAbortError, mutateJson, refreshCsrf } from "./api";
+import { ApiError, apiGet, ensureOk, getCsrfToken, getJson, isAbortError, mutateJson, refreshCsrf, scopeHeaders } from "./api";
 import type { Language } from "./i18n";
 import {
   CopyField, EmptyState, FriendlyError, Ltr, NoAccess, Notice, RelativeTime, ResponsiveList, useConfirmAction, useKit, useUndoSnackbar,
@@ -61,7 +61,7 @@ type Upload = { id: number; name: string; key: string; size: number; loaded: num
 type Share = { url: string; expires_at: number | string | null; endpoint?: string; warning?: string | null };
 type Entry = { kind: "folder"; key: string } | { kind: "file"; key: string; object: S3Object };
 
-const BASE = "/api/v1/s3/buckets";
+const DEFAULT_BASE = "/api/v1/s3/buckets";
 const PAGE = 200;
 
 const T = {
@@ -148,24 +148,40 @@ function baseName(key: string) {
   return trimmed.slice(trimmed.lastIndexOf("/") + 1);
 }
 
-function downloadHref(bucket: string, key: string) {
-  return `${BASE}/${encodeURIComponent(bucket)}/objects/download?key=${encodeURIComponent(key)}`;
+function downloadHref(base: string, bucket: string, key: string) {
+  return `${base}/${encodeURIComponent(bucket)}/objects/download?key=${encodeURIComponent(key)}`;
 }
 
-function startDownload(bucket: string, key: string) {
+/**
+ * A plain link for the panel's own API. Scoped APIs («فضای من») need the workspace header, which
+ * a link can't send, so the file is fetched first and saved from memory.
+ */
+async function startDownload(base: string, bucket: string, key: string) {
+  const href = downloadHref(base, bucket, key);
   const anchor = document.createElement("a");
-  anchor.href = downloadHref(bucket, key);
   anchor.download = baseName(key);
+  let objectUrl: string | null = null;
+  if (Object.keys(scopeHeaders(href)).length) {
+    const response = await ensureOk(await apiGet(href));
+    objectUrl = URL.createObjectURL(await response.blob());
+    anchor.href = objectUrl;
+  } else {
+    anchor.href = href;
+  }
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
+  if (objectUrl) {
+    const url = objectUrl;
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
 }
 
-function listingUrl(bucket: string, target: string, continuation: string | null | undefined, delimiter: boolean) {
+function listingUrl(base: string, bucket: string, target: string, continuation: string | null | undefined, delimiter: boolean) {
   const params = new URLSearchParams({ prefix: target, limit: String(delimiter ? PAGE : 1000) });
   if (delimiter) params.set("delimiter", "/");
   if (continuation) params.set("continuation", continuation);
-  return `${BASE}/${encodeURIComponent(bucket)}/objects?${params.toString()}`;
+  return `${base}/${encodeURIComponent(bucket)}/objects?${params.toString()}`;
 }
 
 function sendFile(url: string, file: File, onProgress: (loaded: number) => void, register: (xhr: XMLHttpRequest) => void): Promise<void> {
@@ -175,6 +191,7 @@ function sendFile(url: string, file: File, onProgress: (loaded: number) => void,
     xhr.open("POST", url);
     xhr.setRequestHeader("Accept", "application/json");
     xhr.setRequestHeader("X-CSRF-Token", getCsrfToken());
+    for (const [name, value] of Object.entries(scopeHeaders(url))) xhr.setRequestHeader(name, value);
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     xhr.upload.onprogress = (event) => onProgress(event.loaded);
     xhr.onload = () => {
@@ -199,7 +216,7 @@ function sendFile(url: string, file: File, onProgress: (loaded: number) => void,
   });
 }
 
-function ShareDialog({ bucket, objectKey, onClose }: { bucket: string; objectKey: string; onClose: () => void }) {
+function ShareDialog({ base, bucket, objectKey, onClose }: { base: string; bucket: string; objectKey: string; onClose: () => void }) {
   const { language } = useKit();
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
@@ -212,7 +229,7 @@ function ShareDialog({ bucket, objectKey, onClose }: { bucket: string; objectKey
     setBusy(true);
     setError(null);
     try {
-      setShare(await mutateJson<Share>(`${BASE}/${encodeURIComponent(bucket)}/share`, { method: "POST", body: { key: objectKey, expires_seconds: expires } }));
+      setShare(await mutateJson<Share>(`${base}/${encodeURIComponent(bucket)}/share`, { method: "POST", body: { key: objectKey, expires_seconds: expires } }));
     } catch (caught) {
       if (!(caught instanceof ApiError && caught.status === 401)) setError(caught);
     } finally {
@@ -271,7 +288,16 @@ function ShareDialog({ bucket, objectKey, onClose }: { bucket: string; objectKey
   );
 }
 
-export function S3FileManager({ bucket, language, canWrite }: { bucket: string; language: Language; canWrite: boolean }) {
+/**
+ * `base` = the buckets API (`/api/v1/s3/buckets`; «فضای من» passes `/api/v1/my/s3/buckets`, docs/43 §3).
+ * `canShare` hides «لینک اشتراک» (default: same as `canWrite`); `hideNoAccess` drops the role sentence
+ * for read-only people (My space explains it in its own words). `onChanged` runs after uploads and deletes.
+ */
+export function S3FileManager({ bucket, language, canWrite, base = DEFAULT_BASE, canShare, hideNoAccess, onChanged }: {
+  bucket: string; language: Language; canWrite: boolean; base?: string; canShare?: boolean; hideNoAccess?: boolean; onChanged?: () => void;
+}) {
+  const BASE = base;
+  const sharing = canShare ?? canWrite;
   const { isAdvanced } = useKit();
   const { ask, dialog } = useConfirmAction();
   const { notify, snackbar } = useUndoSnackbar();
@@ -306,7 +332,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
     controller.current = current;
     setLoading(true);
     try {
-      const page = await getJson<Listing>(listingUrl(bucket, target, continuation, true), current.signal);
+      const page = await getJson<Listing>(listingUrl(BASE, bucket, target, continuation, true), current.signal);
       const ownObjects = (page.objects ?? []).filter((item) => item.key !== target);
       setFolders((previous) => (continuation ? [...previous, ...(page.prefixes ?? [])] : page.prefixes ?? []));
       setObjects((previous) => (continuation ? [...previous, ...ownObjects] : ownObjects));
@@ -319,7 +345,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
     } finally {
       if (controller.current === current) setLoading(false);
     }
-  }, [bucket]);
+  }, [BASE, bucket]);
 
   useEffect(() => {
     void load(prefix);
@@ -358,6 +384,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
     }
     running.current = false;
     void load(prefixRef.current);
+    onChanged?.();
   };
 
   const enqueue = (files: File[]) => {
@@ -414,7 +441,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
     let bytes = 0;
     let continuation: string | null = null;
     do {
-      const page: Listing = await getJson<Listing>(listingUrl(bucket, folder, continuation, false));
+      const page: Listing = await getJson<Listing>(listingUrl(BASE, bucket, folder, continuation, false));
       for (const item of page.objects ?? []) {
         keys.push(item.key);
         bytes += item.size ?? 0;
@@ -439,11 +466,18 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
     }
   };
 
+  const download = (key: string) => {
+    startDownload(BASE, bucket, key).catch((caught: unknown) => {
+      if (!(caught instanceof ApiError && caught.status === 401)) setError(caught);
+    });
+  };
+
   const deleteFile = (key: string) => run(async () => {
     const ok = await ask({ title: t(T.deleteFileTitle, { name: baseName(key) }), body: pick(language, T.deleteFileBody), severity: "destructive", undoable: false });
     if (!ok) return;
     report(await deleteKeys([key]));
     await load(prefix);
+    onChanged?.();
   });
 
   const deleteFolder = (folder: string) => run(async () => {
@@ -461,6 +495,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
     if (!ok) return;
     report(await deleteKeys(keys));
     await load(prefix);
+    onChanged?.();
   });
 
   const deleteSelected = () => run(async () => {
@@ -480,6 +515,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
     if (!ok) return;
     report(await deleteKeys(keys));
     await load(prefix);
+    onChanged?.();
   });
 
   const toggle = (key: string) => setSelected((current) => {
@@ -531,8 +567,8 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
 
   const actions: RowAction<Entry>[] = [
     { key: "open", label: pick(language, T.open), icon: FolderOpenRoundedIcon, hidden: (entry) => entry.kind !== "folder", onClick: (entry) => setPrefix(entry.key) },
-    { key: "download", label: pick(language, T.download), icon: DownloadRoundedIcon, hidden: (entry) => entry.kind !== "file", onClick: (entry) => startDownload(bucket, entry.key) },
-    { key: "share", label: pick(language, T.share), icon: ShareRoundedIcon, hidden: (entry) => entry.kind !== "file" || !canWrite, onClick: (entry) => setShareKey(entry.key) },
+    { key: "download", label: pick(language, T.download), icon: DownloadRoundedIcon, hidden: (entry) => entry.kind !== "file", onClick: (entry) => download(entry.key) },
+    { key: "share", label: pick(language, T.share), icon: ShareRoundedIcon, hidden: (entry) => entry.kind !== "file" || !sharing, onClick: (entry) => setShareKey(entry.key) },
     { key: "rename", label: pick(language, T.rename), icon: DriveFileRenameOutlineRoundedIcon, advancedOnly: true, hidden: () => !canWrite, disabled: () => working, onClick: (entry) => setNaming({ mode: "rename", key: entry.key }) },
     {
       key: "delete",
@@ -579,7 +615,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
           </Stack>
         </Stack>
         <input ref={fileInput} type="file" multiple hidden onChange={onFiles} aria-hidden tabIndex={-1} />
-        {!canWrite && <NoAccess needs="s3:write" />}
+        {!canWrite && !hideNoAccess && <NoAccess needs="s3:write" />}
         {error !== null && <FriendlyError error={error} onRetry={() => void load(prefix)} onClose={() => setError(null)} />}
         {partial && (
           <Notice tone="warning">
@@ -653,7 +689,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
               meta: (entry) => (entry.kind === "file" ? <>{formatBytes(entry.object.size, language)} · <RelativeTime value={entry.object.last_modified ?? null} /></> : null)
             }}
             actions={actions}
-            onRowClick={(entry) => (entry.kind === "folder" ? setPrefix(entry.key) : startDownload(bucket, entry.key))}
+            onRowClick={(entry) => (entry.kind === "folder" ? setPrefix(entry.key) : download(entry.key))}
             dense
             empty={loading ? null : needle ? (
               <EmptyState compact icon={SearchRoundedIcon} title={t(T.noMatchTitle, { q: filter.trim() })} body={pick(language, T.noMatchBody)} action={<Button onClick={() => setFilter("")}>{pick(language, { fa: "پاک کردن جست‌وجو", en: "Clear search" })}</Button>} />
@@ -679,7 +715,7 @@ export function S3FileManager({ bucket, language, canWrite }: { bucket: string; 
           <Typography fontWeight={760}>{pick(language, T.dropHere)}</Typography>
         </Box>
       )}
-      {shareKey && <ShareDialog bucket={bucket} objectKey={shareKey} onClose={() => setShareKey(null)} />}
+      {shareKey && <ShareDialog base={BASE} bucket={bucket} objectKey={shareKey} onClose={() => setShareKey(null)} />}
       {naming?.mode === "folder" && (
         <NameDialog
           title={pick(language, T.folderTitle)}

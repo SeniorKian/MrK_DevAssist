@@ -79,7 +79,7 @@ class FakeEngine:
         async def auth(request: Request, call_next):
             body = await request.body()
             engine.requests.append((request.method, request.url.path,
-                                    body.decode() if body else None))
+                                    body.decode(errors="replace") if body else None))
             if request.headers.get("authorization") != f"Bearer {TOKEN}":
                 return _err(401, "unauthorized")
             return await call_next(request)

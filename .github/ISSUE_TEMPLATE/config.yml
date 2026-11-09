@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability / آسیب‌پذیری امنیتی
+    url: https://github.com/SeniorKian/MrK_DevAssist/security/advisories/new
+    about: Report privately, never in a public issue. / خصوصی گزارش دهید، نه در issue عمومی.
+  - name: Install guides / راهنمای نصب
+    url: https://github.com/SeniorKian/MrK_DevAssist/blob/main/docs/install-docker.md
+    about: Docker and native install, DNS port 53, upgrades. / نصب با Docker و بدون آن، پورت 53، ارتقا.

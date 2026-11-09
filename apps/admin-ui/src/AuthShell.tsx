@@ -7,6 +7,7 @@ import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import type { Language } from "./i18n";
 import { translate } from "./i18n";
 import { errorEntry } from "./copy/errors";
+import { PishkarMark } from "./brand";
 import { fill, type Bi } from "./copy/text";
 
 // ── Password policy (server-driven, docs/34 §2: GET /api/v1/auth/setup-status) ─────────────────
@@ -181,27 +182,7 @@ type AuthShellProps = {
 };
 
 function Logo({ size }: { size: number }) {
-  return (
-    <Box
-      aria-hidden
-      sx={{
-        width: size,
-        height: size,
-        borderRadius: 1.5,
-        display: "grid",
-        placeItems: "center",
-        fontWeight: 850,
-        fontSize: Math.round(size * 0.3),
-        letterSpacing: "0.02em",
-        color: "#042f2e",
-        background: "linear-gradient(145deg, #99f6e4, #38bdf8)",
-        boxShadow: "0 8px 24px rgba(45, 212, 191, .25)",
-        flexShrink: 0
-      }}
-    >
-      MRK
-    </Box>
-  );
+  return <PishkarMark size={size} />;
 }
 
 /** Centered, minimal frame for sign-in, first-run setup, invite and forced password change. */

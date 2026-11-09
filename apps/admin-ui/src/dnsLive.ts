@@ -1,5 +1,5 @@
 /**
- * MRK DNS phase D2 (contract docs/38 §4–§5): live monitoring, query log, mitigations.
+ * Pishkar DNS phase D2 (contract docs/38 §4–§5): live monitoring, query log, mitigations.
  * Types, API calls and the plain words used by the «پایش» and «لاگ» tabs.
  *
  * Like dns.ts, every backend field is optional so an older server (no D2 endpoints, a bare 404)
@@ -119,7 +119,7 @@ export function pressureSentence(language: Language, pressure: DnsPressure | nul
     case "critical":
       return fa ? `فشار روی DNS زیاد است${because}.` : `DNS is under heavy load${because}.`;
     case "emergency":
-      return fa ? `DNS زیر فشار خیلی زیاد است${because}. MRK فقط کارهای ضروری را انجام می‌دهد.` : `DNS is overloaded${because}. MRK is doing only what's essential.`;
+      return fa ? `DNS زیر فشار خیلی زیاد است${because}. پیشکار فقط کارهای ضروری را انجام می‌دهد.` : `DNS is overloaded${because}. Pishkar is doing only what's essential.`;
     default:
       return fa ? "DNS آرام است و پرسش‌ها به‌موقع جواب می‌گیرند." : "DNS is calm and questions are answered on time.";
   }
@@ -285,7 +285,7 @@ export function eventText(language: Language, event: DnsEvent): string {
     case "mitigation.auto": {
       const match = text("match");
       const action = MITIGATION_ACTION_WORDS[text("action")]?.[language] ?? (fa ? "محدود" : "limited");
-      return fa ? `MRK خودکار «${match || "یک مورد"}» را ${action} کرد.` : `MRK automatically ${action.toLowerCase()} “${match || "an item"}”.`;
+      return fa ? `پیشکار خودکار «${match || "یک مورد"}» را ${action} کرد.` : `Pishkar automatically ${action.toLowerCase()} “${match || "an item"}”.`;
     }
     case "mitigation.expired": {
       const match = text("match");
@@ -313,7 +313,7 @@ export function eventText(language: Language, event: DnsEvent): string {
     case "tls.certificate_expired":
       return fa ? "گواهی اتصال رمزدار تمام شد؛ دستگاه‌ها رمزدار وصل نمی‌شوند." : "The encrypted connection's certificate expired; devices can't connect encrypted.";
     case "resolution.priming_failed":
-      return fa ? "MRK به سرورهای ریشه اینترنت نرسید." : "MRK couldn't reach the internet's root servers.";
+      return fa ? "پیشکار به سرورهای ریشه اینترنت نرسید." : "Pishkar couldn't reach the internet's root servers.";
     case "listener.failed": {
       const address = text("address");
       return fa ? `DNS نتوانست روی ${address || "یک نشانی"} گوش بدهد.` : `DNS couldn't listen on ${address || "an address"}.`;
@@ -325,7 +325,7 @@ export function eventText(language: Language, event: DnsEvent): string {
 
 // ── query log ────────────────────────────────────────────────────────────────
 
-export type LogSource = "authoritative" | "override" | "cache" | "upstream" | "refused" | "rate_limited" | "mitigated" | "forwarder" | "recursive";
+export type LogSource = "authoritative" | "override" | "cache" | "upstream" | "refused" | "rate_limited" | "mitigated" | "forwarder" | "recursive" | "blocked";
 export type QueryLogEntry = {
   ts: number | string;
   client?: string | null;
@@ -428,6 +428,7 @@ export function resultWord(language: Language, entry: Pick<QueryLogEntry, "rcode
   const fa = language === "fa";
   if (entry.source === "mitigated") return { tone: "error", label: fa ? "مسدود" : "Blocked" };
   if (entry.source === "rate_limited") return { tone: "warn", label: fa ? "زیادی پرسید" : "Too many" };
+  if (entry.source === "blocked") return { tone: "warn", label: fa ? "مسدود (فهرست)" : "Blocked (list)" };
   switch (rcodeOf(entry.rcode)) {
     case "NOERROR":
       return { tone: "ok", label: fa ? "پیدا شد" : "Found" };
@@ -451,7 +452,9 @@ export const LOG_SOURCE_WORDS: Record<string, Bi> = {
   refused: { fa: "اجازه نداشت", en: "Not allowed" },
   rate_limited: { fa: "سقف پرسش", en: "Rate limit" },
   mitigated: { fa: "محدودسازی", en: "A limit" },
-  recursive: { fa: "خودش از ریشه", en: "From the root" }
+  recursive: { fa: "خودش از ریشه", en: "From the root" },
+  // docs/41 §3.1: filtering (kept last in the list).
+  blocked: { fa: "مسدودسازی", en: "Blocked" }
 };
 export function logSourceWord(language: Language, source: string | null | undefined): string {
   return (source && LOG_SOURCE_WORDS[source]?.[language]) || (language === "fa" ? "نامشخص" : "Unknown");

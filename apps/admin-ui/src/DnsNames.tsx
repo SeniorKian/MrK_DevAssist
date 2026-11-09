@@ -1,15 +1,16 @@
 /**
- * «DNS › نام‌ها» (contract docs/37 §2 zones/records/overrides, §5).
+ * «DNS › نام‌ها» (contract docs/37 §2 zones/records/overrides, §5; docs/41 §7).
  *
- * Simple: «این نام → این آدرس» (overrides) with add / edit / remove.
- * Advanced adds the domains (zones): create a primary or forwarder zone, turn it off, delete it
- * (typed confirmation), and inside a zone every record type with a type-aware form, import/export
- * of RFC 1035 zone text, and the version history with rollback.
- * Hash query: `?zone=<name>` opens a zone (Advanced).
+ * Simple: «این نام → این آدرس» (overrides), and the domains: «افزودن دامنه» picks the default
+ * template, asks only for its few variables and makes everything in one click (docs/41 §5).
+ * Inside a domain: records (with «افزودن رکوردهای یک قالب»), and «امضای امنیتی» (zone signing).
+ * Advanced adds the «secondary» kind, forwarders, «انتقال و همگام‌سازی» (transfer / NOTIFY /
+ * dynamic update / TSIG), the record `view` (split-horizon), import/export and history with rollback.
+ * Hash query: `?zone=<name>` opens a domain; `&ztab=records|sync|signing` picks its tab.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Stack, Switch,
+  Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Stack, Switch, Tab, Tabs,
   TextField, Typography, useMediaQuery, useTheme
 } from "@mui/material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
@@ -25,11 +26,13 @@ import RestoreRoundedIcon from "@mui/icons-material/RestoreRounded";
 import LanRoundedIcon from "@mui/icons-material/LanRounded";
 import DnsRoundedIcon from "@mui/icons-material/DnsRounded";
 import CallSplitRoundedIcon from "@mui/icons-material/CallSplitRounded";
+import CloudSyncRoundedIcon from "@mui/icons-material/CloudSyncRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
-import { ApiError, hasPermission, isAbortError } from "./api";
+import DashboardCustomizeRoundedIcon from "@mui/icons-material/DashboardCustomizeRounded";
+import { ApiError, hasPermission } from "./api";
 import { errorSentence, nameConfirmation, pick, say, type Bi } from "./copy";
 import {
-  ChoiceCards, CopyField, DurationInput, EmptyState, FriendlyError, ListInput, Ltr, NoAccess, RelativeTime, ResponsiveList,
+  ChoiceCards, CopyField, DurationInput, EmptyState, FriendlyError, ListInput, Ltr, NoAccess, Notice, RelativeTime, ResponsiveList,
   SectionCard, StatusPill, useConfirmAction, useKit, useUndoSnackbar, type ListColumn, type RowAction
 } from "./kit";
 import { hashQuery } from "./nav";
@@ -37,9 +40,14 @@ import { DnsAvailability } from "./DnsPage";
 import {
   RECORD_SPECS, RECORD_TYPES, TTL_MAX, ZONE_TYPE_WORDS, createOverride, createRecord, createZone, deleteOverride, deleteRecord, deleteZone,
   dnsFieldMessages, download, engineReady, exportZone, fetchOverrides, fetchRecords, fetchZoneHistory, fetchZones, fieldProblem, importZone,
-  isDnsName, isIPv4, isIPv6, isRecordType, overrideTypeFor, patchZone, recordTypeLabel, recordValue, rollbackZone, updateOverride, updateRecord,
+  isCidr, isDnsName, isIPv4, isIPv6, isRecordType, overrideTypeFor, patchZone, recordTypeLabel, recordValue, rollbackZone, updateOverride, updateRecord,
   useDnsStatus, zoneTypeWord, type DnsOverride, type DnsRecord, type DnsZone, type DnsZoneVersion, type RecordType, type ZoneType
 } from "./dns";
+import { fetchClientGroups, fetchTsigKeys, isHostPort, type ClientGroup, type TsigKey } from "./dnsFinal";
+import { FormDialog, ltrInput, useList, useLoader } from "./dnsUi";
+import { ApplyTemplateDialog, TEMPLATE_COPY, TemplateChooser, type TemplateChoice } from "./DnsTemplates";
+import { SecondaryStatusCard, ZoneSyncTab } from "./DnsZoneSync";
+import { ZoneSigningTab } from "./DnsZoneSigning";
 
 const COPY = {
   // overrides
@@ -67,14 +75,14 @@ const COPY = {
   valueFieldHint: { fa: "یک نشانی IP مثل 192.168.1.10، یا یک نام دیگر مثل server.example.com", en: "An IP address like 192.168.1.10, or another name like server.example.com" },
   ttlField: { fa: "مدت نگه‌داری جواب", en: "How long answers are kept" },
   ttlHint: { fa: "دستگاه‌ها جواب را این مدت نگه می‌دارند. کمتر = تغییرها زودتر می‌رسند.", en: "Devices keep the answer this long. Shorter means changes arrive sooner." },
-  inferred: { fa: "MRK این را «{type}» ثبت می‌کند.", en: "MRK saves this as “{type}”." },
+  inferred: { fa: "پیشکار این را «{type}» ثبت می‌کند.", en: "Pishkar saves this as “{type}”." },
   badName: { fa: "نام را مثل git.office یا app.example.com بنویسید.", en: "Write the name like git.office or app.example.com." },
   badValue: { fa: "یک نشانی IP مثل 192.168.1.10 یا یک نام مثل server.example.com بنویسید.", en: "Write an IP like 192.168.1.10 or a name like server.example.com." },
   ttlRange: { fa: "مدت نگه‌داری باید بین ۰ ثانیه تا ۷ روز باشد.", en: "The time to keep must be between 0 seconds and 7 days." },
   saveName: { fa: "ذخیره نام", en: "Save name" },
   nameSaved: { fa: "نام «{name}» ذخیره شد.", en: "The name “{name}” was saved." },
   removeNameTitle: { fa: "نام «{name}» برداشته شود؟", en: "Remove the name “{name}”?" },
-  removeNameBody: { fa: "از این به بعد MRK برای این نام جواب خودش را نمی‌دهد و جواب از اینترنت می‌آید.", en: "From now on MRK won't give its own answer for this name; the answer comes from the internet." },
+  removeNameBody: { fa: "از این به بعد پیشکار برای این نام جواب خودش را نمی‌دهد و جواب از اینترنت می‌آید.", en: "From now on Pishkar won't give its own answer for this name; the answer comes from the internet." },
   removeYes: { fa: "بله، بردار", en: "Yes, remove" },
   nameRemoved: { fa: "نام «{name}» برداشته شد.", en: "The name “{name}” was removed." },
   nameToggled: { fa: "نام «{name}» {state} شد.", en: "The name “{name}” was turned {state}." },
@@ -82,7 +90,7 @@ const COPY = {
   writeNeeded: { fa: "افزودن و تغییر نام‌ها", en: "Adding and changing names" },
   // zones
   zonesTitle: { fa: "دامنه‌ها", en: "Domains" },
-  zonesHint: { fa: "دامنه‌هایی که MRK خودش جوابشان را می‌دهد، یا پرسش‌هایشان را به سرور دیگری می‌فرستد.", en: "Domains MRK answers for itself, or whose questions it sends to another server." },
+  zonesHint: { fa: "دامنه‌هایی که پیشکار خودش جوابشان را می‌دهد، یا پرسش‌هایشان را به سرور دیگری می‌فرستد.", en: "Domains Pishkar answers for itself, or whose questions it sends to another server." },
   addZone: { fa: "افزودن دامنه", en: "Add a domain" },
   emptyZones: { fa: "هنوز دامنه‌ای اضافه نکرده‌اید", en: "You haven't added a domain yet" },
   emptyZonesBody: { fa: "برای شبکه داخلی مثل office.local، یا برای دامنه‌ای که می‌خواهید همه رکوردهایش اینجا باشد.", en: "For an internal network like office.local, or a domain whose records you want to keep here." },
@@ -103,7 +111,7 @@ const COPY = {
   createZone: { fa: "ساخت دامنه", en: "Create domain" },
   zoneCreated: { fa: "دامنه «{name}» ساخته شد.", en: "The domain “{name}” was created." },
   zoneOffTitle: { fa: "دامنه «{name}» خاموش شود؟", en: "Turn off the domain “{name}”?" },
-  zoneOffBody: { fa: "تا روشنش نکنید، MRK برای نام‌های این دامنه جوابی نمی‌دهد. رکوردها سر جایشان می‌مانند.", en: "Until you turn it back on, MRK won't answer for names in this domain. The records stay." },
+  zoneOffBody: { fa: "تا روشنش نکنید، پیشکار برای نام‌های این دامنه جوابی نمی‌دهد. رکوردها سر جایشان می‌مانند.", en: "Until you turn it back on, Pishkar won't answer for names in this domain. The records stay." },
   zoneOffYes: { fa: "بله، خاموش کن", en: "Yes, turn off" },
   zoneToggled: { fa: "دامنه «{name}» {state} شد.", en: "The domain “{name}” was turned {state}." },
   zoneDeleteTitle: { fa: "دامنه «{name}» و همه رکوردهایش پاک شود؟", en: "Delete the domain “{name}” and all its records?" },
@@ -169,74 +177,35 @@ const COPY = {
   rolledBack: { fa: "دامنه به نسخه {version} برگشت.", en: "The domain went back to version {version}." },
   historyFailed: { fa: "تاریخچه خوانده نشد.", en: "The history didn't load." },
   current: { fa: "نسخه فعلی", en: "Current" },
-  primaryOnly: { fa: "دامنه‌ها، رکوردها، خروجی و تاریخچه در حالت «پیشرفته» هستند.", en: "Domains, records, export and history are in Advanced mode." }
+  primaryOnly: { fa: "خروجی فایل، تاریخچه، نسخه دوم و انتقال دامنه در حالت «پیشرفته» هستند.", en: "Export, history, copies and transfers are in Advanced mode." },
+  // docs/41: secondary zones, templates, tabs, views
+  primaries: { fa: "سرورهای اصلی", en: "Main servers" },
+  primariesHint: { fa: "نشانی سرورهایی که رکوردها را دارند، مثل 203.0.113.5 یا 203.0.113.5:53", en: "Servers that hold the records, like 203.0.113.5 or 203.0.113.5:53" },
+  primariesNeeded: { fa: "دست‌کم یک سرور اصلی بنویسید.", en: "Write at least one main server." },
+  badHostPort: { fa: "نشانی را مثل 203.0.113.5 یا 203.0.113.5:53 بنویسید.", en: "Write the address like 203.0.113.5 or 203.0.113.5:53." },
+  tsigKey: { fa: "کلید امضای انتقال (TSIG)", en: "Transfer signing key (TSIG)" },
+  tsigNone: { fa: "بدون کلید", en: "No key" },
+  tsigHint: { fa: "اگر سرور اصلی کلید می‌خواهد، همان کلید را اینجا انتخاب کنید (در «انتقال و همگام‌سازی» ساخته می‌شود).", en: "If the main server needs a key, pick the same key here (made under Transfer and sync)." },
+  notifyAllow: { fa: "چه کسانی می‌توانند خبر تغییر بدهند (اختیاری)", en: "Who may announce changes (optional)" },
+  notifyAllowHint: { fa: "محدوده‌هایی جز سرورهای اصلی، مثل 10.0.0.0/8", en: "Ranges besides the main servers, like 10.0.0.0/8" },
+  badRange: { fa: "محدوده را مثل 10.0.0.0/8 بنویسید.", en: "Write the range like 10.0.0.0/8." },
+  tabRecords: { fa: "رکوردها", en: "Records" },
+  tabSync: { fa: "انتقال و همگام‌سازی", en: "Transfer and sync" },
+  tabSigning: { fa: "امضای امنیتی", en: "Security signing" },
+  zoneTabs: { fa: "بخش‌های این دامنه", en: "Parts of this domain" },
+  applyTemplate: { fa: "افزودن رکوردهای یک قالب", en: "Add a template's records" },
+  templateApplied: { fa: "رکوردهای قالب به «{name}» اضافه شد.", en: "The template's records were added to “{name}”." },
+  zoneCreatedWithTemplate: { fa: "دامنه «{name}» با رکوردهای قالب ساخته شد.", en: "The domain “{name}” was made with the template's records." },
+  readOnly: { fa: "این دامنه نسخه دوم است؛ رکوردها از سرور اصلی می‌آیند و اینجا تغییر نمی‌کنند.", en: "This domain is a copy; its records come from the main server and can't be changed here." },
+  readOnlyPill: { fa: "فقط خواندنی", en: "Read-only" },
+  viewField: { fa: "این رکورد برای چه کسانی است؟", en: "Who is this record for?" },
+  viewEveryone: { fa: "همه", en: "Everyone" },
+  viewHint: { fa: "برای جواب جدا به شبکه داخلی: دستگاه‌های این گروه این رکورد را به جای رکورد همگانی همان نام می‌گیرند. گروه‌ها در «مسدودسازی» ساخته می‌شوند.", en: "For a separate answer inside your network: devices in this group get this record instead of the public one with the same name. Groups are made under Blocking." },
+  viewGroupId: { fa: "شناسه گروه", en: "Group ID" },
+  colView: { fa: "برای", en: "For" }
 } satisfies Record<string, Bi>;
 
-const RECORD_ICONS: Partial<Record<ZoneType, typeof DnsRoundedIcon>> = { primary: DnsRoundedIcon, forwarder: CallSplitRoundedIcon };
-
-function useList<T>(loader: (signal: AbortSignal) => Promise<T[]>, enabled = true) {
-  const [items, setItems] = useState<T[] | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [loading, setLoading] = useState(false);
-  const controller = useRef<AbortController | null>(null);
-  const load = useCallback(async () => {
-    if (!enabled) return;
-    controller.current?.abort();
-    const current = new AbortController();
-    controller.current = current;
-    setLoading(true);
-    try {
-      setItems(await loader(current.signal));
-      setError(null);
-    } catch (caught) {
-      if (isAbortError(caught) || (caught instanceof ApiError && caught.status === 401)) return;
-      setError(caught);
-    } finally {
-      if (controller.current === current) setLoading(false);
-    }
-  }, [loader, enabled]);
-  useEffect(() => {
-    void load();
-    return () => controller.current?.abort();
-  }, [load]);
-  return { items, error, loading, reload: load };
-}
-
-/** A dialog with a form: full screen on phones, one primary button, errors in plain words. */
-function FormDialog({ title, hint, children, submitLabel, busy, error, disabled, onSubmit, onClose, wide }: {
-  title: string; hint?: string; children: ReactNode; submitLabel: string; busy: boolean; error: unknown; disabled?: boolean;
-  onSubmit: () => void; onClose: () => void; wide?: boolean;
-}) {
-  const { c } = useKit();
-  const theme = useTheme();
-  const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (!busy && !disabled) onSubmit();
-  };
-  return (
-    <Dialog open onClose={busy ? undefined : onClose} fullScreen={fullScreen} fullWidth maxWidth={wide ? "md" : "sm"}>
-      <Box component="form" onSubmit={submit} noValidate sx={{ display: "flex", flexDirection: "column", height: fullScreen ? "100%" : undefined }}>
-        <DialogTitle sx={{ fontWeight: 760 }}>{title}</DialogTitle>
-        <DialogContent sx={{ flex: 1 }}>
-          <Stack spacing={2} sx={{ pt: 0.5 }}>
-            {hint ? <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.9 }}>{hint}</Typography> : null}
-            {children}
-            {error ? <FriendlyError error={error} /> : null}
-          </Stack>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-          <Button onClick={onClose} disabled={busy} sx={{ minHeight: 44 }}>{c.cancel}</Button>
-          <Button type="submit" variant="contained" disabled={busy || disabled} startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined} sx={{ minHeight: 44 }}>
-            {submitLabel}
-          </Button>
-        </DialogActions>
-      </Box>
-    </Dialog>
-  );
-}
-
-const ltrInput = { htmlInput: { dir: "ltr" as const, spellCheck: false, autoCapitalize: "none", autoComplete: "off" } };
+const RECORD_ICONS: Partial<Record<ZoneType, typeof DnsRoundedIcon>> = { primary: DnsRoundedIcon, forwarder: CallSplitRoundedIcon, secondary: CloudSyncRoundedIcon };
 
 // ── overrides ────────────────────────────────────────────────────────────────
 
@@ -435,7 +404,7 @@ function RelativeDuration({ seconds }: { seconds: number }) {
   return <>{formatTtl(language, seconds)}</>;
 }
 
-function formatTtl(language: "fa" | "en", seconds: number): string {
+export function formatTtl(language: "fa" | "en", seconds: number): string {
   const units: [number, Bi][] = [
     [86_400, { fa: "روز", en: "d" }],
     [3_600, { fa: "ساعت", en: "h" }],
@@ -455,26 +424,53 @@ function forwarderProblem(language: "fa" | "en", value: string): string | null {
   return isIPv4(host) || isIPv6(host) ? null : pick(language, COPY.badForwarder);
 }
 
-function ZoneDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (zone: string) => void }) {
-  const { language } = useKit();
+/** TSIG key names for the pickers; an empty list when the server has none (or no TSIG yet). */
+function useTsigNames(enabled: boolean) {
+  const loader = useCallback((signal: AbortSignal) => fetchTsigKeys(signal).catch(() => [] as TsigKey[]), []);
+  const { items } = useList<TsigKey>(loader, enabled);
+  return (items ?? []).map((item) => item.name);
+}
+
+function ZoneDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (zone: string, template: "applied" | "failed" | "none") => void }) {
+  const { language, isAdvanced } = useKit();
   const [name, setName] = useState("");
   const [type, setType] = useState<ZoneType>("primary");
   const [forwarders, setForwarders] = useState<string[]>([]);
+  const [primaries, setPrimaries] = useState<string[]>([]);
+  const [tsigKey, setTsigKey] = useState("");
+  const [notifyAllow, setNotifyAllow] = useState<string[]>([]);
+  const [choice, setChoice] = useState<TemplateChoice>({ templateId: null, variables: {}, ready: false, known: false });
+  const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
+  const tsigNames = useTsigNames(isAdvanced && type === "secondary");
   const clean = name.trim().replace(/\.$/, "").toLowerCase();
-  const nameProblem = clean && !isDnsName(clean) ? pick(language, COPY.badZone) : null;
-  const forwardProblem = type === "forwarder" && forwarders.length === 0 ? pick(language, COPY.forwardersNeeded) : null;
+  const nameValid = Boolean(clean) && isDnsName(clean);
+  const nameProblem = clean && !nameValid ? pick(language, COPY.badZone) : null;
+  const kindProblem = type === "forwarder" && forwarders.length === 0 ? pick(language, COPY.forwardersNeeded)
+    : type === "secondary" && primaries.length === 0 ? pick(language, COPY.primariesNeeded) : null;
+  const templateBlocks = type === "primary" && !choice.ready;
 
   const save = async () => {
-    if (!clean || nameProblem || forwardProblem) return;
+    setTouched(true);
+    if (!clean || nameProblem || kindProblem || templateBlocks) return;
     setBusy(true);
     setError(null);
     setFields({});
+    const withTemplate = type === "primary" && Boolean(choice.templateId);
+    // docs/41 §0.3: leaving `template_id` out means «the default template»; «بدون قالب» is an explicit null.
+    const templatePart = type !== "primary" || !choice.known ? {} : withTemplate ? { template_id: choice.templateId!, variables: choice.variables } : { template_id: null };
     try {
-      await createZone({ name: clean, type, ...(type === "forwarder" ? { forwarders } : {}) });
-      onCreated(clean);
+      const created = await createZone({
+        name: clean,
+        type,
+        ...(type === "forwarder" ? { forwarders } : {}),
+        ...(type === "secondary" ? { primaries, ...(tsigKey ? { tsig_key: tsigKey } : {}), ...(notifyAllow.length ? { notify_allow: notifyAllow } : {}) } : {}),
+        ...templatePart
+      });
+      const applied = (created as { template?: { applied?: boolean } | null } | null)?.template;
+      onCreated(clean, withTemplate ? (applied?.applied === false ? "failed" : "applied") : "none");
     } catch (caught) {
       setFields(dnsFieldMessages(language, caught));
       setError(caught);
@@ -483,15 +479,18 @@ function ZoneDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (z
     }
   };
 
+  const kinds: ZoneType[] = isAdvanced ? ["primary", "forwarder", "secondary"] : ["primary"];
+
   return (
     <FormDialog
       title={pick(language, COPY.addZone)}
       submitLabel={pick(language, COPY.createZone)}
       busy={busy}
       error={error}
-      disabled={!clean || Boolean(nameProblem || forwardProblem)}
+      disabled={!clean || Boolean(nameProblem || (touched && kindProblem))}
       onSubmit={() => void save()}
       onClose={onClose}
+      wide={type === "primary"}
     >
       <TextField
         label={pick(language, COPY.zoneName)}
@@ -503,27 +502,56 @@ function ZoneDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (z
         fullWidth
         slotProps={ltrInput}
       />
-      <Typography variant="subtitle2" sx={{ fontWeight: 720 }}>{pick(language, COPY.zoneKind)}</Typography>
-      <ChoiceCards<ZoneType>
-        label={pick(language, COPY.zoneKind)}
-        value={type}
-        onChange={setType}
-        options={(["primary", "forwarder"] as ZoneType[]).map((key) => ({
-          key,
-          icon: RECORD_ICONS[key],
-          title: pick(language, ZONE_TYPE_WORDS[key].label),
-          body: pick(language, ZONE_TYPE_WORDS[key].body)
-        }))}
-      />
+      {kinds.length > 1 ? (
+        <>
+          <Typography variant="subtitle2" sx={{ fontWeight: 720 }}>{pick(language, COPY.zoneKind)}</Typography>
+          <ChoiceCards<ZoneType>
+            label={pick(language, COPY.zoneKind)}
+            value={type}
+            onChange={setType}
+            options={kinds.map((key) => ({
+              key,
+              icon: RECORD_ICONS[key],
+              title: pick(language, ZONE_TYPE_WORDS[key].label),
+              body: pick(language, ZONE_TYPE_WORDS[key].body)
+            }))}
+          />
+        </>
+      ) : null}
+      {type === "primary" ? <TemplateChooser zone={nameValid ? clean : ""} zoneValid={nameValid} touched={touched} onChange={setChoice} fieldErrors={fields} /> : null}
       {type === "forwarder" ? (
         <ListInput
           label={pick(language, COPY.forwarders)}
           value={forwarders}
           onChange={setForwarders}
           validate={(item) => forwarderProblem(language, item)}
-          helperText={fields.forwarders ?? pick(language, COPY.forwardersHint)}
+          helperText={(touched && kindProblem) || fields.forwarders || pick(language, COPY.forwardersHint)}
           max={8}
         />
+      ) : null}
+      {type === "secondary" ? (
+        <>
+          <ListInput
+            label={pick(language, COPY.primaries)}
+            value={primaries}
+            onChange={setPrimaries}
+            validate={(item) => (isHostPort(item) ? null : pick(language, COPY.badHostPort))}
+            helperText={(touched && kindProblem) || fields.primaries || pick(language, COPY.primariesHint)}
+            max={8}
+          />
+          <TextField select label={pick(language, COPY.tsigKey)} value={tsigKey} onChange={(event) => setTsigKey(event.target.value)} helperText={fields.tsig_key ?? pick(language, COPY.tsigHint)} error={Boolean(fields.tsig_key)} fullWidth>
+            <MenuItem value="">{pick(language, COPY.tsigNone)}</MenuItem>
+            {tsigNames.map((key) => <MenuItem key={key} value={key}><Ltr mono>{key}</Ltr></MenuItem>)}
+          </TextField>
+          <ListInput
+            label={pick(language, COPY.notifyAllow)}
+            value={notifyAllow}
+            onChange={setNotifyAllow}
+            validate={(item) => (isCidr(item) ? null : pick(language, COPY.badRange))}
+            helperText={fields.notify_allow ?? pick(language, COPY.notifyAllowHint)}
+            max={16}
+          />
+        </>
       ) : null}
     </FormDialog>
   );
@@ -623,9 +651,11 @@ function ZonesSection({ permissions, ready, onOpen }: { permissions: readonly st
         <ZoneDialog
           key={creating}
           onClose={() => setCreating(null)}
-          onCreated={(zone) => {
+          onCreated={(zone, template) => {
             setCreating(null);
-            notify({ message: say(language, COPY.zoneCreated, { name: zone }), tone: "success" });
+            notify(template === "failed"
+              ? { message: pick(language, TEMPLATE_COPY.createdNoTemplate), tone: "info" }
+              : { message: say(language, template === "applied" ? COPY.zoneCreatedWithTemplate : COPY.zoneCreated, { name: zone }), tone: "success" });
             void reload();
           }}
         />
@@ -638,7 +668,7 @@ function ZonesSection({ permissions, ready, onOpen }: { permissions: readonly st
 
 // ── records ──────────────────────────────────────────────────────────────────
 
-function recordNameLabel(language: "fa" | "en", name: string): ReactNode {
+export function recordNameLabel(language: "fa" | "en", name: string): ReactNode {
   if (name === "@" || name === "") return <>{pick(language, COPY.apex)} <Typography component="span" variant="caption" color="text.secondary"><Ltr>@</Ltr></Typography></>;
   if (name === "*") return <>{pick(language, COPY.wildcard)} <Typography component="span" variant="caption" color="text.secondary"><Ltr>*</Ltr></Typography></>;
   return <Ltr mono>{name}</Ltr>;
@@ -653,9 +683,15 @@ function initialData(type: RecordType, data?: Record<string, unknown>): Record<s
   return result;
 }
 
-function RecordDialog({ zone, initial, onClose, onSaved }: { zone: string; initial: DnsRecord | null; onClose: () => void; onSaved: (name: string) => void }) {
-  const { language } = useKit();
-  const startType: RecordType = initial && isRecordType(initial.type) ? initial.type : "A";
+/**
+ * Add or edit one record. Shared with «فضای من» (MyDomains.tsx), which passes `types` (the record
+ * kinds the workspace's plan allows, docs/43 §3) and renders it inside `<DnsApiScope>`.
+ */
+export function RecordDialog({ zone, initial, groups, types, onClose, onSaved }: { zone: string; initial: DnsRecord | null; groups: ClientGroup[] | null; types?: readonly string[] | null; onClose: () => void; onSaved: (name: string) => void }) {
+  const { language, isAdvanced } = useKit();
+  const [view, setView] = useState(initial?.view ?? "");
+  const allowedTypes = types?.length ? RECORD_TYPES.filter((item) => types.includes(item)) : RECORD_TYPES;
+  const startType: RecordType = initial && isRecordType(initial.type) ? initial.type : allowedTypes[0] ?? "A";
   const [type, setType] = useState<RecordType>(startType);
   const [name, setName] = useState(initial?.name ?? "");
   const [ttl, setTtl] = useState<number | null>(initial?.ttl ?? 3600);
@@ -693,7 +729,7 @@ function RecordDialog({ zone, initial, onClose, onSaved }: { zone: string; initi
       if (field.kind === "int") data[field.key] = Number(raw.replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit))) || field.defaultValue || 0);
       else data[field.key] = field.kind === "name" ? raw.replace(/\.$/, "") : raw;
     }
-    const body = { name: relativeName, type, ttl: ttl ?? 3600, data, disabled: !enabled, ...(comment.trim() ? { comment: comment.trim() } : {}) };
+    const body = { name: relativeName, type, ttl: ttl ?? 3600, data, disabled: !enabled, ...(comment.trim() ? { comment: comment.trim() } : {}), ...(view.trim() || initial?.view ? { view: view.trim() || null } : {}) };
     try {
       if (initial) await updateRecord(zone, initial.id, body);
       else await createRecord(zone, body);
@@ -717,7 +753,7 @@ function RecordDialog({ zone, initial, onClose, onSaved }: { zone: string; initi
       onClose={onClose}
     >
       <TextField select label={pick(language, COPY.recordType)} value={type} onChange={(event) => changeType(event.target.value as RecordType)} disabled={Boolean(initial)} fullWidth error={Boolean(fields.type)} helperText={fields.type}>
-        {RECORD_TYPES.map((item) => (
+        {(allowedTypes.includes(type) ? allowedTypes : [type, ...allowedTypes]).map((item) => (
           <MenuItem key={item} value={item}>
             {pick(language, RECORD_SPECS[item].label)}
             <Typography component="span" variant="caption" color="text.secondary" sx={{ mx: 1 }}><Ltr>{item}</Ltr></Typography>
@@ -771,6 +807,17 @@ function RecordDialog({ zone, initial, onClose, onSaved }: { zone: string; initi
       })}
       <DurationInput label={pick(language, COPY.ttlField)} value={ttl} onChange={setTtl} min={0} max={TTL_MAX} error={ttlProblem ?? fields.ttl ?? null} helperText={pick(language, COPY.ttlHint)} />
       <TextField label={pick(language, COPY.comment)} value={comment} onChange={(event) => setComment(event.target.value)} fullWidth />
+      {isAdvanced && (groups?.length || view) ? (
+        groups?.length ? (
+          <TextField select label={pick(language, COPY.viewField)} value={view} onChange={(event) => setView(event.target.value)} helperText={fields.view ?? pick(language, COPY.viewHint)} error={Boolean(fields.view)} fullWidth>
+            <MenuItem value="">{pick(language, COPY.viewEveryone)}</MenuItem>
+            {groups.map((group) => <MenuItem key={group.id} value={group.id}>{group.name || group.id}</MenuItem>)}
+            {view && !groups.some((group) => group.id === view) ? <MenuItem value={view}><Ltr mono>{view}</Ltr></MenuItem> : null}
+          </TextField>
+        ) : (
+          <TextField label={pick(language, COPY.viewGroupId)} value={view} onChange={(event) => setView(event.target.value)} helperText={fields.view ?? pick(language, COPY.viewHint)} error={Boolean(fields.view)} fullWidth slotProps={ltrInput} />
+        )
+      ) : null}
       <FormControlLabel control={<Switch checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />} label={pick(language, COPY.recordOn)} />
     </FormDialog>
   );
@@ -950,16 +997,38 @@ function ForwardersCard({ zone, canWrite, onSaved }: { zone: DnsZone; canWrite: 
   );
 }
 
+type ZoneTab = "records" | "sync" | "signing";
+
+function zoneTabs(zone: DnsZone, isAdvanced: boolean): ZoneTab[] {
+  if (zone.type === "forwarder") return [];
+  const tabs: ZoneTab[] = ["records"];
+  if (isAdvanced) tabs.push("sync");
+  if (zone.type !== "secondary") tabs.push("signing");
+  return tabs.length > 1 ? tabs : [];
+}
+
 function ZoneDetail({ zone, permissions, onBack, onChanged }: { zone: DnsZone; permissions: readonly string[]; onBack: () => void; onChanged: () => void }) {
   const { language, isAdvanced, c } = useKit();
   const canWrite = hasPermission(permissions, "dns:write");
+  const canAdmin = hasPermission(permissions, "dns:admin");
   const isForwarder = zone.type === "forwarder";
+  const isSecondary = zone.type === "secondary";
+  const canEditRecords = canWrite && !isSecondary;
+  const tabs = zoneTabs(zone, isAdvanced);
+  const [tab, setTab] = useState<ZoneTab>(() => {
+    const wanted = hashQuery().get("ztab") as ZoneTab | null;
+    return wanted && ["records", "sync", "signing"].includes(wanted) ? wanted : "records";
+  });
+  const currentTab: ZoneTab = tabs.includes(tab) ? tab : "records";
   const loader = useCallback((signal: AbortSignal) => fetchRecords(zone.name, signal), [zone.name]);
   const { items, error, loading, reload } = useList<DnsRecord>(loader, !isForwarder);
+  const groupsLoader = useCallback((signal: AbortSignal) => fetchClientGroups(signal).catch(() => null), []);
+  const { data: groups } = useLoader<ClientGroup[] | null>(groupsLoader, isAdvanced && canAdmin && !isForwarder);
   const [filter, setFilter] = useState<string>("all");
   const [editing, setEditing] = useState<{ item: DnsRecord | null; key: number } | null>(null);
   const [importing, setImporting] = useState<number | null>(null);
   const [history, setHistory] = useState<number | null>(null);
+  const [applying, setApplying] = useState<number | null>(null);
   const [exported, setExported] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const { ask, dialog } = useConfirmAction();
@@ -971,6 +1040,18 @@ function ZoneDetail({ zone, permissions, onBack, onChanged }: { zone: DnsZone; p
     [records, filter]
   );
   const fqdn = (name: string) => (name === "@" || !name ? zone.name : `${name}.${zone.name}`);
+  const groupName = (id: string | null | undefined) => (id ? groups?.find((group) => group.id === id)?.name || id : pick(language, COPY.viewEveryone));
+  const hasViews = records.some((record) => record.view);
+
+  const chooseTab = (next: ZoneTab) => {
+    setTab(next);
+    const base = window.location.hash.split("?")[0] || "#/dns/names";
+    const query = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    query.set("zone", zone.name);
+    if (next === "records") query.delete("ztab");
+    else query.set("ztab", next);
+    window.history.replaceState(null, "", `${base}?${query.toString()}`);
+  };
 
   const remove = async (record: DnsRecord) => {
     const ok = await ask({ title: say(language, COPY.removeRecordTitle, { name: fqdn(record.name) }), body: pick(language, COPY.removeRecordBody), severity: "destructive", confirmLabel: pick(language, COPY.zoneDeleteYes) });
@@ -1013,6 +1094,7 @@ function ZoneDetail({ zone, permissions, onBack, onChanged }: { zone: DnsZone; p
     },
     { key: "value", header: pick(language, COPY.colValue), hideOnCard: true, render: (row) => <Box component="span" sx={{ wordBreak: "break-all" }}><Ltr mono>{recordValue(row)}</Ltr></Box> },
     { key: "ttl", header: pick(language, COPY.colTtl), render: (row) => (typeof row.ttl === "number" ? formatTtl(language, row.ttl) : "—") },
+    ...(hasViews ? [{ key: "view", header: pick(language, COPY.colView), advancedOnly: true, render: (row: DnsRecord) => (row.view ? <Chip size="small" variant="outlined" label={groupName(row.view)} /> : pick(language, COPY.viewEveryone)) }] : []),
     {
       key: "state",
       header: pick(language, COPY.colState),
@@ -1022,17 +1104,68 @@ function ZoneDetail({ zone, permissions, onBack, onChanged }: { zone: DnsZone; p
     { key: "comment", header: pick(language, COPY.comment), advancedOnly: true, hideOnCard: true, render: (row) => row.comment || "—" }
   ];
   const editable = (row: DnsRecord) => row.type !== "SOA" && isRecordType(row.type);
-  const actions: RowAction<DnsRecord>[] = canWrite
+  const actions: RowAction<DnsRecord>[] = canEditRecords
     ? [
         { key: "edit", label: pick(language, COPY.editRecord), icon: EditRoundedIcon, onClick: (row) => setEditing({ item: row, key: Date.now() }), hidden: (row) => !editable(row) },
         { key: "delete", label: pick(language, COPY.zoneDeleteYes), icon: DeleteOutlineRoundedIcon, danger: true, onClick: (row) => void remove(row), hidden: (row) => row.type === "SOA" }
       ]
     : [];
-  const addButton = canWrite ? (
+  const addButton = canEditRecords ? (
     <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => setEditing({ item: null, key: Date.now() })} sx={{ minHeight: 44 }}>
       {pick(language, COPY.addRecord)}
     </Button>
   ) : null;
+  const applyButton = canEditRecords ? (
+    <Button variant="outlined" startIcon={<DashboardCustomizeRoundedIcon />} onClick={() => setApplying(Date.now())} sx={{ minHeight: 44 }}>
+      {pick(language, COPY.applyTemplate)}
+    </Button>
+  ) : null;
+
+  const recordsCard = (
+    <SectionCard
+      title={pick(language, COPY.recordsTitle)}
+      hint={pick(language, COPY.recordsHint)}
+      status={isSecondary ? <StatusPill tone="info" label={pick(language, COPY.readOnlyPill)} /> : undefined}
+      action={records.length && addButton ? <Stack direction="row" gap={1} flexWrap="wrap">{applyButton}{addButton}</Stack> : undefined}
+    >
+      <Stack spacing={2}>
+        {isSecondary ? <Notice tone="info">{pick(language, COPY.readOnly)}</Notice> : null}
+        {typesPresent.length > 1 ? (
+          <Stack direction="row" gap={1} flexWrap="wrap" role="group" aria-label={pick(language, COPY.recordType)}>
+            {["all", ...typesPresent].map((type) => (
+              <Chip
+                key={type}
+                label={type === "all" ? pick(language, COPY.allTypes) : isAdvanced ? type : recordTypeLabel(language, type)}
+                color={filter === type ? "primary" : "default"}
+                variant={filter === type ? "filled" : "outlined"}
+                onClick={() => setFilter(type)}
+                sx={{ minHeight: 36 }}
+              />
+            ))}
+          </Stack>
+        ) : null}
+        {error ? <FriendlyError error={error} title={pick(language, COPY.recordsFailed)} onRetry={() => void reload()} /> : null}
+        {items === null && loading ? (
+          <Box sx={{ display: "grid", placeItems: "center", py: 3 }}><CircularProgress size={24} aria-hidden /></Box>
+        ) : (
+          <ResponsiveList
+            rows={rows}
+            rowKey={(row) => row.id}
+            columns={columns}
+            label={pick(language, COPY.recordsTitle)}
+            card={{
+              title: (row) => recordNameLabel(language, row.name),
+              meta: (row) => <>{recordTypeLabel(language, row.type)} · <Ltr mono>{recordValue(row)}</Ltr>{row.view && isAdvanced ? ` · ${groupName(row.view)}` : ""}</>,
+              status: (row) => (row.type === "SOA" ? <StatusPill tone="info" label={pick(language, COPY.soaNote)} /> : <StatusPill tone={row.disabled ? "off" : "ok"} label={pick(language, row.disabled ? COPY.off : COPY.on)} />)
+            }}
+            actions={actions}
+            empty={<EmptyState compact icon={DnsRoundedIcon} title={pick(language, COPY.emptyRecords)} body={pick(language, COPY.emptyRecordsBody)} action={addButton ? <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="center">{addButton}{applyButton}</Stack> : undefined} />}
+          />
+        )}
+        {!canWrite ? <NoAccess needs="dns:write" /> : null}
+      </Stack>
+    </SectionCard>
+  );
 
   return (
     <Stack spacing={2.5}>
@@ -1045,24 +1178,28 @@ function ZoneDetail({ zone, permissions, onBack, onChanged }: { zone: DnsZone; p
           <Button startIcon={<ArrowBackRoundedIcon sx={{ transform: language === "fa" ? "scaleX(-1)" : undefined }} />} onClick={onBack} sx={{ minHeight: 44 }}>
             {pick(language, COPY.back)}
           </Button>
-          {!isForwarder ? (
+          {!isForwarder && isAdvanced ? (
             <>
               <Button variant="outlined" startIcon={exporting ? <CircularProgress size={14} /> : <DownloadRoundedIcon />} disabled={exporting} onClick={() => void doExport()} sx={{ minHeight: 44 }}>
                 {pick(language, COPY.export)}
               </Button>
-              {canWrite ? (
+              {canEditRecords ? (
                 <Button variant="outlined" startIcon={<UploadFileRoundedIcon />} onClick={() => setImporting(Date.now())} sx={{ minHeight: 44 }}>
                   {pick(language, COPY.import)}
                 </Button>
               ) : null}
-              <Button variant="outlined" startIcon={<HistoryRoundedIcon />} onClick={() => setHistory(Date.now())} sx={{ minHeight: 44 }}>
-                {pick(language, COPY.history)}
-              </Button>
+              {!isSecondary ? (
+                <Button variant="outlined" startIcon={<HistoryRoundedIcon />} onClick={() => setHistory(Date.now())} sx={{ minHeight: 44 }}>
+                  {pick(language, COPY.history)}
+                </Button>
+              ) : null}
             </>
           ) : null}
-          <Button startIcon={loading ? <CircularProgress size={14} /> : <RefreshRoundedIcon />} onClick={() => void reload()} disabled={loading || isForwarder} sx={{ minHeight: 44, display: isForwarder ? "none" : undefined }}>
-            {c.refresh}
-          </Button>
+          {!isForwarder && currentTab === "records" ? (
+            <Button startIcon={loading ? <CircularProgress size={14} /> : <RefreshRoundedIcon />} onClick={() => void reload()} disabled={loading} sx={{ minHeight: 44 }}>
+              {c.refresh}
+            </Button>
+          ) : null}
         </Stack>
         {exported !== null ? (
           <Stack spacing={1} sx={{ mt: 2 }}>
@@ -1072,59 +1209,53 @@ function ZoneDetail({ zone, permissions, onBack, onChanged }: { zone: DnsZone; p
             </Box>
           </Stack>
         ) : null}
+        {tabs.length ? (
+          <Tabs
+            value={currentTab}
+            onChange={(_event, value: ZoneTab) => chooseTab(value)}
+            variant="scrollable"
+            allowScrollButtonsMobile
+            aria-label={pick(language, COPY.zoneTabs)}
+            sx={{ mt: 2, borderBottom: 1, borderColor: "divider", "& .MuiTab-root": { minHeight: 48, textTransform: "none", fontWeight: 700 } }}
+          >
+            {tabs.map((key) => <Tab key={key} value={key} label={pick(language, key === "records" ? COPY.tabRecords : key === "sync" ? COPY.tabSync : COPY.tabSigning)} />)}
+          </Tabs>
+        ) : null}
       </SectionCard>
 
-      {isForwarder ? (
-        <ForwardersCard zone={zone} canWrite={canWrite} onSaved={onChanged} />
-      ) : (
-        <SectionCard title={pick(language, COPY.recordsTitle)} hint={pick(language, COPY.recordsHint)} action={records.length ? addButton : undefined}>
-          <Stack spacing={2}>
-            {typesPresent.length > 1 ? (
-              <Stack direction="row" gap={1} flexWrap="wrap" role="group" aria-label={pick(language, COPY.recordType)}>
-                {["all", ...typesPresent].map((type) => (
-                  <Chip
-                    key={type}
-                    label={type === "all" ? pick(language, COPY.allTypes) : isAdvanced ? type : recordTypeLabel(language, type)}
-                    color={filter === type ? "primary" : "default"}
-                    variant={filter === type ? "filled" : "outlined"}
-                    onClick={() => setFilter(type)}
-                    sx={{ minHeight: 36 }}
-                  />
-                ))}
-              </Stack>
-            ) : null}
-            {error ? <FriendlyError error={error} title={pick(language, COPY.recordsFailed)} onRetry={() => void reload()} /> : null}
-            {items === null && loading ? (
-              <Box sx={{ display: "grid", placeItems: "center", py: 3 }}><CircularProgress size={24} aria-hidden /></Box>
-            ) : (
-              <ResponsiveList
-                rows={rows}
-                rowKey={(row) => row.id}
-                columns={columns}
-                label={pick(language, COPY.recordsTitle)}
-                card={{
-                  title: (row) => recordNameLabel(language, row.name),
-                  meta: (row) => <>{recordTypeLabel(language, row.type)} · <Ltr mono>{recordValue(row)}</Ltr></>,
-                  status: (row) => (row.type === "SOA" ? <StatusPill tone="info" label={pick(language, COPY.soaNote)} /> : <StatusPill tone={row.disabled ? "off" : "ok"} label={pick(language, row.disabled ? COPY.off : COPY.on)} />)
-                }}
-                actions={actions}
-                empty={<EmptyState compact icon={DnsRoundedIcon} title={pick(language, COPY.emptyRecords)} body={pick(language, COPY.emptyRecordsBody)} action={addButton} />}
-              />
-            )}
-            {!canWrite ? <NoAccess needs="dns:write" /> : null}
-          </Stack>
-        </SectionCard>
-      )}
+      {isForwarder ? <ForwardersCard zone={zone} canWrite={canWrite} onSaved={onChanged} /> : null}
+      {!isForwarder && currentTab === "records" ? (
+        <>
+          {isSecondary ? <SecondaryStatusCard zone={zone} canWrite={canWrite} onRefreshed={() => { void reload(); onChanged(); }} /> : null}
+          {recordsCard}
+        </>
+      ) : null}
+      {currentTab === "sync" ? <ZoneSyncTab zone={zone} permissions={permissions} onChanged={onChanged} /> : null}
+      {currentTab === "signing" ? <ZoneSigningTab zone={zone} permissions={permissions} /> : null}
 
       {editing ? (
         <RecordDialog
           key={editing.key}
           zone={zone.name}
           initial={editing.item}
+          groups={groups ?? null}
           onClose={() => setEditing(null)}
           onSaved={(name) => {
             setEditing(null);
             notify({ message: say(language, COPY.recordSaved, { name }), tone: "success" });
+            void reload();
+            onChanged();
+          }}
+        />
+      ) : null}
+      {applying ? (
+        <ApplyTemplateDialog
+          key={applying}
+          zone={zone.name}
+          onClose={() => setApplying(null)}
+          onApplied={() => {
+            setApplying(null);
+            notify({ message: say(language, COPY.templateApplied, { name: zone.name }), tone: "success" });
             void reload();
             onChanged();
           }}
@@ -1188,7 +1319,7 @@ export default function DnsNamesTab({ permissions }: { permissions: readonly str
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const open =(zone: DnsZone | null) => {
+  const open = (zone: DnsZone | null) => {
     setOpenZone(zone?.name ?? null);
     const base = window.location.hash.split("?")[0] || "#/dns/names";
     window.history.replaceState(null, "", zone ? `${base}?zone=${encodeURIComponent(zone.name)}` : base);
@@ -1198,8 +1329,9 @@ export default function DnsNamesTab({ permissions }: { permissions: readonly str
   return (
     <Stack spacing={2.5}>
       <DnsAvailability status={status} error={error} onRetry={() => void reload()} />
-      {isAdvanced && openZone && ready ? (
+      {openZone && ready ? (
         <OpenZone
+          key={openZone}
           name={openZone}
           permissions={permissions}
           onBack={() => {
@@ -1209,8 +1341,8 @@ export default function DnsNamesTab({ permissions }: { permissions: readonly str
         />
       ) : (
         <>
+          <ZonesSection key={zonesKey} permissions={permissions} ready={ready} onOpen={(zone) => open(zone)} />
           <OverridesSection permissions={permissions} ready={ready} />
-          {isAdvanced ? <ZonesSection key={zonesKey} permissions={permissions} ready={ready} onOpen={(zone) => open(zone)} /> : null}
           {!isAdvanced && ready ? <Typography variant="caption" color="text.secondary">{pick(language, COPY.primaryOnly)}</Typography> : null}
         </>
       )}

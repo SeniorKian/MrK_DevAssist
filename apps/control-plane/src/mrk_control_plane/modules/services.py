@@ -336,7 +336,7 @@ class ServicesService:
                 raise ServiceError(
                     "domain_exists",
                     409,
-                    "This domain is already used by an MRK service",
+                    "This domain is already used by an Pishkar service",
                     owner={
                         "kind": "mrk",
                         "name": SERVICE_INDEX[existing["service_id"]].name_en,
@@ -925,7 +925,7 @@ class ServicesService:
                 "در Traefik (Dokploy → Traefik → File System/Dynamic) یک router با "
                 f"Host(`{host}`) و گواهی Let's Encrypt بسازید که به «{upstream}» برود.",
                 "مسیر /dns-query را تغییر ندهید و هدر Host را نگه دارید.",
-                "در MRK روی «بررسی» بزنید تا DNS، گواهی و رسیدن درخواست بررسی شود.",
+                "در پیشکار روی «بررسی» بزنید تا DNS، گواهی و رسیدن درخواست بررسی شود.",
             ],
             "steps_en": [
                 f"In your DNS, create an A record for “{host}” pointing to this server's "
@@ -933,7 +933,8 @@ class ServicesService:
                 "In Traefik (Dokploy → Traefik → File System/Dynamic) add a router for "
                 f"Host(`{host}`) with a Let's Encrypt certificate that forwards to “{upstream}”.",
                 "Keep the /dns-query path and the Host header unchanged.",
-                "Back in MRK, click Verify to check DNS, the certificate and that requests arrive.",
+                "Back in Pishkar, click Verify to check DNS, the certificate and that "
+                "requests arrive.",
             ],
             "traefik": {"host": host, "upstream": upstream, "path": "/dns-query"},
         }
@@ -1209,8 +1210,8 @@ def guide_snippets(network: str, target: str) -> dict[str, str]:
         "      - /etc/dokploy/traefik/dynamic:/host/traefik-dynamic\n"
     )
     dokploy_compose = (
-        "# Dokploy → Create Service → Compose → Raw; paste the MRK compose file and\n"
-        "# keep the service name (e.g. mrk-mirror). Then connect Dokploy in MRK\n"
+        "# Dokploy → Create Service → Compose → Raw; paste the Pishkar compose file and\n"
+        "# keep the service name (e.g. mrk-mirror). Then connect Dokploy in Pishkar\n"
         "# (Server → Dokploy) and add domains here: they are created through the\n"
         "# Dokploy API on this Compose service (ports 8080/4873/3141/9000).\n"
     )
@@ -1227,8 +1228,8 @@ def guidance(network: str, target: str, detected: dict[str, Any]) -> list[dict[s
     cards = [
         {
             "id": "dokploy_compose_install",
-            "title_fa": "نصب MRK به‌صورت Compose داخل Dokploy (روش پیشنهادی)",
-            "title_en": "Install MRK as a Compose service in Dokploy (recommended)",
+            "title_fa": "نصب پیشکار به‌صورت Compose داخل Dokploy (روش پیشنهادی)",
+            "title_en": "Install Pishkar as a Compose service in Dokploy (recommended)",
             "body_fa": "با این روش دامنه‌ها مستقیم با API رسمی Dokploy روی همان سرویس ثبت "
             "می‌شوند و گواهی Let's Encrypt خودکار گرفته می‌شود.",
             "body_en": "Domains are then registered through Dokploy's official API on the same "
@@ -1240,8 +1241,9 @@ def guidance(network: str, target: str, detected: dict[str, Any]) -> list[dict[s
             "id": "join_dokploy_network",
             "title_fa": f"اتصال کانتینر MRK به شبکه {network}",
             "title_en": f"Attach the MRK container to {network}",
-            "body_fa": "Traefik دکپلوی فقط از این شبکه به MRK می‌رسد (برای روش فایل Traefik).",
-            "body_en": "Dokploy's Traefik reaches MRK only on this network (Traefik file mode).",
+            "body_fa": "Traefik دکپلوی فقط از این شبکه به پیشکار می‌رسد (برای روش فایل Traefik).",
+            "body_en": ("Dokploy's Traefik reaches Pishkar only on this network "
+                        "(Traefik file mode)."),
             "code": snippets["join_dokploy_network"],
             "done": bool(detected.get("on_dokploy_network")),
         },

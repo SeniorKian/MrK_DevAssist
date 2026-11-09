@@ -46,8 +46,8 @@ KNOWN_UNITS = {
 TITLES: dict[str, tuple[str, str]] = {
     "engine_running": ("روشن کردن موتور DNS", "Start the DNS engine"),
     "port_53_free": ("آزاد بودن پورت 53", "Port 53 is free"),
-    "host_resolver": ("استفاده خود سرور از MRK DNS", "Make the server use MRK DNS"),
-    "docker_daemon": ("استفاده کانتینرها از MRK DNS", "Make containers use MRK DNS"),
+    "host_resolver": ("استفاده خود سرور از پیشکار DNS", "Make the server use Pishkar DNS"),
+    "docker_daemon": ("استفاده کانتینرها از پیشکار DNS", "Make containers use Pishkar DNS"),
     "verify_from_host": ("بررسی از روی سرور", "Check from the server"),
     "verify_from_container": ("بررسی از داخل کانتینر", "Check from a container"),
 }
@@ -191,7 +191,7 @@ def resolved_commands(fallback: list[str]) -> Commands:
         "sudo mkdir -p /etc/systemd/resolved.conf.d\n"
         f"sudo tee {DROPIN} >/dev/null <<'EOF'\n"
         "[Resolve]\n"
-        "# MRK DNS first, a public DNS as backup if MRK DNS is down\n"
+        "# Pishkar DNS first, a public DNS as backup if Pishkar DNS is down\n"
         f"DNS=127.0.0.1 {primary}\n"
         f"FallbackDNS={others}\n"
         "DNSStubListener=no\n"
@@ -229,8 +229,8 @@ def resolved_commands(fallback: list[str]) -> Commands:
 def static_resolv_commands(fallback: list[str]) -> Commands:
     lines = "\n".join(f"nameserver {item}" for item in ["127.0.0.1", *fallback[:2]])
     commands = [
-        _cmd("resolv_conf_static", "نوشتن /etc/resolv.conf با MRK DNS و DNS پشتیبان",
-             "Write /etc/resolv.conf with MRK DNS and a backup DNS",
+        _cmd("resolv_conf_static", "نوشتن /etc/resolv.conf با پیشکار DNS و DNS پشتیبان",
+             "Write /etc/resolv.conf with Pishkar DNS and a backup DNS",
              "sudo cp -P /etc/resolv.conf /etc/resolv.conf.mrk-backup\n"
              "sudo rm -f /etc/resolv.conf\n"
              "sudo tee /etc/resolv.conf >/dev/null <<'EOF'\n"
@@ -272,9 +272,9 @@ def docker_commands(gateway: str, fallback: str) -> Commands:
         "}"
     )
     restart_note = (
-        "همه کانتینرهای سرور، از جمله Dokploy و برنامه‌هایش و خود MRK، چند ثانیه تا چند دقیقه "
+        "همه کانتینرهای سرور، از جمله Dokploy و برنامه‌هایش و خود پیشکار، چند ثانیه تا چند دقیقه "
         "قطع و دوباره روشن می‌شوند. در زمان کم‌کار انجام دهید.",
-        "Every container on the server, including Dokploy, its apps and MRK itself, stops "
+        "Every container on the server, including Dokploy, its apps and Pishkar itself, stops "
         "and starts again (seconds to minutes). Do this at a quiet time.",
     )
     commands = [
@@ -303,7 +303,7 @@ def docker_commands(gateway: str, fallback: str) -> Commands:
 
 def verify_host_commands() -> list[dict[str, Any]]:
     return [
-        _cmd("dig_local", "پرسش مستقیم از MRK DNS", "Ask MRK DNS directly",
+        _cmd("dig_local", "پرسش مستقیم از پیشکار DNS", "Ask Pishkar DNS directly",
              "sudo apt-get install -y dnsutils\n"
              f"dig @127.0.0.1 {TEST_NAME} +short"),
         _cmd("dig_system", "پرسش با DNS خود سرور (خط SERVER باید 127.0.0.1 باشد)",

@@ -318,7 +318,7 @@ const S = {
   bundleButton: { fa: "دانلود بسته گزارش", en: "Download the report bundle" },
   bundleWhen: { fa: "وقتی از پشتیبانی کمک می‌خواهید، همین فایل را برایشان بفرستید.", en: "When you ask support for help, send them this file." },
   metricsTitle: { fa: "خواندن آمار با Prometheus", en: "Read stats with Prometheus" },
-  metricsHint: { fa: "ابزار پایش شما می‌تواند آمار MRK را از این نشانی بخواند.", en: "Your monitoring tool can read MRK's stats from this address." },
+  metricsHint: { fa: "ابزار پایش شما می‌تواند آمار پیشکار را از این نشانی بخواند.", en: "Your monitoring tool can read Pishkar's stats from this address." },
   metricsAddress: { fa: "نشانی آمار", en: "Stats address" },
   metricsKey: { fa: "برای این کار یک کلید برنامه «برای ابزار پایش» بسازید و در تنظیمات Prometheus بگذارید.", en: "Create an app key “For monitoring” and put it in your Prometheus settings." },
   makeKey: { fa: "ساخت کلید برنامه", en: "Create an app key" }

@@ -58,7 +58,8 @@ func ValidateRecords(origin string, recs []Record) fielderr.List {
 	apexNS := 0
 	for i := range recs {
 		r := &recs[i]
-		byOwner[r.Name] = append(byOwner[r.Name], i)
+		ownerKey := r.Name + "|" + r.View // a view CNAME may replace general data (views.go)
+		byOwner[ownerKey] = append(byOwner[ownerKey], i)
 		k := dataKey(r)
 		if j, dup := seen[k]; dup {
 			l.Add(fmt.Sprintf("records[%d]", i), "duplicate_record", "id", r.ID, "duplicate_of", recs[j].ID)
@@ -80,7 +81,7 @@ func ValidateRecords(origin string, recs []Record) fielderr.List {
 	if apexNS == 0 {
 		l.Add("records", "apex_ns_required")
 	}
-	for owner, idxs := range byOwner {
+	for _, idxs := range byOwner {
 		cname := 0
 		for _, i := range idxs {
 			if recs[i].Type == "CNAME" {
@@ -88,13 +89,13 @@ func ValidateRecords(origin string, recs []Record) fielderr.List {
 			}
 		}
 		if cname > 0 {
-			if owner == "@" {
+			if recs[idxs[0]].Name == "@" {
 				l.Add(fmt.Sprintf("records[%d]", idxs[0]), "cname_at_apex", "id", recs[idxs[0]].ID)
 			}
 			if cname > 1 || len(idxs) > cname {
 				for _, i := range idxs {
 					if recs[i].Type == "CNAME" {
-						l.Add(fmt.Sprintf("records[%d]", i), "cname_conflict", "id", recs[i].ID, "name", owner)
+						l.Add(fmt.Sprintf("records[%d]", i), "cname_conflict", "id", recs[i].ID, "name", recs[i].Name)
 						break
 					}
 				}

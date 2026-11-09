@@ -238,7 +238,7 @@ def _passphrase(args: argparse.Namespace, header: dict[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="mrk-backup-decrypt", description="Verify and decrypt an MRK server backup"
+        prog="mrk-backup-decrypt", description="Verify and decrypt an Pishkar server backup"
     )
     parser.add_argument("artifact")
     parser.add_argument("-o", "--output", help="output file or - for stdout")

@@ -15,6 +15,7 @@ import (
 	"mrk/dns-engine/internal/querylog"
 	"mrk/dns-engine/internal/tokens"
 	"mrk/dns-engine/internal/wire"
+	"mrk/dns-engine/internal/zone"
 )
 
 // Proto identifies the transport of a query.
@@ -110,6 +111,9 @@ func (e *Engine) Fast(pkt []byte, client netip.Addr, proto Proto, sc *Scratch) (
 		}
 		return nil, Slow
 	}
+	if p.pc.fast && e.fastPolicy(p, name, client) { // docs/41 §3: blocked names, group upstreams
+		return nil, Slow
+	}
 	if !q.RD() || q.QType == dns.TypeANY || q.QType == dns.TypeAXFR || q.QType == dns.TypeIXFR ||
 		wire.HasSuffix(name, p.local) {
 		return nil, Slow
@@ -202,6 +206,10 @@ func (e *Engine) slow(ctx context.Context, pkt []byte, client netip.Addr, proto 
 		out[2] = 0x80 | pkt[2]&0x79 // QR + opcode + RD
 		out[3] = dns.RcodeFormatError
 		e.M.Rcode(dns.RcodeFormatError)
+		return out
+	}
+	// NOTIFY, UPDATE and UDP IXFR have their own access rules (docs/41 §2, xfr_d5.go)
+	if out, ok := e.zoneMessage(ctx, pkt, req, client, proto); ok {
 		return out
 	}
 	tag := ""
@@ -358,6 +366,8 @@ func qlSource(m answerMeta) uint8 {
 		return querylog.SrcRateLimited
 	case metrics.SrcRecursive:
 		return querylog.SrcRecursive
+	case metrics.SrcBlocked:
+		return querylog.SrcBlocked
 	}
 	if m.forwarder {
 		return querylog.SrcForwarder
@@ -406,6 +416,8 @@ func sourceName(src int) string {
 		return "rate_limited"
 	case metrics.SrcRecursive:
 		return "recursive"
+	case metrics.SrcBlocked:
+		return "blocked"
 	}
 	return "upstream"
 }
@@ -492,16 +504,30 @@ func (e *Engine) answer(ctx context.Context, p *policy, req *dns.Msg, client net
 			return resp, meta
 		}
 	}
+	// docs/41 §3: the client's group selects the zone view and the policy
+	gp := p.pc.groupFor(client)
+	zs := p.zonesFor(client)
+	if recOK && p.pc.fast {
+		// filtering applies to names resolved remotely (not to local zones)
+		if z := zs.Find(qname); z == nil || z.Type == zone.TypeForwarder {
+			if r, m, ok := e.policyAnswer(ctx, p, gp, req, resp, qname, q.Qtype); ok {
+				return r, m
+			}
+		}
+	}
 	// 2. zones (deepest match wins between primary and forwarder zones)
-	if z := p.zones.Find(qname); z != nil {
-		if z.Type == "primary" {
-			res, _ := p.zones.Answer(qname, q.Qtype)
+	if z := zs.Find(qname); z != nil {
+		if z.Authoritative() {
+			res, _ := zs.Answer(qname, q.Qtype)
 			resp.Authoritative = res.Authoritative
 			resp.Rcode = res.Rcode
 			resp.Answer = res.Answer
 			resp.Ns = res.Ns
 			resp.Extra = res.Extra
 			meta.src = metrics.SrcAuthoritative
+			if opt := req.IsEdns0(); opt != nil && opt.Do() {
+				zs.AddDNSSEC(resp, qname, q.Qtype) // signed zones (docs/41 §2.5)
+			}
 			if q.Qtype == dns.TypeANY && (p.s.MinimalANY && proto == UDP || e.acts().MinimalANY) {
 				minimalANY(resp)
 			}
@@ -544,6 +570,9 @@ func (e *Engine) answer(ctx context.Context, p *policy, req *dns.Msg, client net
 			Cpu: "RFC8482", Os: ""}}
 		meta.src = metrics.SrcLocal
 		return resp, meta
+	}
+	if gp != nil && gp.group != nil {
+		return e.recurseGroup(ctx, p, gp, req, resp, qname, q.Qtype) // the group's own upstreams
 	}
 	return e.recurse(ctx, p, req, resp, qname, q.Qtype, p.group, p.s.RebindingProtection)
 }

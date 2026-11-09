@@ -140,11 +140,15 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.ContentLength > MaxBody {
-		writeErr(w, &fielderr.Error{Code: "body_too_large", Message: "request body exceeds 4 MiB", Status: 413})
+	limit := int64(MaxBody)
+	if r.URL.Path == "/v1/restore" {
+		limit = MaxRestoreBody // a backup archive (policy.go)
+	}
+	if r.ContentLength > limit {
+		writeErr(w, &fielderr.Error{Code: "body_too_large", Message: fmt.Sprintf("request body exceeds %d MiB", limit>>20), Status: 413})
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, MaxBody)
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	if r.Method == http.MethodGet || r.URL.Path == "/v1/resolve" {
 		a.mux.ServeHTTP(w, r)
 		return
@@ -328,12 +332,16 @@ func (a *API) routes() {
 			Name       string   `json:"name"`
 			Type       string   `json:"type"`
 			Forwarders []string `json:"forwarders"`
+			engine.ZoneCreateD5
 		}
 		if err := decode(r, &b); err != nil {
 			return err
 		}
 		if b.Type == "" {
 			b.Type = zone.TypePrimary
+		}
+		if b.Type == zone.TypeSecondary || b.ZoneCreateD5.Any() {
+			return a.createSecondary(w, b.Name, b.Type, b.Forwarders, b.ZoneCreateD5)
 		}
 		d, err := a.e.CreateZone(b.Name, b.Type, b.Forwarders)
 		if err != nil {
@@ -539,4 +547,6 @@ func (a *API) routes() {
 	a.monitorRoutes()
 	a.d4Routes()
 	a.encryptedRoutes()
+	a.zonesD5Routes()
+	a.policyRoutes()
 }

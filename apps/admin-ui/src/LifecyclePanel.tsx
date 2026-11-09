@@ -111,7 +111,7 @@ const T = {
   prepare: { fa: "آماده کردن بازگردانی", en: "Prepare the restore" },
   restoreConfirmTitle: { fa: "بازگردانی پشتیبان {date} آماده شود؟", en: "Prepare restoring the backup from {date}?" },
   restoreConfirmBody: { fa: "بعد از اجرای دستور، تنظیمات فعلی پنل با این پشتیبان عوض می‌شوند.", en: "Once you run the command, the panel's current settings are replaced by this backup." },
-  restoreConsequence1: { fa: "دستور فقط وقتی کار می‌کند که سرویس MRK کاملاً خاموش باشد.", en: "The command only works while the MRK service is fully stopped." },
+  restoreConsequence1: { fa: "دستور فقط وقتی کار می‌کند که سرویس پیشکار کاملاً خاموش باشد.", en: "The command only works while the Pishkar service is fully stopped." },
   restoreConsequence2: { fa: "رمز پشتیبان در این طرح ذخیره نمی‌شود.", en: "The backup password isn't stored in the plan." },
   restoreWord: { fa: "بازگردانی کن", en: "RESTORE" },
   planReady: { fa: "آماده است. سرویس را خاموش کنید و این دستور را روی سرور اجرا کنید.", en: "Ready. Stop the service, then run this command on the server." },

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"strings"
 	"sync"
@@ -48,6 +49,8 @@ type Options struct {
 	IterTransport iterative.Transport
 	// TrustAnchors replaces the built-in root trust anchors (tests).
 	TrustAnchors []*dns.DS
+	// FilterClient downloads block lists (tests; default: HTTPS-only client).
+	FilterClient *http.Client
 }
 
 // Override is a local answer for a name without owning a zone.
@@ -89,6 +92,7 @@ type policy struct {
 	upstreams     []*resolver.Upstream
 	d4            d4policy
 	enc           encPolicy
+	pc            *policyCompiled // docs/41 §3: filtering, client groups, views (policy.go)
 }
 
 func (p *policy) recursionAllowed(a netip.Addr) bool {
@@ -127,6 +131,8 @@ type Engine struct {
 	val  *dnssec.Validator   // D4: DNSSEC validation
 	d4   d4state
 	enc  encState // D4 part B: encrypted transports, certificate, DoH tokens
+	d5   d5state  // docs/41 §2: secondary, transfers, TSIG, update, signing (zones_d5.go)
+	pst  polState // docs/41 §3: block lists, client groups, views (policy.go)
 
 	actorMu sync.Mutex
 	actor   atomic.Pointer[string]
@@ -139,6 +145,9 @@ func Open(opts Options) (*Engine, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if err := recoverRestore(opts.DataDir); err != nil { // an interrupted restore (backup.go)
+		return nil, err
 	}
 	st, err := store.Open(opts.DataDir)
 	if err != nil {
@@ -176,12 +185,15 @@ func Open(opts Options) (*Engine, error) {
 	}
 	e.overrides = od.Items
 
+	if err := e.openD5(); err != nil {
+		return nil, err
+	}
 	zs, warns := st.LoadZones()
 	for _, w := range warns {
 		e.log.Warn("zone load", "err", w)
 	}
 	for _, z := range zs {
-		c, err := zone.Compile(z)
+		c, err := e.compileZone(z)
 		if err != nil {
 			e.log.Error("zone compile failed; zone not served", "zone", z.Name, "err", err)
 			continue
@@ -194,6 +206,7 @@ func Open(opts Options) (*Engine, error) {
 	if err := e.openMonitor(); err != nil {
 		return nil, err
 	}
+	e.openPolicy()
 	if err := e.openEncrypted(); err != nil {
 		return nil, err
 	}
@@ -203,10 +216,11 @@ func Open(opts Options) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.wg.Add(3)
+	e.wg.Add(4)
 	go e.maintenance()
 	go e.pipeline()
 	go e.d4Loop()
+	go e.d5Loop()
 	return e, nil
 }
 
@@ -246,6 +260,7 @@ func mergeSettings(dst *config.Settings, src config.Settings) {
 func (e *Engine) Close() {
 	e.cancel()
 	e.wg.Wait()
+	e.closePolicy()
 	e.closeEncrypted()
 	e.closeMonitor()
 	e.mu.Lock()
@@ -421,7 +436,7 @@ func (e *Engine) rebuildLocked() error {
 	if old != nil && old.s.Limits.ClientQPS == l.ClientQPS && old.s.Limits.ClientBurst == l.ClientBurst {
 		p.clientLim = old.clientLim
 	} else {
-		p.clientLim = limits.NewClientLimiter(l.ClientQPS, l.ClientBurst, e.opts.MaxClients)
+		p.clientLim = limits.NewClientLimiterFor(l.ClientQPS, l.ClientBurst, e.opts.MaxClients)
 		if e.mon != nil {
 			p.clientLim.SetScale(e.acts().ClientQPSScale)
 		}
@@ -436,6 +451,7 @@ func (e *Engine) rebuildLocked() error {
 		e.Cache.SetMaxBytes(s.Cache.MaxBytes)
 	}
 	e.configureD4Locked(p, old)
+	e.configurePolicyLocked(p, old)
 	if err := e.configureEncryptedLocked(p); err != nil {
 		return err
 	}

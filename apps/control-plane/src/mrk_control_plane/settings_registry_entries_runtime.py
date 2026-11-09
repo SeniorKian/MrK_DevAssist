@@ -32,6 +32,7 @@ MODULE_PERMISSIONS: dict[str, tuple[str, str]] = {
     "notifications": ("notification:read", "notification:write"),
     "services": ("domains:read", "domains:write"),
     "dns": ("dns:read", "dns:admin"),
+    "tenancy": ("user:read", "tenancy:admin"),
 }
 
 
@@ -122,6 +123,30 @@ PEOPLE = (
       ("دسترسی کلید فقط-دیدنی", "Read-only key scopes"),
       (NOT_YET_FA + "دسترسی‌هایی که دکمه «کلید فقط-دیدنی» به کلید تازه می‌دهد.",
        NOT_YET_EN + "Scopes the 'read-only key' preset grants.")),
+    # docs/43 «my space»
+    rt("tenancy", "enabled", "tenancy.enabled", "people.security", "bool", False,
+       ("فضای من", "My space"),
+       ("کاربران بخش «فضای من» را دارند و دامنه، فایل و بسته‌های خودشان را مدیریت می‌کنند.",
+        "People get «my space» and manage their own domains, files and packages."),
+       danger="high"),
+    rt("tenancy", "signup", "tenancy.signup", "people.security", "enum", "off",
+       ("ثبت‌نام در فضای من", "My space sign-up"),
+       ("خاموش، با تأیید مدیر، یا آزاد. وقتی فضای من روشن است جای «ثبت‌نام آزاد» را می‌گیرد.",
+        "Off, with admin approval, or open. Replaces open sign-up while my space is on."),
+       enum=("off", "approval", "open"), danger="high"),
+    rt("tenancy", "default_plan_id", "tenancy.default_plan_id", "people.security", "string",
+       "basic", ("بسته پیش‌فرض", "Default plan"),
+       ("بسته‌ای که فضای تازه کاربران می‌گیرد.", "The plan new workspaces get.")),
+    rt("tenancy", "verify_domains", "tenancy.verify_domains", "people.security", "bool", True,
+       ("اثبات مالکیت دامنه", "Verify domain ownership"),
+       ("دامنه تازه کاربر تا اثبات مالکیت (رکورد TXT یا NS) پاسخ داده نمی‌شود.",
+        "A user's new domain is not served until ownership is proven (TXT or NS)."),
+       danger="high"),
+    rt("tenancy", "admin_area_local_only", "tenancy.admin_area_local_only", "people.security",
+       "bool", False, ("مدیریت سرور فقط از شبکه داخلی", "Server management only locally"),
+       ("بخش مدیریت سرور فقط از همین سرور یا شبکه خصوصی باز می‌شود؛ فضای من از همه‌جا.",
+        "Server management opens only from this server or a private network; my space from "
+        "anywhere."), danger="high"),
 )
 
 NPM = (
@@ -300,8 +325,8 @@ DOM = "server.apps"
 DOMAINS = (
     rt("services", "routing_mode", "domains.routing_mode", DOM, "enum", "auto",
        ("روش اتصال دامنه", "Domain routing mode"),
-       ("خودکار: اگر MRK داخل Dokploy است از API آن، وگرنه فایل Traefik (اگر اجازه داده شده)، وگرنه راهنمای دستی.",
-        "Auto: Dokploy's API when MRK runs inside Dokploy, else the Traefik file (if allowed), else manual steps."),
+       ("خودکار: اگر پیشکار داخل Dokploy است از API آن، وگرنه فایل Traefik (اگر اجازه داده شده)، وگرنه راهنمای دستی.",
+        "Auto: Dokploy's API when Pishkar runs inside Dokploy, else the Traefik file (if allowed), else manual steps."),
        env="MRK_DOMAINS_ROUTING_MODE", enum=("auto", "dokploy_api", "traefik_file", "manual"), danger="medium"),
     rt("services", "traefik_file_enabled", "domains.traefik_file_enabled", DOM, "bool", False,
        ("اجازه نوشتن فایل Traefik", "Allow the Traefik file"),
@@ -323,14 +348,14 @@ DOMAINS = (
        ("middleware انتقال به HTTPS که Dokploy می‌سازد؛ خالی یعنی بدون انتقال.",
         "Dokploy's redirect-to-HTTPS middleware; empty means no redirect.")),
     rt("services", "target_host", "domains.target_host", DOM, "string", "",
-       ("نام کانتینر MRK برای Traefik", "MRK container name for Traefik"),
+       ("نام کانتینر پیشکار برای Traefik", "Pishkar container name for Traefik"),
        ("Traefik درخواست‌ها را به این نام می‌فرستد؛ خالی یعنی تشخیص خودکار (پیش‌فرض mrk-mirror).",
         "Traefik sends requests to this name; empty means auto-detect (fallback mrk-mirror)."),
        env="MRK_DOMAINS_TARGET_HOST"),
     rt("services", "self_container", "domains.self_container", DOM, "string", "",
-       ("نام کانتینر خود MRK", "MRK's own container"),
-       ("برای پیدا کردن کانتینر خود MRK در Docker؛ خالی یعنی از روی hostname.",
-        "Used to find MRK's own container in Docker; empty means by hostname.")),
+       ("نام کانتینر خود پیشکار", "Pishkar's own container"),
+       ("برای پیدا کردن کانتینر خود پیشکار در Docker؛ خالی یعنی از روی hostname.",
+        "Used to find Pishkar's own container in Docker; empty means by hostname.")),
     rt("services", "dokploy_network", "domains.dokploy_network", DOM, "string", "dokploy-network",
        ("شبکه Docker دکپلوی", "Dokploy Docker network"),
        ("شبکه‌ای که Traefik دکپلوی از آن به سرویس‌ها می‌رسد.", "The network Dokploy's Traefik reaches services on.")),
@@ -806,8 +831,8 @@ DNSG = "server.dns"
 DNS = (
     rt("dns", "services_overrides", "dns.services_overrides", DNSG, "bool", False,
        ("ثبت دامنه سرویس‌ها در DNS داخلی", "Services' domains in the internal DNS"),
-       ("دامنه‌های «سرویس‌های من» در MRK DNS به نشانی داخلی سرور جواب داده می‌شوند تا کانتینرها مستقیم به سرور برسند.",
-        "MRK DNS answers the «My services» domains with the server's internal address so containers reach it directly."),
+       ("دامنه‌های «سرویس‌های من» در پیشکار DNS به نشانی داخلی سرور جواب داده می‌شوند تا کانتینرها مستقیم به سرور برسند.",
+        "Pishkar DNS answers the «My services» domains with the server's internal address so containers reach it directly."),
        danger="medium"),
     rt("dns", "services_override_target", "dns.services_override_target", DNSG, "string", "",
        ("نشانی داخلی سرور برای دامنه‌ها", "Internal address for service domains"),
@@ -819,9 +844,13 @@ DNS = (
         "Creates panel, npm, pypi and s3.mrk.internal pointing at the server's internal address.")),
     rt("dns", "fallback_servers", "dns.fallback_servers", DNSG, "list", ["1.1.1.1", "9.9.9.9"],
        ("DNS پشتیبان در راهنمای راه‌اندازی", "Backup DNS in the setup guide"),
-       ("این نشانی‌ها کنار MRK DNS در دستورهای راه‌اندازی می‌آیند تا اگر MRK DNS خاموش بود اینترنت سرور قطع نشود.",
-        "Put next to MRK DNS in the setup commands so the server keeps working if MRK DNS is down."),
+       ("این نشانی‌ها کنار پیشکار DNS در دستورهای راه‌اندازی می‌آیند تا اگر پیشکار DNS خاموش بود اینترنت سرور قطع نشود.",
+        "Put next to Pishkar DNS in the setup commands so the server keeps working if Pishkar DNS is down."),
        max_items=4),
+    rt("dns", "default_template_id", "dns.default_template_id", DNSG, "string", "website",
+       ("قالب پیش‌فرض دامنه تازه", "Default template for new domains"),
+       ("این قالب هنگام ساخت هر دامنه تازه در پنل خودکار اعمال می‌شود؛ خالی یعنی بدون قالب. از صفحه قالب‌ها هم قابل تغییر است.",
+        "Applied automatically to every domain created in the panel; empty means no template. Also set on the Templates page.")),
 )
 
 ENTRIES: tuple[SettingSpec, ...] = (

@@ -70,7 +70,7 @@ const COPY = {
   viaDefault: { fa: "از راه پیش‌فرض", en: "via the default" },
   listLabel: { fa: "فهرست پروکسی‌ها", en: "Proxy list" },
   readOnly: { fa: "نقش شما فقط اجازه دیدن دارد.", en: "Your role can only view this." },
-  unavailable: { fa: "مدیریت پروکسی روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "Proxy management isn't on this server version. Update MRK." },
+  unavailable: { fa: "مدیریت پروکسی روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "Proxy management isn't on this server version. Update Pishkar." },
   // services
   services: { fa: "کدام سرویس از پروکسی رد شود؟", en: "Which services go through a proxy?" },
   servicesHint: { fa: "روشن کردن کلید یعنی این سرویس از پروکسی پیش‌فرض استفاده کند.", en: "Switching on means this service uses the default proxy." },
@@ -99,8 +99,8 @@ const COPY = {
   host: { fa: "آدرس پروکسی", en: "Proxy address" },
   hostHint: { fa: "فقط نام یا IP، بدون http://", en: "Only the name or IP, without http://" },
   hostHelp: {
-    fa: "اگر تونل روی خود سرور (بیرون از کانتینر MRK) اجرا می‌شود، به جای 127.0.0.1 بنویسید host.docker.internal یا IP سرور.",
-    en: "If the tunnel runs on the server itself (outside the MRK container), use host.docker.internal or the server's IP instead of 127.0.0.1."
+    fa: "اگر تونل روی خود سرور (بیرون از کانتینر پیشکار) اجرا می‌شود، به جای 127.0.0.1 بنویسید host.docker.internal یا IP سرور.",
+    en: "If the tunnel runs on the server itself (outside the Pishkar container), use host.docker.internal or the server's IP instead of 127.0.0.1."
   },
   port: { fa: "پورت", en: "Port" },
   stepLogin: { fa: "ورود", en: "Sign-in" },

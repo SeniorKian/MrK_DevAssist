@@ -1,0 +1,82 @@
+# Pishkar main service (native install, docs/install-native.md).
+#
+# The same process tree as the `mrk-mirror` container: supervisord with the
+# unchanged deploy/appliance/supervisord.conf (PGlite, s3-engine, pypi-router,
+# Verdaccio, devpi, devpi-configure, control-plane, fatal-exit listener).
+# The panel starts/stops programs through supervisorctl, so supervisord stays.
+#
+# The mount namespace recreates the paths the container uses, so the code and
+# supervisord.conf run unchanged:
+#   /data            <- the data directory (default /var/lib/pishkar)
+#   /usr/local/bin   <- /opt/mrk/bin (supervisord, mrk-* entry points, node)
+#   /opt/verdaccio   <- /opt/mrk/verdaccio
+#   /opt/pglite      <- /opt/mrk/pglite
+#   /tmp             <- private tmpfs (noexec,nosuid,nodev), like the container
+# @PISHKAR_DATA_DIR@ is replaced by scripts/install-native.sh.
+
+[Unit]
+Description=Pishkar server assistant (panel, npm, PyPI, S3)
+Documentation=https://github.com/SeniorKian/MrK_DevAssist/blob/main/docs/install-native.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pishkar
+Group=pishkar
+UMask=0027
+EnvironmentFile=/etc/pishkar/pishkar.env
+# venv first so `python` is the appliance interpreter (supervisord.conf runs `python -m ...`).
+Environment=PATH=/opt/mrk/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/tmp
+# Same as the image ENV.
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ExecStart=/opt/mrk/venv/bin/python /opt/mrk/pishkar_supervise.py
+# supervisord stops its programs one priority group at a time, PGlite last
+# (worst case ~125 s, see supervisord.conf). Only the main process gets SIGTERM.
+KillMode=mixed
+TimeoutStopSec=180
+TimeoutStartSec=infinity
+# The FATAL listener stops supervisord with status 0; restart on every exit.
+Restart=always
+RestartSec=5
+
+# Paths the container provides (see the header).
+BindPaths=@PISHKAR_DATA_DIR@:/data
+BindReadOnlyPaths=/opt/mrk/bin:/usr/local/bin /opt/mrk/verdaccio:/opt/verdaccio /opt/mrk/pglite:/opt/pglite
+TemporaryFileSystem=/tmp:size=64m,mode=1777,noexec,nosuid,nodev
+# Optional linked-folder S3 buckets (docs/30 §3.2). Add with `systemctl edit pishkar`:
+#   [Service]
+#   BindPaths=/srv/files:/mnt/links/files
+# (BindReadOnlyPaths= for a read-only bucket).
+
+# Hardening, mirroring the container: no capabilities, no-new-privileges,
+# read-only system, resource ceilings.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# Same ceilings as compose (MRK_MEM_LIMIT, MRK_CPUS, pids_limit, nofile).
+MemoryMax=2G
+MemorySwapMax=0
+CPUQuota=200%
+TasksMax=512
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

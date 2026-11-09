@@ -76,6 +76,22 @@ ENGINE_CODES: dict[str, tuple[str, int]] = {
     "token_invalid": ("dns_token_invalid", 422),
     "listen_conflict": ("dns_listen_conflict", 422),
     "plain_doh_public": ("dns_plain_doh_public", 422),
+    # Final phase (docs/41 §2–§4): secondary zones, TSIG, signing, filtering, backup.
+    "zone_read_only": ("dns_zone_read_only", 409),
+    "zone_type_mismatch": ("dns_zone_type_mismatch", 409),
+    "tsig_not_found": ("dns_tsig_not_found", 404),
+    "tsig_exists": ("dns_tsig_exists", 409),
+    "tsig_in_use": ("dns_tsig_in_use", 409),
+    "tsig_key_not_found": ("dns_tsig_not_found", 404),
+    "tsig_key_exists": ("dns_tsig_exists", 409),
+    "tsig_key_in_use": ("dns_tsig_in_use", 409),
+    "rollover_in_progress": ("dns_rollover_in_progress", 409),
+    "tsig_invalid": ("dns_tsig_invalid", 422),
+    "dnssec_disabled": ("dns_dnssec_disabled", 409),
+    "filter_list_not_found": ("dns_filter_list_not_found", 404),
+    "filtering_disabled": ("dns_filtering_disabled", 409),
+    "restore_invalid": ("dns_restore_invalid", 422),
+    "backup_failed": ("dns_backup_failed", 502),
 }
 
 
@@ -234,10 +250,16 @@ class DnsClient:
         *,
         timeout: float | None = None,
         expect_json: bool = True,
+        content: bytes | None = None,
+        content_type: str = "application/octet-stream",
+        raw: bool = False,
+        max_bytes: int = MAX_RESPONSE_BYTES,
     ) -> Any:
+        """One engine call. ``content`` sends raw bytes instead of a JSON ``body``;
+        ``raw`` returns the answer bytes untouched (``max_bytes`` caps them)."""
         socket_file = socket_path()
         if not os.path.exists(socket_file):
-            raise DnsError("dns_not_installed", 503, "The MRK DNS engine is not installed here")
+            raise DnsError("dns_not_installed", 503, "The Pishkar DNS engine is not installed here")
         token = TOKENS.read(token_path())
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         actor = CURRENT_ACTOR.get()
@@ -246,10 +268,13 @@ class DnsClient:
             headers["X-MRK-Actor"] = "".join(
                 ch for ch in actor[:64] if ch.isalnum() or ch in "._@-"
             ) or "panel"
-        content = b""
-        if body is not None:
-            content = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
-            headers["Content-Type"] = "application/json"
+        if content is not None:
+            headers["Content-Type"] = content_type
+        else:
+            content = b""
+            if body is not None:
+                content = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
+                headers["Content-Type"] = "application/json"
         limit = timeout if timeout is not None else self.timeout
         try:
             async with httpx.AsyncClient(
@@ -265,7 +290,7 @@ class DnsClient:
                     data = bytearray()
                     async for chunk in response.aiter_bytes():
                         data.extend(chunk)
-                        if len(data) > MAX_RESPONSE_BYTES:
+                        if len(data) > max_bytes:
                             raise DnsError(
                                 "dns_unreachable", 502, "The DNS engine answer is too large",
                                 reason="response_too_large",
@@ -284,6 +309,8 @@ class DnsClient:
             ) from None
         if response.status_code >= 400:
             raise map_engine_error(response.status_code, bytes(data))
+        if raw:
+            return bytes(data)
         if not expect_json:
             return bytes(data).decode("utf-8", errors="replace")
         if not data:
@@ -316,7 +343,7 @@ class DnsClient:
         """
         socket_file = socket_path()
         if not os.path.exists(socket_file):
-            raise DnsError("dns_not_installed", 503, "The MRK DNS engine is not installed here")
+            raise DnsError("dns_not_installed", 503, "The Pishkar DNS engine is not installed here")
         token = TOKENS.read(token_path())
         headers = {"Authorization": f"Bearer {token}", "Accept": "*/*"}
         content = b""

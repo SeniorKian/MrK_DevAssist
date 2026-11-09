@@ -211,12 +211,18 @@ jobs:
       - run: go vet ./...
       - name: Unit, integration and race tests
         run: go test -race -count=1 ./...
-      - name: Fuzz the wire parser, message handling and zone-file import briefly
+      - name: Fuzz the parsers and message handling briefly (every Fuzz target of the module)
         run: |
           go test -run='^$' -fuzz='^FuzzParseQuery$' -fuzztime=20s ./internal/wire
           go test -run='^$' -fuzz='^FuzzTemplate$' -fuzztime=20s ./internal/wire
           go test -run='^$' -fuzz='^FuzzImport$' -fuzztime=20s ./internal/zone
           go test -run='^$' -fuzz='^FuzzHandle$' -fuzztime=20s ./internal/engine
+          go test -run='^$' -fuzz='^FuzzZoneMessages$' -fuzztime=20s ./internal/engine
+          go test -run='^$' -fuzz='^FuzzSegment$' -fuzztime=20s ./internal/querylog
+          go test -run='^$' -fuzz='^FuzzParseFilter$' -fuzztime=20s ./internal/querylog
+          go test -run='^$' -fuzz='^FuzzParseList$' -fuzztime=20s ./internal/filter
+          go test -run='^$' -fuzz='^FuzzTransferParse$' -fuzztime=20s ./internal/xfr
+          go test -run='^$' -fuzz='^FuzzTSIGCheck$' -fuzztime=20s ./internal/tsig
       - name: Known vulnerabilities in the module graph and the standard library
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Static build smoke test

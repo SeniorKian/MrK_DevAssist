@@ -8,6 +8,7 @@ import { apiMutate, refreshCsrf, refreshSession, setCsrfToken, setUnauthorizedHa
 import { ConfirmProvider } from "./ConfirmDialog";
 import { AppShell } from "./AppShell";
 import { UiModeProvider } from "./uiMode";
+import { MySpaceProvider } from "./my/MySpaceContext";
 import { Login } from "./Login";
 import { Setup, type SetupValues } from "./Setup";
 import { DEFAULT_PASSWORD_POLICY, readAuthFailure, readPasswordPolicy, type AuthFailure, type PasswordPolicy } from "./AuthShell";
@@ -193,6 +194,8 @@ export function App() {
       })
     });
     if (!response.ok) return readAuthFailure(response);
+    // docs/43 §0.1: sign-up with admin approval answers 202 without a session; say so in plain words.
+    if (response.status === 202) return { status: 202, code: "signup_pending", fields: [] };
     adoptSession((await response.json()) as { user: AuthUser; csrf_token: string });
     return true;
   };
@@ -374,6 +377,7 @@ export function App() {
     content = (
       <UiModeProvider userId={user.id} language={language}>
         <ConfirmProvider>
+          <MySpaceProvider userId={user.id}>
           <AppShell
             language={language}
             colorMode={mode}
@@ -384,6 +388,7 @@ export function App() {
             onColorModeChange={toggleMode}
             onUserChange={onUserChange}
           />
+          </MySpaceProvider>
         </ConfirmProvider>
       </UiModeProvider>
     );

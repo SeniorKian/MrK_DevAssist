@@ -61,7 +61,7 @@ export const SETTINGS_FIXTURE: SettingSpec[] = [
       { value: "custom", label: { fa: "DNS دلخواه", en: "Custom DNS" } }
     ],
     label: { fa: "پیدا کردن آدرس‌ها با", en: "Look up addresses with" },
-    description: { fa: "MRK آدرس منابع دریافت را با کدام DNS پیدا کند. تغییر فوراً اعمال می‌شود.", en: "Which DNS MRK uses to find package sources. Applies at once." }
+    description: { fa: "پیشکار آدرس منابع دریافت را با کدام DNS پیدا کند. تغییر فوراً اعمال می‌شود.", en: "Which DNS Pishkar uses to find package sources. Applies at once." }
   },
   {
     key: "network.dns.servers", group: "security.network", type: "list", default: [], value: [], max_items: 6, source: "runtime", danger: "medium", requires: "upstream:write",

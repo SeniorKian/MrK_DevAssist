@@ -550,8 +550,8 @@ class DokployService:
         body: dict[str, Any] = {id_field: service_id}
         procedure = f"{router}.{action}"
         if service_type in norm.DEPLOYABLE_TYPES and action in {"deploy", "redeploy"}:
-            body["title"] = "Manual deployment from MRK" if action == "deploy" else (
-                "Redeploy from MRK"
+            body["title"] = "Manual deployment from Pishkar" if action == "deploy" else (
+                "Redeploy from Pishkar"
             )
         elif service_type in norm.DATABASE_TYPES and action == "redeploy":
             # Databases have no redeploy; Dokploy's "reload" restarts the service

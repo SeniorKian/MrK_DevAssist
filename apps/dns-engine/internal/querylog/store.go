@@ -56,6 +56,10 @@ type Store struct {
 	cacheMu sync.Mutex
 	cache   map[uint64]*block
 	order   []uint64
+
+	// gen changes on every Delete (cursor relocation, Cursor.Gen); it starts
+	// at the open time so cursors from a previous process are relocated too.
+	gen uint64
 }
 
 // OpenStore opens (creating) dir and recovers it.
@@ -63,7 +67,7 @@ func OpenStore(dir string, now func() time.Time) (*Store, []error) {
 	if now == nil {
 		now = time.Now
 	}
-	s := &Store{dir: dir, now: now, SegmentRows: DefaultSegmentRows, SegmentAge: DefaultSegmentAge,
+	s := &Store{dir: dir, now: now, SegmentRows: DefaultSegmentRows, SegmentAge: DefaultSegmentAge, gen: uint64(time.Now().UnixNano()),
 		cache: map[uint64]*block{}}
 	var warns []error
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -431,6 +435,7 @@ type DeleteResult struct {
 func (s *Store) Delete(client *Filter, before int64) (DeleteResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.gen++ // row indices may shift: open cursors relocate by timestamp
 	var res DeleteResult
 	if client == nil && before == 0 {
 		for len(s.segs) > 0 {
@@ -524,7 +529,7 @@ func (s *Store) Delete(client *Filter, before int64) (DeleteResult, error) {
 
 var (
 	allOnes = [16]uint32{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
-	allSrc  = [SrcCount]uint32{1, 1, 1, 1, 1, 1, 1, 1, 1}
+	allSrc  = [SrcCount]uint32{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
 )
 
 // SearchResult is the outcome of one search page.
@@ -550,19 +555,30 @@ func (s *Store) Search(ctx context.Context, f *Filter, budget time.Duration) Sea
 	expired := func() bool {
 		return (!deadline.IsZero() && time.Now().After(deadline)) || ctx.Err() != nil
 	}
+	var gen uint64
+	// cursor makes the resume position of row i-1 (next row to scan) of b
+	cursor := func(seq uint64, b *block, row int) *Cursor {
+		c := &Cursor{Seq: seq, Row: row, Gen: gen}
+		if b != nil && row-1 >= 0 && row-1 < b.len() {
+			c.TS = b.ts[row-1]
+		} else if f.Cursor != nil && f.Cursor.Seq == seq {
+			c.TS = f.Cursor.TS
+		}
+		return c
+	}
 	// scan one block from start downwards; true when the page is complete
 	scan := func(seq uint64, b *block, start int, mt *matcher) bool {
 		res.Scanned++
 		for i := start; i >= 0; i-- {
 			if i&4095 == 0 && i != start && expired() {
 				res.Truncated = true
-				res.Next = &Cursor{Seq: seq, Row: i + 1}
+				res.Next = cursor(seq, b, i+1)
 				return true
 			}
 			if mt.match(b, i) {
 				res.Rows = append(res.Rows, b.row(i))
 				if len(res.Rows) >= limit {
-					res.Next = &Cursor{Seq: seq, Row: i}
+					res.Next = cursor(seq, b, i)
 					return true
 				}
 			}
@@ -581,12 +597,28 @@ func (s *Store) Search(ctx context.Context, f *Filter, budget time.Duration) Sea
 		}
 		return n - 1, true
 	}
+	// relocate fixes the start row inside the cursor's block when rows were
+	// deleted since the cursor was made (indices shifted): the first row,
+	// scanning down, not newer than the cursor's next row.
+	relocate := func(seq uint64, b *block, start int) int {
+		start = min(start, b.len()-1)
+		if f.Cursor == nil || seq != f.Cursor.Seq || f.Cursor.Gen == 0 || f.Cursor.Gen == gen || f.Cursor.TS == 0 {
+			return start
+		}
+		for i := start; i >= 0; i-- {
+			if b.ts[i] <= f.Cursor.TS {
+				return i
+			}
+		}
+		return -1
+	}
 	s.mu.Lock()
+	gen = s.gen
 	segs := append([]*segMeta(nil), s.segs...)
 	if start, ok := startFor(s.activeSeq, s.active.len()); ok && start >= 0 && s.overlaps(f, s.active) {
 		var mt matcher
 		f.compile(s.active, &mt)
-		if scan(s.activeSeq, s.active, start, &mt) {
+		if start = relocate(s.activeSeq, s.active, start); start >= 0 && scan(s.activeSeq, s.active, start, &mt) {
 			s.mu.Unlock()
 			return res
 		}
@@ -600,7 +632,7 @@ func (s *Store) Search(ctx context.Context, f *Filter, budget time.Duration) Sea
 		}
 		if expired() {
 			res.Truncated = true
-			res.Next = &Cursor{Seq: m.Seq, Row: start + 1}
+			res.Next = cursor(m.Seq, nil, start+1)
 			return res
 		}
 		b, err := s.loadBlock(m)
@@ -609,7 +641,7 @@ func (s *Store) Search(ctx context.Context, f *Filter, budget time.Duration) Sea
 		}
 		var mt matcher
 		f.compile(b, &mt)
-		if scan(m.Seq, b, min(start, b.len()-1), &mt) {
+		if start = relocate(m.Seq, b, start); start >= 0 && scan(m.Seq, b, start, &mt) {
 			return res
 		}
 	}

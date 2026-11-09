@@ -50,7 +50,7 @@ const COPY = {
     en: "Each service on its own: is it running, which domain opens it, and how much space it uses."
   },
   empty: { fa: "هنوز سرویسی گزارش نشده", en: "No services reported yet" },
-  emptyBody: { fa: "این نسخه از سرور فهرست سرویس‌ها را نمی‌دهد. بعد از به‌روزرسانی MRK دوباره سر بزنید.", en: "This server version doesn't list its services. Come back after updating MRK." },
+  emptyBody: { fa: "این نسخه از سرور فهرست سرویس‌ها را نمی‌دهد. بعد از به‌روزرسانی پیشکار دوباره سر بزنید.", en: "This server version doesn't list its services. Come back after updating Pishkar." },
   loadFailed: { fa: "فهرست سرویس‌ها باز نشد.", en: "The service list didn't load." },
   domainsFailed: { fa: "جزئیات سلامت دامنه‌ها باز نشد؛ فقط فهرست آن‌ها را می‌بینید.", en: "Domain health details didn't load; you only see the list." },
   port: { fa: "این سرویس روی پورت {port} داخل سرور است.", en: "This service listens on port {port} inside the server." },

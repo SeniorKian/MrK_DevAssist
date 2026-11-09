@@ -1,0 +1,53 @@
+name: Feature request / درخواست قابلیت
+description: Suggest an idea or an improvement. / یک ایده یا بهبود پیشنهاد کنید.
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Persian or English is fine. Bigger features usually start with a design document in `docs/` (see CONTRIBUTING.md).
+        فارسی یا انگلیسی بنویسید. قابلیت‌های بزرگ معمولاً با یک سند طراحی در `docs/` شروع می‌شوند (CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / مسئله
+      description: What are you trying to do, and what makes it hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution / راه‌حل پیشنهادی
+      description: How should it work? Which page, setting or API?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / راه‌های دیگر
+      description: Other ways you considered or use today.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / بخش
+      multiple: true
+      options:
+        - Panel / UI
+        - npm registry
+        - PyPI mirror
+        - S3 storage
+        - DNS engine
+        - Backups / restore
+        - Host Agent / Docker / Dokploy
+        - Firewall
+        - Monitoring / notifications
+        - Users / roles / sign-in
+        - Install / upgrade
+        - Documentation
+        - Other
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contribution / مشارکت
+      options:
+        - label: I would like to work on this. / دوست دارم خودم رویش کار کنم.

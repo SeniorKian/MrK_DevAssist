@@ -102,7 +102,7 @@ const labels = {
   }
 } as const;
 
-const LOGS_MISSING = { fa: "دیدن لاگ روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "Viewing logs isn't on your server's current version. Update MRK." };
+const LOGS_MISSING = { fa: "دیدن لاگ روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "Viewing logs isn't on your server's current version. Update Pishkar." };
 
 /** A plain sentence for module-missing / not-paired / helper-down; null → let FriendlyError explain. */
 function logsStatusText(language: Language, error: unknown): string | null {

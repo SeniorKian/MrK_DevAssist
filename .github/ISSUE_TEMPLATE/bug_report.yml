@@ -1,0 +1,79 @@
+name: Bug report / گزارش باگ
+description: Something does not work as described. / چیزی طبق توضیح کار نمی‌کند.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Persian or English is fine. **Security problems: do not file them here**, see SECURITY.md.
+        ممنون از گزارش شما! فارسی یا انگلیسی بنویسید. **مشکل امنیتی را این‌جا ننویسید**؛ SECURITY.md را ببینید.
+        Remove passwords, tokens, keys and private domain names from logs. / رمز، توکن، کلید و دامنه خصوصی را از لاگ‌ها پاک کنید.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened? / چه اتفاقی افتاد؟
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / مراحل تکرار
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See error ...
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install type / نوع نصب
+      options:
+        - Docker (compose.yaml, built from source)
+        - Docker (compose.production.yaml, published image)
+        - Native (scripts/install-native.sh)
+        - Development setup
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / بخش
+      multiple: true
+      options:
+        - Panel / UI
+        - npm registry
+        - PyPI mirror
+        - S3 storage
+        - DNS engine
+        - Backups / restore
+        - Host Agent / Docker / Dokploy
+        - Firewall
+        - Monitoring / notifications
+        - Users / roles / sign-in
+        - Install / upgrade
+        - Other
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit / نسخه یا commit
+      description: Panel → About, image digest, or `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Server OS / سیستم‌عامل سرور
+      placeholder: Ubuntu 24.04, Docker 28.x, Dokploy vX
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / لاگ‌ها
+      description: "`docker compose logs --tail=200 mrk-mirror` or `journalctl -u pishkar -n 200`"
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else? / توضیح بیشتر
+      description: Screenshots, settings you changed, network setup (proxy, mirrors).

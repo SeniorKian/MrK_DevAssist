@@ -685,7 +685,7 @@ def apple_profile(*, doh_url: str | None, dot_name: str | None, name: str | None
     value is escaped."""
     if not doh_url and not dot_name:
         raise ValueError("doh_url or dot_name is required")
-    title = name or "MRK DNS"
+    title = name or "Pishkar DNS"
     settings: dict[str, Any]
     if doh_url:
         settings = {"DNSProtocol": "HTTPS", "ServerURL": doh_url}
@@ -701,7 +701,7 @@ def apple_profile(*, doh_url: str | None, dot_name: str | None, name: str | None
         "PayloadIdentifier": f"com.mrk.devassist.dns.settings.{inner_uuid}",
         "PayloadUUID": inner_uuid,
         "PayloadDisplayName": title,
-        "PayloadDescription": "Encrypted DNS through MRK DevAssist",
+        "PayloadDescription": "Encrypted DNS through Pishkar DevAssist",
         "DNSSettings": settings,
     }
     document = {
@@ -710,8 +710,8 @@ def apple_profile(*, doh_url: str | None, dot_name: str | None, name: str | None
         "PayloadIdentifier": f"com.mrk.devassist.dns.{outer_uuid}",
         "PayloadUUID": outer_uuid,
         "PayloadDisplayName": title,
-        "PayloadDescription": "Sends this device's DNS queries to MRK DevAssist, encrypted.",
-        "PayloadOrganization": "MRK DevAssist",
+        "PayloadDescription": "Sends this device's DNS queries to Pishkar DevAssist, encrypted.",
+        "PayloadOrganization": "Pishkar DevAssist",
         "PayloadRemovalDisallowed": False,
         "PayloadContent": [payload],
     }

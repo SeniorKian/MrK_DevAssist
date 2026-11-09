@@ -61,7 +61,7 @@ def connection_snippets(
         ),
         "dokploy": (
             "Dokploy -> Settings -> S3 Destinations -> Add\n"
-            "Name: MRK\n"
+            "Name: Pishkar\n"
             f"Access Key: {akid}\n"
             f"Secret Key: {secret}\n"
             f"Bucket: {target}\n"

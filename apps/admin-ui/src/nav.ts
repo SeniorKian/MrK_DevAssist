@@ -26,6 +26,8 @@ import GroupRoundedIcon from "@mui/icons-material/GroupRounded";
 import NotificationsRoundedIcon from "@mui/icons-material/NotificationsRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import InfoRoundedIcon from "@mui/icons-material/InfoRounded";
+import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
+import HistoryRoundedIcon from "@mui/icons-material/HistoryRounded";
 import { hasPermission } from "./api";
 import type { Language } from "./i18n";
 import type { Bi } from "./copy/text";
@@ -46,6 +48,8 @@ export type PanelKey =
   | "DnsMonitor"
   | "DnsLogs"
   | "DnsEncrypted"
+  | "DnsTemplates"
+  | "DnsFiltering"
   | "PackagesPanel"
   | "UpstreamsPanel"
   | "RegistriesPanel"
@@ -68,6 +72,7 @@ export type PanelKey =
   | "RulesPanel"
   | "JobsPanel"
   | "HistoryPanel"
+  | "TenancyPanel"
   | "SettingsPage"
   | "AboutPage";
 
@@ -129,7 +134,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ]
   },
   {
-    // docs/36–38: MRK's own DNS server (D1 + D2 monitoring and logs). The sanctions bypass comes in D3.
+    // docs/36–41: Pishkar's own DNS server (zones, templates, blocking, monitoring, logs, encrypted DNS).
     key: "dns",
     label: { fa: "DNS", en: "DNS" },
     icon: TravelExploreRoundedIcon,
@@ -173,7 +178,25 @@ export const NAV_GROUPS: NavGroup[] = [
         hint: { fa: "بگویید هر نام به کدام آدرس برود؛ برای شبکه خودتان یا دامنه‌های شما.", en: "Say which address each name goes to, for your own network or domains." },
         anyOf: ["dns:read"],
         panel: "DnsNames",
-        keywords: ["zone", "زون", "record", "رکورد", "override", "A", "CNAME", "MX", "TXT"]
+        keywords: ["zone", "زون", "record", "رکورد", "override", "A", "CNAME", "MX", "TXT", "secondary", "axfr", "ixfr", "notify", "tsig", "dnssec", "ds", "امضا", "split horizon"]
+      },
+      {
+        // docs/41 §5: ready record sets for new domains; the default one is applied automatically.
+        key: "templates",
+        label: { fa: "قالب‌ها", en: "Templates" },
+        hint: { fa: "رکوردهای آماده برای دامنه تازه؛ قالب پیش‌فرض خودکار اعمال می‌شود.", en: "Ready records for a new domain; the default template is applied automatically." },
+        anyOf: ["dns:read"],
+        panel: "DnsTemplates",
+        keywords: ["template", "قالب", "google workspace", "microsoft 365", "spf", "dmarc", "dkim", "caa", "mx", "ایمیل", "email"]
+      },
+      {
+        // docs/41 §3: block lists, allow/block names, «why was this blocked?», device groups.
+        key: "blocking",
+        label: { fa: "مسدودسازی", en: "Blocking" },
+        hint: { fa: "تبلیغات و سایت‌های خطرناک را برای همه دستگاه‌ها ببندید؛ ببینید یک سایت چرا بسته شد.", en: "Block ads and dangerous sites for every device; see why a site was blocked." },
+        anyOf: ["dns:read"],
+        panel: "DnsFiltering",
+        keywords: ["block", "blocklist", "adblock", "ads", "تبلیغ", "malware", "بدافزار", "filter", "فیلتر", "pihole", "adguard", "safe search", "group", "گروه"]
       },
       {
         key: "test",
@@ -228,7 +251,7 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         key: "sources",
         label: { fa: "منابع دریافت", en: "Package sources" },
-        hint: { fa: "MRK بسته‌ها را از کجا و به چه ترتیبی بگیرد.", en: "Where MRK fetches packages from, and in what order." },
+        hint: { fa: "پیشکار بسته‌ها را از کجا و به چه ترتیبی بگیرد.", en: "Where Pishkar fetches packages from, and in what order." },
         anyOf: ["upstream:read"],
         panel: "UpstreamsPanel",
         keywords: ["upstream", "آپستریم", "mirror", "offline", "بدون اینترنت"]
@@ -373,7 +396,7 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         key: "dns",
         label: { fa: "DNS و شبکه داخلی", en: "DNS & internal network" },
-        hint: { fa: "MRK آدرس سایت‌ها را چطور پیدا کند و آیا به منابع داخل شبکه وصل شود.", en: "How MRK looks up addresses, and whether it may use internal sources." },
+        hint: { fa: "پیشکار آدرس سایت‌ها را چطور پیدا کند و آیا به منابع داخل شبکه وصل شود.", en: "How Pishkar looks up addresses, and whether it may use internal sources." },
         anyOf: ["upstream:read"],
         advancedOnly: true,
         panel: "NetworkPanel",
@@ -410,6 +433,39 @@ export const NAV_GROUPS: NavGroup[] = [
         anyOf: ["token:read"],
         panel: "AppKeysPanel",
         keywords: ["token", "توکن", "api", "ci"]
+      },
+      {
+        // docs/43 §2, §4: «فضای من» on the admin side.
+        key: "workspaces",
+        label: { fa: "فضاهای کاری", en: "Workspaces" },
+        hint: { fa: "فضای هر کاربر و تیم، با مصرف و بسته‌اش.", en: "Each user's and team's space, with its usage and plan." },
+        anyOf: ["tenancy:admin"],
+        panel: "TenancyPanel",
+        keywords: ["workspace", "tenant", "فضا", "مشتری", "customer", "view as", "دیدن به‌جای"]
+      },
+      {
+        key: "plans",
+        label: { fa: "بسته‌ها", en: "Plans" },
+        hint: { fa: "هر بسته می‌گوید کاربر چه امکاناتی دارد و تا چه سقفی.", en: "Each plan says what a user gets, and up to what limit." },
+        anyOf: ["tenancy:admin"],
+        panel: "TenancyPanel",
+        keywords: ["plan", "quota", "سهمیه", "سقف", "بسته"]
+      },
+      {
+        key: "signups",
+        label: { fa: "ثبت‌نام‌های در انتظار", en: "Pending sign-ups" },
+        hint: { fa: "کسانی که ثبت‌نام کرده‌اند و منتظر تأیید شما هستند.", en: "People who signed up and wait for your approval." },
+        anyOf: ["tenancy:admin"],
+        panel: "TenancyPanel",
+        keywords: ["signup", "approve", "تأیید"]
+      },
+      {
+        key: "my-space",
+        label: { fa: "تنظیمات فضای من", en: "My space settings" },
+        hint: { fa: "روشن کردن «فضای من»، روش ثبت‌نام و بسته پیش‌فرض.", en: "Turn on My space, choose how sign-up works and the default plan." },
+        anyOf: ["tenancy:admin"],
+        panel: "TenancyPanel",
+        keywords: ["tenancy", "my space", "فضای من"]
       },
       {
         key: "signup",
@@ -472,6 +528,55 @@ export const NAV_GROUPS: NavGroup[] = [
   }
 ];
 
+// ── «فضای من» (docs/43 §4): its own area, routes `#/my/<tab>` ──────────────────
+
+export type MyTabKey = "home" | "domains" | "files" | "packages" | "team" | "keys" | "activity";
+
+export type MyTab = {
+  key: MyTabKey;
+  label: Bi;
+  hint: Bi;
+  icon: SvgIconComponent;
+  /** Shown when the workspace's plan has ANY of these features (empty = always). */
+  features: string[];
+  keywords?: string[];
+};
+
+export const MY_TABS: MyTab[] = [
+  { key: "home", label: { fa: "خانه", en: "Home" }, hint: { fa: "مصرف شما و چیزهایی که باید بدانید.", en: "What you use, and what to know." }, icon: HomeRoundedIcon, features: [] },
+  { key: "domains", label: { fa: "دامنه‌ها", en: "Domains" }, hint: { fa: "دامنه خودتان را بیاورید و بگویید هر نام به کجا برود.", en: "Bring your domain and say where each name goes." }, icon: TravelExploreRoundedIcon, features: ["dns"], keywords: ["dns", "domain", "record", "رکورد"] },
+  { key: "files", label: { fa: "فضای فایل", en: "File space" }, hint: { fa: "فایل‌هایتان را بگذارید و به برنامه‌ها وصل کنید.", en: "Keep your files and connect your apps." }, icon: FolderRoundedIcon, features: ["s3"], keywords: ["s3", "bucket", "file", "فایل"] },
+  { key: "packages", label: { fa: "بسته‌ها", en: "Packages" }, hint: { fa: "بسته‌های خصوصی npm و پایتون خودتان.", en: "Your own private npm and Python packages." }, icon: Inventory2RoundedIcon, features: ["npm", "pypi"], keywords: ["npm", "pip", "pypi"] },
+  { key: "team", label: { fa: "اعضا", en: "Members" }, hint: { fa: "چه کسانی با شما در این فضا کار می‌کنند.", en: "Who works with you in this space." }, icon: GroupRoundedIcon, features: [], keywords: ["team", "invite", "دعوت", "تیم"] },
+  { key: "keys", label: { fa: "کلیدهای برنامه", en: "API keys" }, hint: { fa: "کلید برای اسکریپت‌ها و ابزارها، بدون رمز شما.", en: "Keys for scripts and tools, without your password." }, icon: KeyRoundedIcon, features: ["api_tokens"], keywords: ["token", "api", "توکن"] },
+  { key: "activity", label: { fa: "تاریخچه", en: "Activity" }, hint: { fa: "چه کسی، چه زمانی، چه کاری در این فضا کرد.", en: "Who did what in this space, and when." }, icon: HistoryRoundedIcon, features: [], keywords: ["audit", "log", "history"] }
+];
+
+/** Phone bottom bar in My space: these + «بیشتر». */
+export const MY_MOBILE_PRIMARY: MyTabKey[] = ["home", "domains", "files"];
+
+export function myHref(tab: MyTabKey = "home"): string {
+  return `#/my/${tab}`;
+}
+
+export function isMyTab(value: string | undefined): value is MyTabKey {
+  return MY_TABS.some((item) => item.key === value);
+}
+
+/** My space tabs the plan allows (`has(feature)` answers for the current workspace). */
+export function visibleMyTabs(has: (feature: string) => boolean): MyTab[] {
+  return MY_TABS.filter((tab) => tab.features.length === 0 || tab.features.some(has));
+}
+
+/** Ctrl+K inside My space. */
+export function searchMy(query: string, language: Language, tabs: MyTab[]): { href: string; title: string; hint: string }[] {
+  const needle = normalizeTyped(query);
+  if (!needle) return [];
+  return tabs
+    .filter((tab) => [tab.label.fa, tab.label.en, tab.hint.fa, tab.hint.en, ...(tab.keywords ?? [])].map(normalizeTyped).some((field) => field.includes(needle)))
+    .map((tab) => ({ href: myHref(tab.key), title: tab.label[language], hint: tab.hint[language] }));
+}
+
 /** Footer utilities outside the 7 groups. Route `#/settings`, `#/about`. */
 export const NAV_UTILITIES: { key: UtilityKey; label: Bi; icon: SvgIconComponent; panel: PanelKey }[] = [
   { key: "settings", label: { fa: "همه تنظیمات", en: "All settings" }, icon: SettingsRoundedIcon, panel: "SettingsPage" },
@@ -514,6 +619,8 @@ export const ROUTE_ALIASES: Record<string, { group: GroupKey; tab?: string }> = 
   "people/signup": { group: "people", tab: "signup" },
   "people/registration": { group: "people", tab: "signup" },
   "people/tokens": { group: "people", tab: "app-keys" },
+  "people/tenancy": { group: "people", tab: "my-space" },
+  "people/view-as": { group: "people", tab: "workspaces" },
   "server/usage": { group: "server", tab: "resources" },
   "server/monitoring": { group: "server", tab: "resources" },
   "server/dokploy": { group: "server", tab: "apps" },
@@ -568,6 +675,14 @@ export const ROUTE_ALIASES: Record<string, { group: GroupKey; tab?: string }> = 
   "dns/resolution": { group: "dns", tab: "settings" },
   "dns/trace": { group: "dns", tab: "test" },
   "dns/queries": { group: "dns", tab: "logs" },
+  "dns/template": { group: "dns", tab: "templates" },
+  "dns/filtering": { group: "dns", tab: "blocking" },
+  "dns/filter": { group: "dns", tab: "blocking" },
+  "dns/blocklist": { group: "dns", tab: "blocking" },
+  "dns/adblock": { group: "dns", tab: "blocking" },
+  "dns/groups": { group: "dns", tab: "blocking" },
+  "dns/backup": { group: "dns", tab: "settings" },
+  "dns/restore": { group: "dns", tab: "settings" },
   "server/dns": { group: "dns", tab: "status" },
   "services/dns": { group: "dns", tab: "status" },
   "home/dns": { group: "dns", tab: "status" }
@@ -577,6 +692,8 @@ export type Route =
   /** `query` (without `?`) is set only when the hash named this exact tab; a fallback tab drops it. */
   | { kind: "tab"; group: GroupKey; tab: string; query?: string }
   | { kind: "utility"; key: UtilityKey; query?: string }
+  /** «فضای من» (docs/43 §4): `#/my/<tab>`. Which tabs a workspace sees is decided by the shell (plan features). */
+  | { kind: "my"; tab: MyTabKey; query?: string }
   | { kind: "kit" };
 
 const GROUP_INDEX = new Map(NAV_GROUPS.map((group) => [group.key, group]));
@@ -622,6 +739,10 @@ export function parseHash(hash: string): Route | null {
   const legacy = LEGACY_ROUTES[raw];
   if (legacy) return withQuery({ kind: "tab" as const, ...legacy });
   const [first, second, ...rest] = raw.split("/");
+  if (first === "my") {
+    const tab = isMyTab(second) ? second : "home";
+    return isMyTab(second) || !second ? withQuery({ kind: "my" as const, tab }) : { kind: "my" as const, tab };
+  }
   if (first === "settings" || first === "about") {
     const route = { kind: "utility" as const, key: first as UtilityKey };
     return second ? route : withQuery(route);
@@ -670,14 +791,14 @@ export function resolveRoute(hash: string, permissions: readonly string[], mode:
   const parsed = parseHash(hash);
   const current = hash.startsWith("#") ? hash : `#${hash}`;
   const finish = (route: Route): ResolvedRoute => {
-    const base = route.kind === "tab" ? routeHref(route.group, route.tab) : route.kind === "utility" ? utilityHref(route.key) : "#/__kit";
+    const base = route.kind === "tab" ? routeHref(route.group, route.tab) : route.kind === "utility" ? utilityHref(route.key) : route.kind === "my" ? myHref(route.tab) : "#/__kit";
     const query = route.kind === "kit" ? undefined : route.query;
     const href = query ? `${base}?${query}` : base;
     return { route, href, redirected: href !== current };
   };
   if (!parsed) return finish(home);
   if (parsed.kind === "kit") return finish(import.meta.env.DEV ? parsed : home);
-  if (parsed.kind === "utility") return finish(parsed);
+  if (parsed.kind === "utility" || parsed.kind === "my") return finish(parsed);
   const group = findGroup(parsed.group);
   if (!group) return finish(home);
   const tabs = visibleTabs(group, permissions, mode);

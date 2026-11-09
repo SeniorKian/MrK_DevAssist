@@ -101,6 +101,8 @@ def test_every_rule_triggers() -> None:
         "dns_under_pressure", "dns_attack_detected",
         # need a reachable engine; covered in test_dns_d4.py
         "dns_certificate_expiring", "dns_trust_anchor_problem",
+        # need a reachable engine; covered in test_dns_final.py
+        "dns_secondary_problem", "dns_signing_problem",
     } == set(
         home.ATTENTION_RULES
     )

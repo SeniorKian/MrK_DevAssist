@@ -248,7 +248,7 @@ class Routing:
             ),
             f"HTTPS را {'روشن' if https else 'خاموش'} کنید؛ Certificate: {cert}.",
             "ذخیره کنید؛ برای سرویس Compose یک بار Deploy را بزنید تا دامنه فعال شود.",
-            "در MRK روی «بررسی» بزنید تا DNS، گواهی و رسیدن درخواست بررسی شود.",
+            "در پیشکار روی «بررسی» بزنید تا DNS، گواهی و رسیدن درخواست بررسی شود.",
         ]
         steps_en = [
             f"In your DNS, create an A record for “{host}” pointing to this server's public IP.",
@@ -262,7 +262,7 @@ class Routing:
             ),
             f"Turn HTTPS {'on' if https else 'off'}; Certificate: {cert}.",
             "Save; for a Compose service click Deploy once so the domain becomes active.",
-            "Back in MRK, click Verify to check DNS, the certificate and that requests arrive.",
+            "Back in Pishkar, click Verify to check DNS, the certificate and that requests arrive.",
         ]
         return {
             "steps_fa": steps_fa,

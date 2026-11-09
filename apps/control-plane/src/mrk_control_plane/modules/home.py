@@ -109,10 +109,16 @@ ATTENTION_RULES: dict[str, dict[str, Any]] = {
                                  "action": {"kind": "navigate", "route": "#/dns/encrypted"}},
     "dns_trust_anchor_problem": {"any_of": ["dns:read"],
                                  "action": {"kind": "navigate", "route": "#/dns/settings"}},
+    # docs/41 §6: a secondary zone is stale/expired, or a signed zone cannot be signed.
+    "dns_secondary_problem": {"any_of": ["dns:read"],
+                              "action": {"kind": "navigate", "route": "#/dns/names"}},
+    "dns_signing_problem": {"any_of": ["dns:read"],
+                            "action": {"kind": "navigate", "route": "#/dns/names"}},
 }
 CERTIFICATE_WARNING_DAYS = 14
 CERTIFICATE_ERROR_DAYS = 3
 MAX_DNS_ATTACK_ITEMS = 5
+MAX_DNS_ZONE_ITEMS = 5
 
 QUICK_ACTIONS: tuple[dict[str, Any], ...] = (
     {"id": "connect_project", "route": "#/packages/connect", "any_of": ["system:read"]},
@@ -351,6 +357,30 @@ def evaluate(facts: dict[str, Any], now: float) -> list[dict[str, Any]]:
                     "error": error[:200] if isinstance(error, str) else None,
                     "updated_at": dnssec.get("trust_anchor_updated_at"),
                 }))
+
+    # 20./21. Final phase (docs/41 §6): per-zone secondary and signing problems, from the
+    # dns module's cache (zone poll every 60 s plus engine events).
+    zone_problems = (dns or {}).get("zones") if dns and dns.get("reachable") else None
+    counts = {"secondary": 0, "signing": 0}
+    for problem in zone_problems if isinstance(zone_problems, list) else []:
+        kind, zone = problem.get("kind"), problem.get("zone")
+        if kind not in counts or not isinstance(zone, str) or not zone:
+            continue
+        counts[kind] += 1
+        if counts[kind] > MAX_DNS_ZONE_ITEMS:
+            continue
+        if kind == "secondary":
+            item = _item("dns_secondary_problem",
+                         "error" if problem.get("expired") else "warning",
+                         {"zone": zone, "since": problem.get("since"),
+                          "expired": bool(problem.get("expired")),
+                          "error": problem.get("error")}, zone)
+        else:
+            item = _item("dns_signing_problem", "error",
+                         {"zone": zone, "since": problem.get("since"),
+                          "error": problem.get("error")}, zone)
+        item["action"]["route"] = f"#/dns/names?zone={zone}"
+        items.append(item)
 
     items.sort(key=lambda item: (SEVERITY_ORDER[item["severity"]], item["id"]))
     return items
@@ -794,7 +824,9 @@ class HomeService:
                 "setup_complete": bool(status.get("setup_complete")),
                 # Cached by the dns monitor loop; never an engine call per request.
                 "pressure": service.monitor.cached_pressure(),
-                "d4": _dns_d4(status.get("engine"))}
+                "d4": _dns_d4(status.get("engine")),
+                # docs/41 §6: cached per-zone problems (never an engine call per request).
+                "zones": service.cached_zone_problems()}
 
     async def _people(self) -> dict[str, Any]:
         def users() -> int:

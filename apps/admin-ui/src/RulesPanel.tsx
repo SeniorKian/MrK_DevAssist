@@ -40,14 +40,18 @@ const EVENT_PHRASES: Record<string, Bi> = {
   "dns.unreachable": { fa: "DNS سرور جواب ندهد", en: "the server's DNS stops answering" },
   "dns.pressure": { fa: "DNS سرور زیر فشار برود یا از فشار بیرون بیاید", en: "the server's DNS comes under load or recovers" },
   "dns.attack_detected": { fa: "حمله‌ای به DNS سرور دیده شود", en: "an attack on the server's DNS is seen" },
-  "dns.mitigation_auto": { fa: "MRK خودکار دستگاه یا نامی را در DNS کند یا مسدود کند", en: "MRK automatically slows down or blocks a device or name in DNS" },
+  "dns.mitigation_auto": { fa: "پیشکار خودکار دستگاه یا نامی را در DNS کند یا مسدود کند", en: "Pishkar automatically slows down or blocks a device or name in DNS" },
   "dns.logs_degraded": { fa: "لاگ کامل پرسش‌های DNS موقتاً نوشته نشود", en: "the full DNS question log is paused" },
   "dns.logs_recovered": { fa: "نوشتن لاگ پرسش‌های DNS به حالت عادی برگردد", en: "the DNS question log is back to normal" },
   "dns.dnssec_trust_anchor_failed": { fa: "به‌روزرسانی کلید اعتماد ریشه در DNS انجام نشود", en: "updating DNS's root trust key fails" },
   "dns.dnssec_bogus_spike": { fa: "جواب‌های زیادی با امضای خراب به DNS برسد", en: "many answers with broken signatures reach DNS" },
   "dns.tls_certificate_expiring": { fa: "گواهی اتصال رمزدار DNS رو به اتمام باشد", en: "DNS's encrypted connection certificate is about to end" },
   "dns.tls_certificate_expired": { fa: "گواهی اتصال رمزدار DNS تمام شود", en: "DNS's encrypted connection certificate ends" },
-  "dns.priming_failed": { fa: "DNS به سرورهای ریشه اینترنت نرسد", en: "DNS can't reach the internet's root servers" }
+  "dns.priming_failed": { fa: "DNS به سرورهای ریشه اینترنت نرسد", en: "DNS can't reach the internet's root servers" },
+  "dns.secondary_expired": { fa: "نسخه دوم یکی از دامنه‌های DNS از اعتبار بیفتد", en: "the copy of a DNS domain runs out" },
+  "dns.transfer_failed": { fa: "گرفتن نسخه یک دامنه از سرور اصلی انجام نشود", en: "copying a domain from its main server fails" },
+  "dns.filter_list_failed": { fa: "به‌روزرسانی یک فهرست مسدودسازی DNS انجام نشود", en: "updating a DNS block list fails" },
+  "dns.dnssec_signing_failed": { fa: "امضای امنیتی یکی از دامنه‌های DNS انجام نشود", en: "security signing of a DNS domain fails" }
 };
 
 const IMPORTANCE: Record<Severity, { label: Bi; hint: Bi; phrase: Bi; any: Bi }> = {

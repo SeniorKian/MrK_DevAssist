@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 RECORD_TYPES = ("A", "AAAA", "CNAME", "MX", "TXT", "SRV", "NS", "PTR", "CAA", "SOA")
 OVERRIDE_TYPES = ("A", "AAAA", "CNAME")
-ZONE_TYPES = ("primary", "forwarder")
+ZONE_TYPES = ("primary", "forwarder", "secondary")  # secondary: docs/41 §2.1
 STRATEGIES = ("fastest", "parallel", "in_order")
 TTL_MAX = 604800
 TXT_MAX = 4000
@@ -281,7 +281,8 @@ def record_body(payload: Any, zone: str, *, creating: bool) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise DnsInputError("dns_record_invalid", "The record must be an object",
                             [_field("body", "invalid_type")])
-    unknown = sorted(set(payload) - {"name", "type", "ttl", "data", "disabled", "comment", "id"})
+    unknown = sorted(set(payload) - {"name", "type", "ttl", "data", "disabled", "comment", "id",
+                                     "view"})
     if unknown:
         raise DnsInputError("dns_record_invalid", "Unknown fields",
                             [_field(name, "unknown_field") for name in unknown[:10]])
@@ -304,7 +305,7 @@ def record_body(payload: Any, zone: str, *, creating: bool) -> dict[str, Any]:
     if not isinstance(disabled, bool):
         raise DnsInputError("dns_record_invalid", "disabled must be true or false",
                             [_field("disabled", "invalid_type")])
-    return {
+    body = {
         "name": name,
         "type": rtype,
         "ttl": ttl_value(payload.get("ttl"), 3600),
@@ -312,6 +313,12 @@ def record_body(payload: Any, zone: str, *, creating: bool) -> dict[str, Any]:
         "disabled": disabled,
         "comment": _comment(payload.get("comment")),
     }
+    if "view" in payload:
+        # Split horizon (docs/41 §3.3): a client-group id, "" = everyone.
+        from .dns_validate_d5 import record_view
+
+        body["view"] = record_view(payload.get("view"))
+    return body
 
 
 def override_body(payload: Any) -> dict[str, Any]:
@@ -365,16 +372,30 @@ def zone_create_body(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise DnsInputError("invalid_zone_name", "The zone must be an object",
                             [_field("body", "invalid_type")])
-    unknown = sorted(set(payload) - {"name", "type", "forwarders"})
+    from .dns_validate_d5 import SECONDARY_KEYS, secondary_fields
+
+    unknown = sorted(set(payload) - {"name", "type", "forwarders", *SECONDARY_KEYS})
     if unknown:
         raise DnsInputError("dns_record_invalid", "Unknown fields",
                             [_field(name, "unknown_field") for name in unknown[:10]])
     name = canonical_zone(payload.get("name"))
     ztype = payload.get("type", "primary")
     if ztype not in ZONE_TYPES:
-        raise DnsInputError("dns_record_invalid", "Zone type must be primary or forwarder",
+        raise DnsInputError("dns_record_invalid", "Unknown zone type",
                             [_field("type", "invalid_choice", choices=list(ZONE_TYPES))])
     body: dict[str, Any] = {"name": name, "type": ztype}
+    if ztype == "secondary":
+        errors: list[dict[str, Any]] = []
+        if payload.get("forwarders") is not None:
+            errors.append(_field("forwarders", "not_allowed"))
+        body.update(secondary_fields(payload, errors, creating=True))
+        if errors:
+            raise DnsInputError("dns_zone_invalid", "The secondary zone is invalid", errors)
+        return body
+    misplaced = [key for key in SECONDARY_KEYS if payload.get(key) is not None]
+    if misplaced:
+        raise DnsInputError("dns_zone_invalid", "Only secondary zones have primaries",
+                            [_field(key, "not_allowed") for key in misplaced])
     forwarders = forwarder_list(payload.get("forwarders"), required=ztype == "forwarder")
     if forwarders is not None:
         body["forwarders"] = forwarders
@@ -400,11 +421,19 @@ def zone_patch_body(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         raise DnsInputError("dns_record_invalid", "Nothing to change",
                             [_field("body", "required")])
-    unknown = sorted(set(payload) - {"disabled", "forwarders"})
+    from .dns_validate_d5 import SECONDARY_KEYS, ZONE_SECTIONS, secondary_fields, zone_sections
+
+    unknown = sorted(set(payload) - {"disabled", "forwarders", *SECONDARY_KEYS, *ZONE_SECTIONS})
     if unknown:
         raise DnsInputError("dns_record_invalid", "Unknown fields",
                             [_field(name, "unknown_field") for name in unknown[:10]])
     body: dict[str, Any] = {}
+    # docs/41 §2: secondary sources and the transfer/notify/update/dnssec/views sections.
+    errors: list[dict[str, Any]] = []
+    body.update(secondary_fields(payload, errors, creating=False))
+    body.update(zone_sections(payload, errors))
+    if errors:
+        raise DnsInputError("dns_zone_invalid", "Some zone settings are invalid", errors[:50])
     if "disabled" in payload:
         if not isinstance(payload["disabled"], bool):
             raise DnsInputError("dns_record_invalid", "disabled must be true or false",
@@ -637,6 +666,9 @@ def engine_settings(payload: Any) -> dict[str, Any]:
     from .dns_validate_d4 import d4_settings_errors
 
     errors.extend(d4_settings_errors(payload))
+    from .dns_validate_d5 import d5_settings_errors
+
+    errors.extend(d5_settings_errors(payload))
     if errors:
         raise DnsInputError("dns_settings_invalid", "Some DNS settings are invalid", errors[:50])
     return payload

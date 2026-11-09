@@ -22,6 +22,7 @@ import PublicRoundedIcon from "@mui/icons-material/PublicRounded";
 import { ApiError, hasPermission, isAbortError } from "./api";
 import { withDefaults } from "./dnsLive";
 import { DEFAULT_DNSSEC, DEFAULT_RESOLUTION, warningsOf, type DnsD4Status, type DnssecSettings, type ResolutionSettings, type SettingsWarning } from "./dnsSecure";
+import { DnsBackupCard } from "./DnsBackup";
 import { DnssecCard, ResolutionCard, SaveWarnings, cleanSecuritySections, validateDnssec, validateResolution } from "./DnsSecuritySettings";
 import { errorSentence, pick, say, type Bi } from "./copy";
 import {
@@ -35,7 +36,7 @@ import {
 
 const COPY = {
   loadFailed: { fa: "تنظیمات DNS خوانده نشد.", en: "The DNS settings didn't load." },
-  moduleMissing: { fa: "بخش DNS روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "DNS isn't on your server's current version. Update MRK." },
+  moduleMissing: { fa: "بخش DNS روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "DNS isn't on your server's current version. Update Pishkar." },
   // listen
   listenTitle: { fa: "نشانی‌هایی که DNS روی آن‌ها جواب می‌دهد", en: "Addresses DNS answers on" },
   listenHint: {
@@ -55,7 +56,7 @@ const COPY = {
   rangeHint: { fa: "مثل 192.168.0.0/16 یا 10.0.0.0/8", en: "Like 192.168.0.0/16 or 10.0.0.0/8" },
   badRange: { fa: "محدوده را مثل 192.168.0.0/16 بنویسید.", en: "Write the range like 192.168.0.0/16." },
   recursion: { fa: "پرسیدن از اینترنت برای نام‌های ناشناخته", en: "Ask the internet for unknown names" },
-  recursionHint: { fa: "اگر خاموش باشد، MRK فقط نام‌ها و دامنه‌های خودتان را جواب می‌دهد.", en: "When off, MRK only answers your own names and domains." },
+  recursionHint: { fa: "اگر خاموش باشد، پیشکار فقط نام‌ها و دامنه‌های خودتان را جواب می‌دهد.", en: "When off, Pishkar only answers your own names and domains." },
   recursionAllow: { fa: "محدوده‌هایی که می‌توانند از اینترنت بپرسند", en: "Ranges that may ask the internet" },
   openResolver: {
     fa: "خطرناک: «همه نشانی‌ها» اجازه گرفته‌اند. هر کسی در اینترنت می‌تواند از سرور شما برای حمله استفاده کند. فقط شبکه‌های خودتان را بگذارید.",
@@ -63,7 +64,7 @@ const COPY = {
   },
   // upstreams
   upstreamTitle: { fa: "DNS‌های بیرونی", en: "Outside DNS servers" },
-  upstreamHint: { fa: "نام‌هایی که MRK خودش نمی‌داند از این‌ها پرسیده می‌شود. رمزدارها جلوی شنود و دست‌کاری را می‌گیرند.", en: "Names MRK doesn't know are asked here. Encrypted ones stop snooping and tampering." },
+  upstreamHint: { fa: "نام‌هایی که پیشکار خودش نمی‌داند از این‌ها پرسیده می‌شود. رمزدارها جلوی شنود و دست‌کاری را می‌گیرند.", en: "Names Pishkar doesn't know are asked here. Encrypted ones stop snooping and tampering." },
   noUpstreams: { fa: "هنوز هیچ DNS بیرونی ندارید؛ نام‌های اینترنتی جواب نمی‌گیرند.", en: "No outside DNS yet; internet names won't get answers." },
   addUpstream: { fa: "افزودن DNS بیرونی", en: "Add an outside DNS" },
   strategy: { fa: "از کدام بپرسد؟", en: "Which one to ask?" },
@@ -86,7 +87,7 @@ const COPY = {
   duplicate: { fa: "این نشانی قبلاً اضافه شده است.", en: "This address is already in the list." },
   // cache
   cacheTitle: { fa: "حافظه جواب‌ها", en: "Answer memory" },
-  cacheHint: { fa: "MRK جواب‌ها را مدتی نگه می‌دارد تا پرسش بعدی فوری جواب بگیرد.", en: "MRK keeps answers for a while so the next question is answered instantly." },
+  cacheHint: { fa: "پیشکار جواب‌ها را مدتی نگه می‌دارد تا پرسش بعدی فوری جواب بگیرد.", en: "Pishkar keeps answers for a while so the next question is answered instantly." },
   maxBytes: { fa: "بیشترین حجم", en: "Largest size" },
   minTtl: { fa: "کمترین زمان نگه‌داری", en: "Shortest time to keep" },
   maxTtl: { fa: "بیشترین زمان نگه‌داری", en: "Longest time to keep" },
@@ -144,7 +145,7 @@ const COPY = {
   version: { fa: "نسخه تنظیمات", en: "Settings version" },
   moreInAdvanced: { fa: "تنظیمات بیشتر (نشانی‌ها، DNS‌های بیرونی، حافظه، سقف‌ها) در حالت «پیشرفته» است.", en: "More settings (addresses, outside DNS servers, memory, limits) are in Advanced mode." },
   d4Missing: { fa: "برنامه DNS روی سرور هنوز «روش پیدا کردن نشانی‌ها» و «امضای امنیتی» را ندارد. آن را به‌روز کنید.", en: "The DNS program on the server doesn't have “How addresses are found” and “Security signatures” yet. Update it." },
-  dnssecOffBody: { fa: "با خاموش کردن بررسی امضا، MRK جواب‌های جعلی را تشخیص نمی‌دهد. مطمئنید؟", en: "With signature checks off, MRK won't notice fake answers. Are you sure?" }
+  dnssecOffBody: { fa: "با خاموش کردن بررسی امضا، پیشکار جواب‌های جعلی را تشخیص نمی‌دهد. مطمئنید؟", en: "With signature checks off, Pishkar won't notice fake answers. Are you sure?" }
 } satisfies Record<string, Bi>;
 
 const OPEN_RANGES = new Set(["0.0.0.0/0", "::/0"]);
@@ -287,12 +288,12 @@ const INTEGRATION_COPY = {
   servicesOverrides: { fa: "دامنه‌های «سرویس‌های من» را خودکار به نشانی داخلی سرور بفرست", en: "Send My services domains to the server's internal address" },
   servicesOverridesHint: { fa: "این نام‌ها در «نام‌ها» با برچسب «از سرویس‌های من» دیده می‌شوند.", en: "These names show under Names, marked “From My services”." },
   target: { fa: "نشانی داخلی سرور (اختیاری)", en: "Server's internal address (optional)" },
-  targetHint: { fa: "خالی بماند تا MRK خودش پیدا کند؛ الان: {target}", en: "Leave empty to let MRK find it; now: {target}" },
+  targetHint: { fa: "خالی بماند تا پیشکار خودش پیدا کند؛ الان: {target}", en: "Leave empty to let Pishkar find it; now: {target}" },
   badTarget: { fa: "یک نشانی IP مثل 172.17.0.1 بنویسید.", en: "Write an IP address like 172.17.0.1." },
-  internalZone: { fa: "نام‌های داخلی MRK را بساز", en: "Make MRK's internal names" },
+  internalZone: { fa: "نام‌های داخلی پیشکار را بساز", en: "Make Pishkar's internal names" },
   internalZoneHint: { fa: "مثل {names}", en: "Like {names}" },
   fallback: { fa: "DNS پشتیبان در دستورهای راه‌اندازی", en: "Backup DNS in the setup commands" },
-  fallbackHint: { fa: "اگر MRK افتاد، سرور از این‌ها می‌پرسد. مثل 1.1.1.1", en: "If MRK goes down, the server asks these. Like 1.1.1.1" },
+  fallbackHint: { fa: "اگر پیشکار افتاد، سرور از این‌ها می‌پرسد. مثل 1.1.1.1", en: "If Pishkar goes down, the server asks these. Like 1.1.1.1" },
   save: { fa: "ذخیره هماهنگی", en: "Save" },
   saved: { fa: "هماهنگی با «سرویس‌های من» ذخیره شد.", en: "Saved." },
   lastSync: { fa: "آخرین هماهنگی: {when} — {created} تازه، {updated} تغییر، {deleted} برداشته", en: "Last sync: {when} — {created} added, {updated} changed, {deleted} removed" },
@@ -736,6 +737,8 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
 
       <IntegrationCard />
       </>) : null}
+
+      <DnsBackupCard permissions={permissions} />
 
       {saved?.config_version !== undefined ? (
         <Typography variant="caption" color="text.secondary">{pick(language, COPY.version)}: <Ltr mono>{String(saved.config_version)}</Ltr></Typography>

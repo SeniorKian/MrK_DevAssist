@@ -7,7 +7,9 @@ While the engine is installed (its admin socket exists) one loop:
   ``dns.attack_detected``, ``dns.mitigation_auto``, ``dns.logs_degraded`` /
   ``dns.logs_recovered``; D4, docs/40 §5: ``dns.dnssec_trust_anchor_failed``,
   ``dns.dnssec_bogus_spike``, ``dns.tls_certificate_expiring|expired``,
-  ``dns.priming_failed``). The cursor lives in memory only; after a panel
+  ``dns.priming_failed``; final phase, docs/41 §6: ``dns.secondary_expired``,
+  ``dns.transfer_failed``, ``dns.filter_list_failed``, ``dns.dnssec_signing_failed``,
+  which also feed the home page's per-zone problems). The cursor lives in memory only; after a panel
   restart the first read just takes the current tail so old events are not
   replayed. An engine restart (its ``next`` going backwards) restarts at 0.
 * every ``PRESSURE_SECONDS`` caches ``GET /v1/pressure`` for the home rules,
@@ -46,16 +48,16 @@ LEVELS = ("normal", "warning", "critical", "emergency")
 # Pressure level -> notification severity (docs/38 §4); "warning" is home-only.
 LEVEL_SEVERITY = {"critical": "warning", "emergency": "error", "normal": "info"}
 LEVEL_TITLES = {
-    "critical": "MRK DNS is under heavy load",
-    "emergency": "MRK DNS is overloaded and protecting itself",
-    "normal": "MRK DNS load is back to normal",
+    "critical": "Pishkar DNS is under heavy load",
+    "emergency": "Pishkar DNS is overloaded and protecting itself",
+    "normal": "Pishkar DNS load is back to normal",
 }
 
 
 # D4 engine event -> (notification type, severity, title, panel route), docs/40 §5.
 D4_EVENTS: dict[str, tuple[str, str, str, str]] = {
     "dnssec.trust_anchor_failed": ("dns.dnssec_trust_anchor_failed", "error",
-                                   "MRK DNS could not update the DNSSEC root key",
+                                   "Pishkar DNS could not update the DNSSEC root key",
                                    "#/dns/settings"),
     "dnssec.bogus_spike": ("dns.dnssec_bogus_spike", "warning",
                            "Many DNS answers failed the DNSSEC check", "#/dns/monitor"),
@@ -65,7 +67,41 @@ D4_EVENTS: dict[str, tuple[str, str, str, str]] = {
     "tls.certificate_expired": ("dns.tls_certificate_expired", "error",
                                 "The encrypted DNS certificate has expired", "#/dns/encrypted"),
     "resolution.priming_failed": ("dns.priming_failed", "error",
-                                  "MRK DNS cannot reach the root servers", "#/dns/settings"),
+                                  "Pishkar DNS cannot reach the root servers", "#/dns/settings"),
+}
+
+
+# Final-phase engine events (docs/41 §6). The engine names are not fixed by the contract,
+# so a few spellings are accepted: event -> (notification, severity, title, kind).
+D5_EVENTS: dict[str, tuple[str, str, str, str]] = {
+    "zone.secondary_expired": ("dns.secondary_expired", "error",
+                               "A secondary DNS zone has expired", "secondary"),
+    "secondary.expired": ("dns.secondary_expired", "error",
+                          "A secondary DNS zone has expired", "secondary"),
+    "zone.transfer_failed": ("dns.transfer_failed", "warning",
+                             "A DNS zone transfer failed", "transfer"),
+    "secondary.refresh_failed": ("dns.transfer_failed", "warning",
+                                 "A DNS zone transfer failed", "transfer"),
+    "transfer.failed": ("dns.transfer_failed", "warning", "A DNS zone transfer failed",
+                        "transfer"),
+    "filtering.list_failed": ("dns.filter_list_failed", "warning",
+                              "A DNS block list could not be updated", "filter"),
+    "filter.list_failed": ("dns.filter_list_failed", "warning",
+                           "A DNS block list could not be updated", "filter"),
+    "zone.dnssec_signing_failed": ("dns.dnssec_signing_failed", "error",
+                                   "Pishkar DNS could not sign a zone", "signing"),
+    "dnssec.signing_failed": ("dns.dnssec_signing_failed", "error",
+                              "Pishkar DNS could not sign a zone", "signing"),
+    "zone.signing_failed": ("dns.dnssec_signing_failed", "error",
+                            "Pishkar DNS could not sign a zone", "signing"),
+}
+# Events that end a per-zone problem on the home page (no notification).
+D5_RECOVERY: dict[str, str] = {
+    "zone.secondary_refreshed": "secondary", "secondary.refreshed": "secondary",
+    "secondary.recovered": "secondary", "zone.transfer_succeeded": "secondary",
+    "zone.transfer_recovered": "secondary",
+    "dnssec.signing_recovered": "signing", "zone.signed": "signing",
+    "dnssec.signed": "signing",
 }
 
 
@@ -120,6 +156,8 @@ class DnsMonitor:
         self._recent: dict[str, float] = {}
         self._next: dict[str, float] = {"events": 0.0, "pressure": 0.0, "metrics": 0.0}
         self._task: asyncio.Task[None] | None = None
+        # Set by DnsService: (kind, zone, problem | None) for the home page.
+        self.zone_problem: Callable[[str, str, dict[str, Any] | None], None] | None = None
 
     # ------------------------------------------------------------------ pressure cache
     def cached_pressure(self) -> dict[str, Any] | None:
@@ -250,7 +288,7 @@ class DnsMonitor:
                 action = _text(data.get("action"), 16) or "?"
                 event = Event(
                     type="dns.mitigation_auto", severity="warning",
-                    title="MRK DNS limited a source automatically",
+                    title="Pishkar DNS limited a source automatically",
                     message=f"{action} {mkind} {match}",
                     module=MODULE_NAME, dedupe_key=f"dns.mitigation_auto.{mkind}.{match}",
                     details={
@@ -277,6 +315,12 @@ class DnsMonitor:
                 )
         elif kind in D4_EVENTS:
             event = self._d4_event(kind, data)
+        elif kind in D5_EVENTS:
+            event = self._d5_event(kind, data)
+        elif kind in D5_RECOVERY:
+            zone = _text(data.get("zone"), 253)
+            if zone and self.zone_problem is not None:
+                self.zone_problem(D5_RECOVERY[kind], zone, None)
         if event is None:
             return False
         self.ctx.events.publish(event)
@@ -310,6 +354,35 @@ class DnsMonitor:
         if not self._fresh_key(dedupe):
             return None
         return Event(type=name, severity=severity, title=title, message=message,
+                     module=MODULE_NAME, dedupe_key=dedupe, details=details)
+
+    def _d5_event(self, kind: str, data: dict[str, Any]) -> Event | None:
+        """docs/41 §6: secondary expiry, transfers, block lists, zone signing."""
+        name, severity, title, group = D5_EVENTS[kind]
+        error = _text(data.get("error") or data.get("reason"), 300)
+        if group == "filter":
+            subject = _text(data.get("list_id") or data.get("id"), 128) or "?"
+            details: dict[str, Any] = {"list_id": subject,
+                                       "name": _text(data.get("name"), 100),
+                                       "error": error, "route": "#/dns/blocking"}
+            message = f"{details['name'] or subject}: {error}" if error else subject
+        else:
+            subject = _text(data.get("zone"), 253) or "?"
+            details = {"zone": subject, "error": error,
+                       "route": f"#/dns/names?zone={subject}"}
+            if group == "transfer":
+                details["primary"] = _text(data.get("primary") or data.get("server"), 64)
+            message = f"{subject}: {error}" if error else subject
+            if self.zone_problem is not None and subject != "?" and group != "transfer":
+                problem = {"error": error}
+                if group == "secondary":
+                    problem.update({"expired": True, "last_success": None})
+                self.zone_problem("secondary" if group == "secondary" else "signing",
+                                  subject, problem)
+        dedupe = f"{name}.{subject}"
+        if not self._fresh_key(dedupe):
+            return None
+        return Event(type=name, severity=severity, title=title, message=message or "",
                      module=MODULE_NAME, dedupe_key=dedupe, details=details)
 
     def _pressure_event(self, data: dict[str, Any]) -> Event | None:

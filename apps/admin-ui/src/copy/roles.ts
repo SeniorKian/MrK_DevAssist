@@ -140,6 +140,8 @@ export const PERMISSIONS: Record<string, PermissionInfo> = {
   "task:read": { group: "alerts", name: { fa: "دیدن کارهای در حال انجام", en: "See background jobs" }, danger: "none" },
   "task:write": { group: "alerts", name: { fa: "لغو یا تکرار کارها", en: "Cancel or retry jobs" }, danger: "low", requires: ["task:read"] },
   "audit:read": { group: "alerts", name: { fa: "دیدن تاریخچه فعالیت", en: "See activity history" }, danger: "medium" },
+  "tenancy:admin": { group: "people", name: { fa: "مدیریت فضاهای کاری، بسته‌ها و ثبت‌نام‌ها", en: "Manage workspaces, plans and sign-ups" }, danger: "high", requires: ["user:read"] },
+  "tenancy:impersonate_write": { group: "people", name: { fa: "تغییر دادن هنگام «دیدن به‌جای» کاربر", en: "Make changes while viewing as a user" }, danger: "critical", requires: ["tenancy:admin"] },
   "*": { group: "people", name: { fa: "همه اجازه‌ها (فقط مالک)", en: "All permissions (owner only)" }, danger: "critical" }
 };
 
@@ -189,6 +191,8 @@ function isRoleKey(value: string): value is RoleKey {
 /** Plain role name. Custom roles pass their own label; unknown keys fall back to a neutral word. */
 export function roleName(language: Language, role: string, customLabel?: Bi | null): string {
   if (isRoleKey(role)) return ROLES[role].name[language];
+  // docs/43 §1: a «فضای من»-only account, no admin permissions.
+  if (role === "customer") return language === "fa" ? "کاربر" : "User";
   if (customLabel) return customLabel[language];
   return language === "fa" ? "نقش سفارشی" : "Custom role";
 }

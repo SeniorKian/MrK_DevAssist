@@ -136,7 +136,7 @@ const T = {
   advancedHint: { fa: "بار سرور، شبکه و پرمصرف‌ترین کانتینرها.", en: "Server load, network and the busiest containers." },
   settingsTitle: { fa: "تنظیمات جمع‌آوری آمار و هشدار", en: "Collection and alert settings" },
   settingsHint: { fa: "هر چند وقت آمار خوانده شود، چقدر بماند و از چه حدی هشدار بدهد.", en: "How often to sample, how long to keep it and when to alert." },
-  unavailable: { fa: "این بخش روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "This section isn't on the current server version. Update MRK." },
+  unavailable: { fa: "این بخش روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "This section isn't on the current server version. Update Pishkar." },
   notPairedTitle: { fa: "اول دستیار سرور را وصل کنید.", en: "Connect the server helper first." },
   notPairedBody: { fa: "دستیار سرور (Agent) مصرف پردازنده، حافظه و دیسک را برای این صفحه می‌خواند.", en: "The server helper (Agent) reads CPU, memory and disk use for this page." },
   pair: { fa: "وصل کردن دستیار سرور", en: "Connect the server helper" },

@@ -52,7 +52,30 @@ type ClientLimiter struct {
 	overflowMu  sync.Mutex
 	overflow    bucket        // shared by new clients when the table is full
 	scale       atomic.Uint64 // float64 bits; pressure action tighten_client_qps
+	// pressureOnly: client_qps is 0 (unlimited); the limiter only acts while
+	// tighten_client_qps scales it down (docs/41 §4).
+	pressureOnly bool
 }
+
+// PressureFallbackQPS is the per-client rate that tighten_client_qps scales
+// when client_qps is 0 (unlimited): ×0.5 at critical = 1000 qps, ×0.25 at
+// emergency = 500 qps per client.
+const PressureFallbackQPS = 2000
+
+// NewClientLimiterFor returns NewClientLimiter, or for qps <= 0 a limiter
+// that allows everything until the pressure controller tightens it, so
+// tighten_client_qps also bounds an unlimited configuration.
+func NewClientLimiterFor(qps, burst, maxClients int) *ClientLimiter {
+	if qps > 0 {
+		return NewClientLimiter(qps, burst, maxClients)
+	}
+	l := NewClientLimiter(PressureFallbackQPS, 2*PressureFallbackQPS, maxClients)
+	l.pressureOnly = true
+	return l
+}
+
+// Unlimited reports whether the limiter only acts under pressure.
+func (l *ClientLimiter) Unlimited() bool { return l == nil || l.pressureOnly }
 
 // SetScale multiplies the configured rate and burst (1 = as configured).
 func (l *ClientLimiter) SetScale(f float64) {
@@ -114,8 +137,11 @@ func (l *ClientLimiter) Allow(addr netip.Addr, now int64) bool {
 	if l == nil {
 		return true
 	}
-	k := ClientKey(addr)
 	sc := math.Float64frombits(l.scale.Load())
+	if l.pressureOnly && sc >= 1 {
+		return true
+	}
+	k := ClientKey(addr)
 	rate, burst := l.rate*sc, math.Max(1, l.burst*sc)
 	s := &l.shards[addrShard(k)]
 	s.mu.Lock()

@@ -391,11 +391,11 @@ export const ACTION_WORDS: Record<ServiceAction, { button: Bi; busy: Bi; done: B
 export const ROUTING_MODE_WORDS: Record<RoutingChoice, { label: Bi; body: Bi }> = {
   auto: {
     label: { fa: "انتخاب خودکار", en: "Pick automatically" },
-    body: { fa: "MRK بهترین روشی را که روی این سرور کار می‌کند خودش انتخاب می‌کند.", en: "MRK picks the best way that works on this server." }
+    body: { fa: "پیشکار بهترین روشی را که روی این سرور کار می‌کند خودش انتخاب می‌کند.", en: "Pishkar picks the best way that works on this server." }
   },
   dokploy_api: {
     label: { fa: "Dokploy خودکار", en: "Dokploy, automatic" },
-    body: { fa: "MRK دامنه را خودش در Dokploy ثبت می‌کند و گواهی HTTPS هم خودکار گرفته می‌شود.", en: "MRK adds the domain in Dokploy itself, and the HTTPS certificate is issued automatically." }
+    body: { fa: "پیشکار دامنه را خودش در Dokploy ثبت می‌کند و گواهی HTTPS هم خودکار گرفته می‌شود.", en: "Pishkar adds the domain in Dokploy itself, and the HTTPS certificate is issued automatically." }
   },
   traefik_file: {
     label: { fa: "فایل Traefik", en: "Traefik file" },

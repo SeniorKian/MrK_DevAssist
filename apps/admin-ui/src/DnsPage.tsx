@@ -1,6 +1,7 @@
 /**
- * «DNS» (docs/36, contract docs/37 §5): MRK's own DNS server, phase D1.
- * Tabs from nav.ts: status · monitor (D2) · logs (D2, dns:logs) · setup · names · test · encrypted (D4) · settings (dns:admin).
+ * «DNS» (docs/36, contract docs/37 §5): Pishkar's own DNS server, phase D1.
+ * Tabs from nav.ts: status · monitor (D2) · logs (D2, dns:logs) · setup · names · templates (docs/41) · blocking (docs/41) · test ·
+ * encrypted (D4) · settings (dns:admin).
  * The D3 («دور زدن تحریم») tab is added when that phase lands.
  *
  * This file holds the page shell plus the two small tabs (status and test); the bigger tabs
@@ -37,6 +38,8 @@ const DnsSettingsTab = lazy(() => import("./DnsSettings"));
 const DnsMonitorTab = lazy(() => import("./DnsMonitor"));
 const DnsLogsTab = lazy(() => import("./DnsLogs"));
 const DnsEncryptedTab = lazy(() => import("./DnsEncrypted"));
+const DnsTemplatesTab = lazy(() => import("./DnsTemplates"));
+const DnsFilteringTab = lazy(() => import("./DnsFiltering"));
 
 const COPY = {
   title: { fa: "DNS", en: "DNS" },
@@ -44,12 +47,12 @@ const COPY = {
   startSetup: { fa: "شروع راه‌اندازی", en: "Start setup" },
   notInstalledTitle: { fa: "DNS هنوز روی این سرور راه نیفتاده", en: "DNS isn't set up on this server yet" },
   notInstalledBody: {
-    fa: "با چند قدم ساده، سرور و کانتینرها نام‌ها را از MRK می‌پرسند و شما می‌توانید نام‌های خودتان را بسازید.",
-    en: "In a few simple steps, the server and its containers ask MRK for names, and you can make your own names."
+    fa: "با چند قدم ساده، سرور و کانتینرها نام‌ها را از پیشکار می‌پرسند و شما می‌توانید نام‌های خودتان را بسازید.",
+    en: "In a few simple steps, the server and its containers ask Pishkar for names, and you can make your own names."
   },
   setupUnfinished: { fa: "DNS روشن است، ولی راه‌اندازی هنوز تمام نشده. بقیه قدم‌ها را در «راه‌اندازی» ببینید.", en: "DNS is running, but setup isn't finished. See the remaining steps in Set up." },
   statusFailed: { fa: "وضعیت DNS خوانده نشد.", en: "The DNS status didn't load." },
-  moduleMissing: { fa: "بخش DNS روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "DNS isn't on your server's current version. Update MRK." },
+  moduleMissing: { fa: "بخش DNS روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "DNS isn't on your server's current version. Update Pishkar." },
   qps: { fa: "پرسش در ثانیه", en: "Questions per second" },
   qpsCaption: { fa: "میانگین دقیقه گذشته: {value}", en: "Last minute average: {value}" },
   hit: { fa: "جواب از حافظه", en: "Answered from memory" },
@@ -62,7 +65,7 @@ const COPY = {
   totalQueries: { fa: "همه پرسش‌ها", en: "All questions" },
   uptime: { fa: "روشن از", en: "Running for" },
   upstreamsTitle: { fa: "DNS‌های بیرونی", en: "Outside DNS servers" },
-  upstreamsHint: { fa: "MRK نام‌هایی را که خودش نمی‌داند از این‌ها می‌پرسد.", en: "MRK asks these for names it doesn't know itself." },
+  upstreamsHint: { fa: "پیشکار نام‌هایی را که خودش نمی‌داند از این‌ها می‌پرسد.", en: "Pishkar asks these for names it doesn't know itself." },
   healthy: { fa: "سالم", en: "Healthy" },
   unhealthy: { fa: "جواب نمی‌دهد", en: "Not answering" },
   rtt: { fa: "{ms} میلی‌ثانیه", en: "{ms} ms" },
@@ -87,7 +90,7 @@ const COPY = {
   flushed: { fa: "جواب‌های ذخیره‌شده پاک شد.", en: "Stored answers were cleared." },
   // test tab
   testTitle: { fa: "یک نام را امتحان کنید", en: "Try a name" },
-  testHint: { fa: "ببینید MRK برای این نام چه جوابی می‌دهد و جواب از کجا آمد.", en: "See what MRK answers for this name and where the answer came from." },
+  testHint: { fa: "ببینید پیشکار برای این نام چه جوابی می‌دهد و جواب از کجا آمد.", en: "See what Pishkar answers for this name and where the answer came from." },
   name: { fa: "نام", en: "Name" },
   namePlaceholder: { fa: "مثلاً google.com", en: "e.g. google.com" },
   type: { fa: "چه چیزی", en: "What" },
@@ -564,6 +567,8 @@ export default function DnsPage(props: GroupPageProps) {
           {current.key === "logs" && <DnsLogsTab permissions={permissions} />}
           {current.key === "setup" && <DnsSetupTab permissions={permissions} />}
           {current.key === "names" && <DnsNamesTab permissions={permissions} />}
+          {current.key === "templates" && <DnsTemplatesTab permissions={permissions} />}
+          {current.key === "blocking" && <DnsFilteringTab permissions={permissions} />}
           {current.key === "test" && <TestTab permissions={permissions} />}
           {current.key === "encrypted" && <DnsEncryptedTab permissions={permissions} />}
           {current.key === "settings" && <DnsSettingsTab permissions={permissions} />}

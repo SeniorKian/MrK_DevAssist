@@ -63,7 +63,7 @@ const COMPOSE = "docker compose -f deploy/appliance/compose.production.yaml";
 const SIGNALS = ["ssh_failed_password", "ssh_invalid_user", "mrk_login_failure", "http_401", "http_403", "http_404", "http_sensitive_path"];
 
 const COPY = {
-  unavailable: { fa: "دیوار آتش روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "The firewall isn't on this server version. Update MRK." },
+  unavailable: { fa: "دیوار آتش روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "The firewall isn't on this server version. Update Pishkar." },
   refresh: { fa: "تازه کردن", en: "Refresh" },
   // status
   statusTitle: { fa: "وضعیت دیوار آتش", en: "Firewall status" },
@@ -77,7 +77,7 @@ const COPY = {
   choose: { fa: "انتخاب", en: "Choose" },
   wouldBlock: { fa: "در ۲۴ ساعت گذشته {n} تصمیم گرفته شد.", en: "{n} decisions in the last 24 hours." },
   notPaired: { fa: "نگهبان دیوار آتش هنوز وصل نشده.", en: "The firewall helper isn't connected yet." },
-  notPairedBody: { fa: "نگهبان برنامه کوچکی کنار MRK است که نشانی‌ها را روی خود سرور می‌بندد. «روشن کردن محافظت» قدم‌به‌قدم کمکتان می‌کند.", en: "The helper is a small program next to MRK that blocks addresses on the server itself. “Turn on protection” guides you step by step." },
+  notPairedBody: { fa: "نگهبان برنامه کوچکی کنار پیشکار است که نشانی‌ها را روی خود سرور می‌بندد. «روشن کردن محافظت» قدم‌به‌قدم کمکتان می‌کند.", en: "The helper is a small program next to Pishkar that blocks addresses on the server itself. “Turn on protection” guides you step by step." },
   unreachable: { fa: "نگهبان دیوار آتش جواب نمی‌دهد؛ روشن بودنش را روی سرور بررسی کنید.", en: "The firewall helper isn't answering; check that it's running on the server." },
   forcedPractice: { fa: "روی سرور فقط حالت تمرین مجاز شده؛ حتی در «در حال محافظت» چیزی بسته نمی‌شود.", en: "The server only allows practice mode; nothing is blocked even when “Protecting”." },
   noNft: { fa: "دیوار آتش سرور در دسترس نیست؛ فعلاً فقط «فقط تماشا» کار می‌کند.", en: "The server firewall isn't available; only “Watching only” works for now." },

@@ -68,6 +68,7 @@ from .tasks import (
     TaskManager,
     cleanup_confirmation,
 )
+from .tenancy import TenancyError
 from .upstream_health import UpstreamHealthStore
 from .upstream_probe import probe_upstream, reject_private_destination
 from .upstream_store import UpstreamStore
@@ -88,6 +89,7 @@ DATA_DIRECTORIES = (
 SESSION_COOKIE = "mrk_session"
 CSRF_FAILED = "csrf_failed"
 PASSWORD_CHANGE_REQUIRED = "password_change_required"  # noqa: S105 - an error code
+ADMIN_AREA_LOCAL_ONLY = "admin_area_local_only"
 
 
 class LoginRequest(BaseModel):
@@ -604,7 +606,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             LOGGER.info("control plane stopped")
 
     app = FastAPI(
-        title="MRK Package Mirror",
+        title="Pishkar",
         version=__version__,
         docs_url=None,
         redoc_url=None,
@@ -642,9 +644,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return _error_payload(
                     PASSWORD_CHANGE_REQUIRED, "Choose a new password before continuing", 403
                 )
+            if exc.detail == ADMIN_AREA_LOCAL_ONLY:
+                return _error_payload(
+                    ADMIN_AREA_LOCAL_ONLY,
+                    "Server management is only reachable from the local network", 403,
+                )
             return _error_payload("forbidden", "Permission denied", 403)
         public_message = "Not found" if exc.status_code == 404 else "Request failed"
         return _error_payload("http_error", public_message, exc.status_code)
+
+    @app.exception_handler(TenancyError)
+    async def tenancy_error(_request: Request, exc: TenancyError) -> JSONResponse:
+        extra = {key: value for key, value in exc.extra.items() if value is not None}
+        return _error_payload(exc.code, exc.message, exc.status_code, fields=exc.fields, **extra)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -768,6 +780,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise StarletteHTTPException(status_code=403, detail=PASSWORD_CHANGE_REQUIRED)
         if permission is not None and not principal.allows(permission):
             raise StarletteHTTPException(status_code=403)
+        tenancy = getattr(app.state, "tenancy", None)
+        if permission is not None and tenancy is not None and not tenancy.admin_area_allowed(
+            request.client.host if request.client else None
+        ):
+            # docs/43 §2: tenancy.admin_area_local_only keeps server management local.
+            raise StarletteHTTPException(status_code=403, detail=ADMIN_AREA_LOCAL_ONLY)
         return principal
 
     def require_csrf(request: Request, principal: Principal) -> None:
@@ -863,7 +881,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"required": required, "password_policy": password_policy()}
 
     @app.get("/api/v1/auth/registration-status", include_in_schema=False)
-    async def registration_status() -> dict[str, bool]:
+    async def registration_status() -> dict[str, object]:
+        tenancy = getattr(app.state, "tenancy", None)
+        if tenancy is not None and await asyncio.to_thread(tenancy.enabled):
+            # docs/43 §2: with «my space» on, tenancy.signup decides.
+            mode = (await asyncio.to_thread(tenancy.get_settings))["signup"]
+            return {"enabled": mode != "off", "mode": mode}
         return {
             "enabled": await asyncio.to_thread(
                 auth_store.public_registration_enabled
@@ -915,17 +938,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "password_mismatch", "Passwords do not match", 422,
                 fields=[{"field": "password_confirmation", "reason_code": "mismatch"}],
             )
+        tenancy = getattr(app.state, "tenancy", None)
+        mode = None
+        if tenancy is not None and await asyncio.to_thread(tenancy.enabled):
+            mode = (await asyncio.to_thread(tenancy.get_settings))["signup"]
+        created: list[int] = []
         try:
             identifier = await asyncio.to_thread(
-                auth_store.register_public_user,
-                payload.display_name,
-                payload.email,
-                payload.password,
-                request.client.host if request.client else None,
-                correlation_id_context.get(),
+                functools.partial(
+                    auth_store.register_public_user,
+                    payload.display_name,
+                    payload.email,
+                    payload.password,
+                    request.client.host if request.client else None,
+                    correlation_id_context.get(),
+                    **(
+                        {}
+                        if mode is None
+                        else {
+                            "allowed": mode != "off",
+                            "role": "customer",
+                            "enabled": mode == "open",
+                            "created": created,
+                        }
+                    ),
+                )
             )
         except ValueError as exc:
             return _account_error(exc, "registration_rejected")
+        if mode == "approval":
+            # docs/43 §2: the account waits, disabled, until an admin approves it.
+            await asyncio.to_thread(tenancy.record_signup, created[0])
+            return JSONResponse({"status": "pending_approval"}, status_code=202)
+        if mode == "open":
+            await asyncio.to_thread(tenancy.ensure_personal, created[0])
         result = await asyncio.to_thread(
             auth_store.authenticate,
             identifier,
@@ -2919,6 +2965,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         trusted_hosts=trusted_hosts,
     )
     app.state.modules = register_all(module_ctx)
+    from .modules import tenancy as tenancy_module
+
+    app.state.tenancy = tenancy_module.ACTIVE_SERVICE
     app.state.events = events
     module_state["ctx"] = module_ctx
     for router in module_ctx.routers:

@@ -201,6 +201,8 @@ class BaseBucket:
         return lock
 
     def check_writable(self) -> None:
+        if self.config.frozen:
+            raise S3Error("AccessDenied", "The bucket's workspace is suspended (read-only).")
         if self.config.read_only:
             raise S3Error("AccessDenied", "The bucket is read-only (linked folder).")
 

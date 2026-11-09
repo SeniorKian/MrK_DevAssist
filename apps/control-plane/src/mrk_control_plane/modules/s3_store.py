@@ -23,7 +23,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..database import Database
-from ..models import S3AccessKey, S3Bucket, S3Identity, SystemSetting
+from ..models import (
+    ResourceOwner,
+    S3AccessKey,
+    S3Bucket,
+    S3Identity,
+    SystemSetting,
+    TenancyPlan,
+    Workspace,
+)
 from ..secret_store import SecretStore
 from .s3_policy import (
     PANEL_IDENTITY,
@@ -34,6 +42,7 @@ from .s3_policy import (
     panel_policy,
     template_policy,
     validate_policy,
+    workspace_policy,
 )
 
 SETTINGS_KEY = "s3.settings"
@@ -308,6 +317,10 @@ class S3Store:
                 for row in identities
             ]
             bucket_items = [_bucket_item(row) for row in buckets]
+            groups, frozen, hosts = self._tenancy_snapshot(db)
+            for item in bucket_items:
+                if item["name"] in frozen:
+                    item["frozen"] = True
             suffix_row = db.get(SystemSetting, DOMAIN_SUFFIXES_KEY)
             extra_suffixes = (
                 [item for item in suffix_row.value.get("hosts", []) if isinstance(item, str)]
@@ -332,7 +345,45 @@ class S3Store:
             "max_object_bytes": settings["max_object_bytes"],
             "buckets": bucket_items,
             "identities": [panel, *identity_items],
+            # docs/43 §3: per-workspace byte/object quotas (enforced by the engine on
+            # writes) and verified bucket domains. Both empty without «my space».
+            "quota_groups": groups,
+            "bucket_hosts": hosts,
         }
+
+    @staticmethod
+    def _tenancy_snapshot(db: Any) -> tuple[list[dict[str, Any]], set[str], dict[str, str]]:
+        from ..tenancy import effective_limits
+
+        owners = db.scalars(select(ResourceOwner).where(
+            ResourceOwner.kind.in_(["s3_bucket", "bucket_domain"]))).all()
+        if not owners:
+            return [], set(), {}
+        workspaces = {row.id: row for row in db.scalars(select(Workspace))}
+        plans = {row.id: row for row in db.scalars(select(TenancyPlan))}
+        by_workspace: dict[str, list[str]] = {}
+        hosts: dict[str, str] = {}
+        for owner in owners:
+            if owner.kind == "s3_bucket":
+                by_workspace.setdefault(owner.workspace_id, []).append(owner.resource_id)
+            elif (owner.meta or {}).get("verified") and (owner.meta or {}).get("bucket"):
+                hosts[owner.resource_id] = str(owner.meta["bucket"])
+        groups: list[dict[str, Any]] = []
+        frozen: set[str] = set()
+        for workspace_id, names in sorted(by_workspace.items()):
+            workspace = workspaces.get(workspace_id)
+            if workspace is None:
+                continue
+            plan = plans.get(workspace.plan_id)
+            limits = effective_limits(
+                {"features": plan.features, "quotas": plan.quotas} if plan else None,
+                workspace.quota_overrides,
+            )["quotas"]
+            groups.append({"id": workspace_id, "buckets": sorted(names),
+                           "bytes": limits.get("s3_bytes"), "objects": limits.get("s3_objects")})
+            if workspace.status == "suspended":
+                frozen.update(names)
+        return groups, frozen, hosts
 
     def write_snapshot(self) -> None:
         self._write_snapshot_file()
@@ -593,13 +644,18 @@ class S3Store:
                 raise S3Error("bucket_not_found", 404, f"bucket '{name}' does not exist")
             db.delete(row)
             identities = db.scalars(select(S3Identity)).all()
+            tenant_identities = set(db.scalars(select(ResourceOwner.resource_id).where(
+                ResourceOwner.kind == "s3_identity")))
             for identity in identities:
                 current = list(identity.buckets or [])
                 if name not in current:
                     continue
                 remaining = [item for item in current if item != name]
                 identity.buckets = remaining
-                if identity.policy_template != "custom":
+                if identity.id in tenant_identities:
+                    # A «my space» key: no bucket left means no permission (never «*»).
+                    identity.policy = workspace_policy(identity.policy_template, remaining)
+                elif identity.policy_template != "custom":
                     identity.policy = template_policy(identity.policy_template, remaining)
                 identity.updated_at = _now()
         self.write_snapshot()
@@ -724,6 +780,27 @@ class S3Store:
                     db, template, payload.get("buckets", row.buckets), policy
                 )
                 row.policy_template, row.buckets, row.policy = template, buckets, document
+            row.updated_at = _now()
+            item = _identity_item(row)
+        self.write_snapshot()
+        return item
+
+    def set_workspace_policy(
+        self, identity_id: str, access: str, buckets: list[str]
+    ) -> dict[str, Any]:
+        """A «my space» key's policy, always built here (docs/43 §3; never user JSON)."""
+        try:
+            document = workspace_policy(access, sorted(set(buckets)))
+        except PolicyError as exc:
+            raise S3Error("invalid_policy_template", 422, str(exc)) from None
+        with self.db.session() as db, db.begin():
+            row = self._identity(db, identity_id)
+            missing = [item for item in buckets if item not in self._bucket_names(db)]
+            if missing:
+                raise S3Error("bucket_not_found", 404, "unknown bucket")
+            row.policy_template = access
+            row.buckets = sorted(set(buckets))
+            row.policy = document
             row.updated_at = _now()
             item = _identity_item(row)
         self.write_snapshot()

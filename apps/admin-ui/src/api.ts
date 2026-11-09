@@ -27,6 +27,31 @@ export function setUnauthorizedHandler(handler: () => void) {
   unauthorizedHandler = handler;
 }
 
+// ── «فضای من» scope (docs/43 §3): the current workspace and an admin's "view as" session ──
+let scopeWorkspace: string | null = null;
+let scopeViewAs: string | null = null;
+
+/** Set the workspace (`X-Workspace`) and the "view as" token (`X-View-As`) sent with every `/api/v1/my/…` request. */
+export function setMyScope(scope: { workspace?: string | null; viewAs?: string | null }) {
+  if (scope.workspace !== undefined) scopeWorkspace = scope.workspace;
+  if (scope.viewAs !== undefined) scopeViewAs = scope.viewAs;
+}
+
+export function myScope() {
+  return { workspace: scopeWorkspace, viewAs: scopeViewAs };
+}
+
+/** Extra headers for a request path: only `/api/v1/my/…` carries the workspace and "view as" headers. */
+export function scopeHeaders(path: string): Record<string, string> {
+  // Ending a "view as" session (`DELETE /api/v1/admin/view-as`) names the session with the same header.
+  if (path.startsWith("/api/v1/admin/view-as")) return scopeViewAs ? { "X-View-As": scopeViewAs } : {};
+  if (!path.startsWith("/api/v1/my")) return {};
+  const headers: Record<string, string> = {};
+  if (scopeWorkspace) headers["X-Workspace"] = scopeWorkspace;
+  if (scopeViewAs) headers["X-View-As"] = scopeViewAs;
+  return headers;
+}
+
 export function hasPermission(permissions: readonly string[], permission: string) {
   return permissions.includes("*") || permissions.includes(permission);
 }
@@ -82,7 +107,7 @@ type MutateOptions = {
 export async function apiMutate(path: string, options: MutateOptions = {}): Promise<Response> {
   const { method = "POST", body, signal, silentUnauthorized = false, retryOnForbidden = true } = options;
   const send = () => {
-    const headers: Record<string, string> = { Accept: "application/json", "X-CSRF-Token": csrfToken };
+    const headers: Record<string, string> = { Accept: "application/json", "X-CSRF-Token": csrfToken, ...scopeHeaders(path) };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     return fetch(path, {
       method,
@@ -109,7 +134,7 @@ export async function apiMutate(path: string, options: MutateOptions = {}): Prom
 /** Perform a read request; a 401 invokes the unauthorized handler. */
 export async function apiGet(path: string, signal?: AbortSignal): Promise<Response> {
   const response = await fetch(path, {
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...scopeHeaders(path) },
     cache: "no-store",
     signal
   });

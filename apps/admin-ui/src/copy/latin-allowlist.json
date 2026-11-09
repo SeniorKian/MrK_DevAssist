@@ -71,7 +71,12 @@
     "Ethernet",
     "VPN",
     "QR",
-    "RSA"
+    "RSA",
+    "DS",
+    "Bing",
+    "YouTube",
+    "TXT",
+    "NS"
   ],
   "parenthetical": [
     "upstream",
@@ -98,6 +103,10 @@
     "DNSSEC",
     "DoT",
     "DoH",
-    "DoQ"
+    "DoQ",
+    "TSIG",
+    "KSK",
+    "ZSK",
+    "CSK"
   ]
 }

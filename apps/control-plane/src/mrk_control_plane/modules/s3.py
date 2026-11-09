@@ -12,7 +12,7 @@ import json
 import logging
 import math
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from urllib.parse import quote
 
@@ -147,13 +147,19 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
             ctx.audit, principal.user_id, action, object_type, object_id, result
         )
 
-    def reader(request: Request, permission: str) -> Principal:
+    def reader_sync(request: Request, permission: str) -> Principal:
         return ctx.require_principal(request, permission)
 
-    def writer(request: Request, permission: str) -> Principal:
+    def writer_sync(request: Request, permission: str) -> Principal:
         principal = ctx.require_principal(request, permission)
         ctx.require_csrf(request, principal)
         return principal
+
+    async def reader(request: Request, permission: str) -> Principal:
+        return reader_sync(request, permission)
+
+    async def writer(request: Request, permission: str) -> Principal:
+        return writer_sync(request, permission)
 
     async def engine() -> tuple[EngineS3, dict[str, Any]]:
         def load() -> tuple[tuple[str, str], dict[str, Any]]:
@@ -194,12 +200,12 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.get("/settings")
     async def get_settings(request: Request) -> dict[str, Any]:
-        reader(request, "s3:read")
+        reader_sync(request, "s3:read")
         return await asyncio.to_thread(store.get_settings)
 
     @router.put("/settings", response_model=None)
     async def put_settings(request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
+        principal = writer_sync(request, "s3:admin")
         try:
             value = await asyncio.to_thread(
                 store.put_settings, await _body(request), principal.user_id
@@ -212,7 +218,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.get("/status")
     async def status(request: Request) -> dict[str, Any]:
-        reader(request, "s3:read")
+        reader_sync(request, "s3:read")
         settings = await asyncio.to_thread(store.get_settings)
         buckets = await asyncio.to_thread(store.list_buckets)
         reachable = await admin_api.health()
@@ -237,14 +243,14 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.get("/buckets")
     async def list_buckets(request: Request) -> dict[str, Any]:
-        reader(request, "s3:read")
+        reader_sync(request, "s3:read")
         buckets = await asyncio.to_thread(store.list_buckets)
         reachable = await admin_api.health() if buckets else False
         return {"items": await with_stats(buckets, reachable), "engine_reachable": reachable}
 
     @router.post("/buckets", status_code=201, response_model=None)
     async def create_bucket(request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
+        principal = writer_sync(request, "s3:admin")
         body: Any = None
         try:
             body = await _body(request)
@@ -267,7 +273,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.patch("/buckets/{name}", response_model=None)
     async def update_bucket(name: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
+        principal = writer_sync(request, "s3:admin")
         try:
             item = await asyncio.to_thread(
                 store.update_bucket, name, await _body(request), is_owner=principal.allows("*")
@@ -287,7 +293,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
     @router.get("/buckets/{name}/lifecycle", response_model=None)
     async def bucket_lifecycle(name: str, request: Request) -> dict[str, Any] | JSONResponse:
         """Rules set through the S3 API (``PutBucketLifecycleConfiguration``) + last run."""
-        reader(request, "s3:read")
+        reader_sync(request, "s3:read")
         try:
             await existing_bucket(name)
             return await admin_api.lifecycle(name)
@@ -298,7 +304,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
     async def bucket_lifecycle_preview(
         name: str, request: Request
     ) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
+        principal = writer_sync(request, "s3:admin")
         try:
             await existing_bucket(name)
             preview = await admin_api.lifecycle_preview(name)
@@ -310,7 +316,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.delete("/buckets/{name}", response_model=None)
     async def delete_bucket(name: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
+        principal = writer_sync(request, "s3:admin")
         try:
             body = await _body(request)
             if not isinstance(body, dict):
@@ -354,11 +360,162 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.get("/links")
     async def list_links(request: Request) -> dict[str, Any]:
-        reader(request, "s3:admin")
+        reader_sync(request, "s3:admin")
         items = await asyncio.to_thread(store.list_links)
         return {"items": items, "root": str(links_root()), "compose_hint": COMPOSE_HINT}
 
     # ------------------------------------------------------------ file manager
+
+    add_file_routes(router, ctx, store, reader=reader, writer=writer, audit=audit)
+
+    # ------------------------------------------------------------ identities / keys
+
+    @router.get("/identities")
+    async def list_identities(request: Request) -> dict[str, Any]:
+        reader_sync(request, "s3:admin")
+        return {"items": await asyncio.to_thread(store.list_identities)}
+
+    @router.post("/identities", status_code=201, response_model=None)
+    async def create_identity(request: Request) -> dict[str, Any] | JSONResponse:
+        principal = writer_sync(request, "s3:admin")
+        try:
+            item = await asyncio.to_thread(
+                store.create_identity, await _body(request), principal.user_id
+            )
+        except S3Error as exc:
+            await audit(principal, "s3.identity.create", "s3_identity", None, "failure")
+            return fail(exc)
+        await audit(principal, "s3.identity.create", "s3_identity", item["id"])
+        return item
+
+    @router.patch("/identities/{identity_id}", response_model=None)
+    async def update_identity(identity_id: str, request: Request) -> dict[str, Any] | JSONResponse:
+        principal = writer_sync(request, "s3:admin")
+        try:
+            item = await asyncio.to_thread(store.update_identity, identity_id, await _body(request))
+        except S3Error as exc:
+            await audit(principal, "s3.identity.update", "s3_identity", identity_id, "failure")
+            return fail(exc)
+        await audit(principal, "s3.identity.update", "s3_identity", identity_id)
+        return item
+
+    @router.delete("/identities/{identity_id}", response_model=None)
+    async def delete_identity(identity_id: str, request: Request) -> dict[str, Any] | JSONResponse:
+        principal = writer_sync(request, "s3:admin")
+        try:
+            body = await _body(request)
+            confirmation = body.get("confirmation") if isinstance(body, dict) else None
+            item = await asyncio.to_thread(store.delete_identity, identity_id, confirmation)
+        except S3Error as exc:
+            await audit(principal, "s3.identity.delete", "s3_identity", identity_id, "failure")
+            return fail(exc)
+        await audit(principal, "s3.identity.delete", "s3_identity", identity_id)
+        return {"deleted": True, **item}
+
+    @router.post("/identities/{identity_id}/keys", status_code=201, response_model=None)
+    async def create_key(identity_id: str, request: Request) -> dict[str, Any] | JSONResponse:
+        principal = writer_sync(request, "s3:admin")
+        try:
+            item = await asyncio.to_thread(store.create_key, identity_id)
+        except S3Error as exc:
+            await audit(principal, "s3.key.create", "s3_identity", identity_id, "failure")
+            return fail(exc)
+        await audit(principal, "s3.key.create", "s3_access_key", item["access_key_id"])
+        return item
+
+    @router.patch("/identities/{identity_id}/keys/{akid}", response_model=None)
+    async def update_key(
+        identity_id: str, akid: str, request: Request
+    ) -> dict[str, Any] | JSONResponse:
+        principal = writer_sync(request, "s3:admin")
+        try:
+            item = await asyncio.to_thread(
+                store.update_key, identity_id, akid, await _body(request)
+            )
+        except S3Error as exc:
+            await audit(principal, "s3.key.update", "s3_access_key", akid, "failure")
+            return fail(exc)
+        await audit(principal, "s3.key.update", "s3_access_key", akid)
+        return item
+
+    @router.delete("/identities/{identity_id}/keys/{akid}", response_model=None)
+    async def delete_key(
+        identity_id: str, akid: str, request: Request
+    ) -> dict[str, Any] | JSONResponse:
+        principal = writer_sync(request, "s3:admin")
+        try:
+            await asyncio.to_thread(store.delete_key, identity_id, akid)
+        except S3Error as exc:
+            await audit(principal, "s3.key.delete", "s3_access_key", akid, "failure")
+            return fail(exc)
+        await audit(principal, "s3.key.delete", "s3_access_key", akid)
+        return {"deleted": True, "access_key_id": akid}
+
+    # ------------------------------------------------------------ connection info
+
+    @router.get("/connection")
+    async def connection(
+        request: Request, bucket: str | None = None, access_key_id: str | None = None
+    ) -> dict[str, Any]:
+        reader_sync(request, "s3:read")
+        settings = await asyncio.to_thread(store.get_settings)
+        endpoint, fallback = public_endpoint(settings)
+        safe_bucket = (
+            bucket if bucket and object_key_error(bucket) is None and "/" not in bucket else None
+        )
+        safe_akid = access_key_id if access_key_id and access_key_id.isalnum() else None
+        return {
+            "endpoint": endpoint,
+            "endpoint_is_fallback": fallback,
+            "internal_endpoint": engine_url(),
+            "region": settings["region"],
+            "path_style": True,
+            "snippets": connection_snippets(
+                endpoint, settings["region"], bucket=safe_bucket, access_key_id=safe_akid
+            ),
+        }
+
+    return router
+
+
+
+def add_file_routes(
+    router: APIRouter,
+    ctx: ModuleContext,
+    store: S3Store,
+    *,
+    reader: Callable[[Request, str], Awaitable[Any]],
+    writer: Callable[[Request, str], Awaitable[Any]],
+    audit: Callable[..., Awaitable[None]],
+) -> None:
+    """The file manager (list/upload/download/delete/folder/move/share) on ``router``.
+
+    Shared by the admin API (``/api/v1/s3``) and «my space» (``/api/v1/my/s3``, docs/43):
+    ``reader``/``writer`` authorize the request (and, for «my space», the bucket's
+    ownership) and return the actor that ``audit`` receives.
+    """
+
+    def fail(exc: S3Error | EngineError) -> JSONResponse:
+        return ctx.error_payload(exc.code, exc.message, exc.status_code)
+
+    async def engine() -> tuple[EngineS3, dict[str, Any]]:
+        def load() -> tuple[tuple[str, str], dict[str, Any]]:
+            return store.panel_credentials(), store.get_settings()
+
+        (akid, secret), settings = await asyncio.to_thread(load)
+        return EngineS3(access_key=akid, secret=secret, region=settings["region"]), settings
+
+    async def existing_bucket(name: str, *, write: bool = False) -> dict[str, Any]:
+        bucket = await asyncio.to_thread(store.get_bucket, name)
+        if write and bucket["mode"] == "linked" and bucket["link_mode"] == "ro":
+            raise S3Error("bucket_read_only", 409, "bucket is a read-only linked folder")
+        return bucket
+
+    def public_endpoint(settings: dict[str, Any]) -> tuple[str, bool]:
+        configured = settings.get("public_endpoint")
+        if configured:
+            return str(configured), False
+        return FALLBACK_ENDPOINT, True
 
     @router.get("/buckets/{name}/objects", response_model=None)
     async def list_objects(
@@ -369,7 +526,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
         continuation: str = "",
         limit: int = 200,
     ) -> dict[str, Any] | JSONResponse:
-        reader(request, "s3:read")
+        await reader(request, "s3:read")
         try:
             if not 1 <= limit <= 1000:
                 raise S3Error("invalid_limit", 422, "limit must be between 1 and 1000")
@@ -440,7 +597,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
     async def upload_object(
         name: str, request: Request, key: str = ""
     ) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:write")
+        principal = await writer(request, "s3:write")
         try:
             key = _check_key(key)
             await existing_bucket(name, write=True)
@@ -503,7 +660,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
     async def download_object(
         name: str, request: Request, key: str = ""
     ) -> StreamingResponse | JSONResponse:
-        reader(request, "s3:read")
+        await reader(request, "s3:read")
         client: EngineS3 | None = None
         try:
             key = _check_key(key)
@@ -543,7 +700,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.delete("/buckets/{name}/objects", response_model=None)
     async def delete_objects(name: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:write")
+        principal = await writer(request, "s3:write")
         try:
             body = await _body(request)
             keys = body.get("keys") if isinstance(body, dict) else None
@@ -586,7 +743,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.post("/buckets/{name}/folders", status_code=201, response_model=None)
     async def create_folder(name: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:write")
+        principal = await writer(request, "s3:write")
         try:
             body = await _body(request)
             prefix = body.get("prefix") if isinstance(body, dict) else None
@@ -610,7 +767,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.post("/buckets/{name}/objects/move", response_model=None)
     async def move_objects(name: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:write")
+        principal = await writer(request, "s3:write")
         source = target = ""
         try:
             body = await _body(request)
@@ -666,7 +823,7 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
 
     @router.post("/buckets/{name}/share", response_model=None)
     async def share_object(name: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:write")
+        principal = await writer(request, "s3:write")
         try:
             body = await _body(request)
             if not isinstance(body, dict):
@@ -698,115 +855,6 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
             "endpoint": endpoint,
             "warning": "public_endpoint_not_configured" if fallback else None,
         }
-
-    # ------------------------------------------------------------ identities / keys
-
-    @router.get("/identities")
-    async def list_identities(request: Request) -> dict[str, Any]:
-        reader(request, "s3:admin")
-        return {"items": await asyncio.to_thread(store.list_identities)}
-
-    @router.post("/identities", status_code=201, response_model=None)
-    async def create_identity(request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
-        try:
-            item = await asyncio.to_thread(
-                store.create_identity, await _body(request), principal.user_id
-            )
-        except S3Error as exc:
-            await audit(principal, "s3.identity.create", "s3_identity", None, "failure")
-            return fail(exc)
-        await audit(principal, "s3.identity.create", "s3_identity", item["id"])
-        return item
-
-    @router.patch("/identities/{identity_id}", response_model=None)
-    async def update_identity(identity_id: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
-        try:
-            item = await asyncio.to_thread(store.update_identity, identity_id, await _body(request))
-        except S3Error as exc:
-            await audit(principal, "s3.identity.update", "s3_identity", identity_id, "failure")
-            return fail(exc)
-        await audit(principal, "s3.identity.update", "s3_identity", identity_id)
-        return item
-
-    @router.delete("/identities/{identity_id}", response_model=None)
-    async def delete_identity(identity_id: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
-        try:
-            body = await _body(request)
-            confirmation = body.get("confirmation") if isinstance(body, dict) else None
-            item = await asyncio.to_thread(store.delete_identity, identity_id, confirmation)
-        except S3Error as exc:
-            await audit(principal, "s3.identity.delete", "s3_identity", identity_id, "failure")
-            return fail(exc)
-        await audit(principal, "s3.identity.delete", "s3_identity", identity_id)
-        return {"deleted": True, **item}
-
-    @router.post("/identities/{identity_id}/keys", status_code=201, response_model=None)
-    async def create_key(identity_id: str, request: Request) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
-        try:
-            item = await asyncio.to_thread(store.create_key, identity_id)
-        except S3Error as exc:
-            await audit(principal, "s3.key.create", "s3_identity", identity_id, "failure")
-            return fail(exc)
-        await audit(principal, "s3.key.create", "s3_access_key", item["access_key_id"])
-        return item
-
-    @router.patch("/identities/{identity_id}/keys/{akid}", response_model=None)
-    async def update_key(
-        identity_id: str, akid: str, request: Request
-    ) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
-        try:
-            item = await asyncio.to_thread(
-                store.update_key, identity_id, akid, await _body(request)
-            )
-        except S3Error as exc:
-            await audit(principal, "s3.key.update", "s3_access_key", akid, "failure")
-            return fail(exc)
-        await audit(principal, "s3.key.update", "s3_access_key", akid)
-        return item
-
-    @router.delete("/identities/{identity_id}/keys/{akid}", response_model=None)
-    async def delete_key(
-        identity_id: str, akid: str, request: Request
-    ) -> dict[str, Any] | JSONResponse:
-        principal = writer(request, "s3:admin")
-        try:
-            await asyncio.to_thread(store.delete_key, identity_id, akid)
-        except S3Error as exc:
-            await audit(principal, "s3.key.delete", "s3_access_key", akid, "failure")
-            return fail(exc)
-        await audit(principal, "s3.key.delete", "s3_access_key", akid)
-        return {"deleted": True, "access_key_id": akid}
-
-    # ------------------------------------------------------------ connection info
-
-    @router.get("/connection")
-    async def connection(
-        request: Request, bucket: str | None = None, access_key_id: str | None = None
-    ) -> dict[str, Any]:
-        reader(request, "s3:read")
-        settings = await asyncio.to_thread(store.get_settings)
-        endpoint, fallback = public_endpoint(settings)
-        safe_bucket = (
-            bucket if bucket and object_key_error(bucket) is None and "/" not in bucket else None
-        )
-        safe_akid = access_key_id if access_key_id and access_key_id.isalnum() else None
-        return {
-            "endpoint": endpoint,
-            "endpoint_is_fallback": fallback,
-            "internal_endpoint": engine_url(),
-            "region": settings["region"],
-            "path_style": True,
-            "snippets": connection_snippets(
-                endpoint, settings["region"], bucket=safe_bucket, access_key_id=safe_akid
-            ),
-        }
-
-    return router
 
 
 def register(ctx: ModuleContext) -> None:

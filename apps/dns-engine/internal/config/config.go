@@ -84,6 +84,9 @@ type Settings struct {
 	Resolution          Resolution `json:"resolution"`
 	DNSSEC              DNSSEC     `json:"dnssec"`
 	Encrypted           Encrypted  `json:"encrypted"`
+	// docs/41 §3: filtering and client groups
+	Filtering    Filtering     `json:"filtering"`
+	ClientGroups []ClientGroup `json:"client_groups"`
 }
 
 // Strategies.
@@ -136,6 +139,8 @@ func Defaults(listen string) Settings {
 		Resolution:          DefaultResolution(),
 		DNSSEC:              DefaultDNSSEC(),
 		Encrypted:           DefaultEncrypted(),
+		Filtering:           DefaultFiltering(),
+		ClientGroups:        []ClientGroup{},
 	}
 }
 
@@ -151,6 +156,8 @@ func (s Settings) Clone() Settings {
 	c.Resolution = s.Resolution.clone()
 	c.DNSSEC = s.DNSSEC.clone()
 	c.Encrypted = s.Encrypted.clone()
+	c.Filtering = s.Filtering.clone()
+	c.ClientGroups = cloneGroups(s.ClientGroups)
 	return c
 }
 
@@ -264,6 +271,7 @@ func (s *Settings) Validate() fielderr.List {
 	validateResolution(s, &l)
 	validateDNSSEC(s, &l)
 	validateEncrypted(s, &l)
+	validateFiltering(s, &l)
 	return l
 }
 

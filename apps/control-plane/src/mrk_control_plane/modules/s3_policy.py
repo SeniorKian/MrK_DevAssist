@@ -252,6 +252,38 @@ def template_policy(template: str, buckets: list[str]) -> dict[str, Any]:
     return {"Version": POLICY_VERSION, "Statement": statements}
 
 
+WORKSPACE_TEMPLATES = ("read_only", "read_write", "admin")
+_WORKSPACE_ADMIN_BUCKET = [
+    "s3:ListBucketVersions", "s3:GetBucketCORS", "s3:PutBucketCORS", "s3:GetBucketVersioning",
+    "s3:PutBucketVersioning", "s3:GetLifecycleConfiguration", "s3:PutLifecycleConfiguration",
+    "s3:GetBucketTagging", "s3:PutBucketTagging",
+]
+_WORKSPACE_ADMIN_OBJECT = ["s3:GetObjectVersion", "s3:DeleteObjectVersion"]
+
+
+def workspace_policy(template: str, buckets: list[str]) -> dict[str, Any]:
+    """Policy of a «my space» key (docs/43 §3): only the given (own) buckets, never more.
+
+    Unlike :func:`template_policy`, no bucket means no permission at all (never ``*``), and
+    ``admin`` cannot change bucket policies or create/delete buckets: those stay with the
+    panel, which enforces the plan (public links, bucket count).
+    """
+    if template not in WORKSPACE_TEMPLATES:
+        raise PolicyError(f"unknown access level: {template}")
+    if not buckets:
+        return {"Version": POLICY_VERSION, "Statement": []}
+    base_template = "read_only" if template == "read_only" else "read_write"
+    policy = template_policy(base_template, buckets)
+    if template == "admin":
+        policy["Statement"].extend([
+            {"Sid": "Manage", "Effect": "Allow", "Action": list(_WORKSPACE_ADMIN_BUCKET),
+             "Resource": [_arn(bucket) for bucket in buckets]},
+            {"Sid": "Versions", "Effect": "Allow", "Action": list(_WORKSPACE_ADMIN_OBJECT),
+             "Resource": [_arn(bucket, "*") for bucket in buckets]},
+        ])
+    return policy
+
+
 def panel_policy() -> dict[str, Any]:
     return {
         "Version": POLICY_VERSION,

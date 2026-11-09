@@ -1,7 +1,8 @@
 # MRK DNS engine (`mrk-dns`)
 
-The DNS server of the MRK appliance, phases D1 and D2 (docs/36 plan, docs/37 D1 contract, docs/38 D2
-contract — query log, statistics, critical monitoring — docs/25 behaviour).
+The DNS server of the MRK appliance, phases D1, D2, D4, D5 and D6 (query log, statistics, critical monitoring, recursion, DNSSEC,
+encrypted DNS, zone transfers, filtering, backup; behaviour from docs/25). The archived design contracts
+(docs/36–41) are summarised in docs/03-user-stories.md, Epic E18; their full text is in git history.
 It is a Go program that lives in the appliance image and runs as its own container (`mrk-dns`
 Compose service, profile `dns`). The control plane manages it through a Unix-socket admin API.
 
@@ -120,7 +121,8 @@ On-disk layout (`MRK_DNS_DATA_DIR`): `settings.json` (`config_version` + setting
 
 ## Admin API
 
-See docs/37 §2 and §0.2 (D1) and docs/38 §3 and §0.2 (D2: `/v1/querylog[/stream|/export|/status]`,
+See the archived contracts in git history: `git show 1a568bf:docs/37-dns-d1-contract.md` §2 and §0.2 (D1),
+`git show 1a568bf:docs/38-dns-d2-contract.md` §3 and §0.2 (D2: `/v1/querylog[/stream|/export|/status]`,
 `/v1/stats`, `/v1/pressure`, `/v1/host-metrics`, `/v1/mitigations`, `/v1/events`). Every request needs `Authorization: Bearer
 <token>` except `GET /v1/health`. Mutating requests may send `X-MRK-Actor: <user>`, which is
 recorded in zone history.

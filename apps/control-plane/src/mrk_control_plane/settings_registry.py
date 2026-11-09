@@ -423,6 +423,13 @@ def _host_port(spec: SettingSpec, value: Any) -> None:
         raise _fail(spec, "must be host:port")
 
 
+def _ip(spec: SettingSpec, value: Any) -> None:
+    try:
+        ipaddress.ip_address(str(value))
+    except ValueError:
+        raise _fail(spec, "must be an IP address (for example 127.0.0.1 or 0.0.0.0)") from None
+
+
 def _regex(spec: SettingSpec, value: Any) -> None:
     try:
         re.compile(str(value))
@@ -437,6 +444,7 @@ VALIDATORS = {
     "trusted_hosts": _trusted_hosts,
     "host_port": _host_port,
     "regex": _regex,
+    "ip": _ip,
 }
 
 

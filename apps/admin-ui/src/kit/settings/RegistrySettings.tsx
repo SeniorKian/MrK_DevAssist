@@ -28,12 +28,12 @@ const COPY = {
   restartTitle: { fa: "چند تغییر پس از راه‌اندازی دوباره اعمال می‌شود", en: "Some changes apply after a restart" },
   restartBody: { fa: "{n} تنظیم عوض شده که فقط هنگام شروع سرویس خوانده می‌شود: {names}.", en: "{n} changed settings are only read when the service starts: {names}." },
   restartWho: { fa: "بخش‌هایی که باید دوباره راه‌اندازی شوند: {names}.", en: "Parts that need a restart: {names}." },
-  restartHow: { fa: "روی سرور، کانتینر MRK را یک بار دوباره راه‌اندازی کنید:", en: "On the server, restart the MRK container once:" },
+  restartHow: { fa: "روی سرور، کانتینر پیشکار را یک بار دوباره راه‌اندازی کنید:", en: "On the server, restart the Pishkar container once:" },
   restartCommand: { fa: "دستور راه‌اندازی دوباره", en: "Restart command" }
 } satisfies Record<string, Bi>;
 
 const PROCESS_WORDS: Record<string, Bi> = {
-  "control-plane": { fa: "سرور MRK", en: "MRK server" },
+  "control-plane": { fa: "سرور پیشکار", en: "Pishkar server" },
   "pypi-router": { fa: "مسیریاب PyPI", en: "PyPI router" },
   "s3-engine": { fa: "فضای فایل", en: "File space" },
   verdaccio: { fa: "مخزن npm", en: "npm registry" },

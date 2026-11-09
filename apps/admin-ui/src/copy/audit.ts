@@ -114,7 +114,7 @@ export const AUDIT_ACTIONS: Record<string, Bi> = {
   "domain.cert_expiring": { fa: "گواهی HTTPS دامنه[ «{target}»] به‌زودی تمام می‌شود", en: "The HTTPS certificate of[ “{target}”] expires soon" },
   "domains.routing.update": { fa: "{actor} روش اتصال دامنه‌ها را تغییر داد", en: "{actor} changed how domains are routed" },
 
-  // MRK DNS (docs/37 §4)
+  // Pishkar DNS (docs/37 §4)
   "dns.settings.update": { fa: "{actor} تنظیمات DNS را تغییر داد", en: "{actor} changed the DNS settings" },
   "dns.zone.create": { fa: "{actor} دامنه[ «{target}»] را به DNS اضافه کرد", en: "{actor} added the domain[ “{target}”] to DNS" },
   "dns.zone.update": { fa: "{actor} دامنه[ «{target}»] را در DNS تغییر داد", en: "{actor} changed the domain[ “{target}”] in DNS" },
@@ -141,6 +141,19 @@ export const AUDIT_ACTIONS: Record<string, Bi> = {
   "dns.doh_token.update": { fa: "{actor} کلید دسترسی DNS رمزدار[ «{target}»] را تغییر داد", en: "{actor} changed the encrypted DNS token[ “{target}”]" },
   "dns.doh_token.delete": { fa: "{actor} کلید دسترسی DNS رمزدار[ «{target}»] را باطل کرد", en: "{actor} cancelled the encrypted DNS token[ “{target}”]" },
   "dns.mitigation.delete": { fa: "{actor} محدودیت DNS[ «{target}»] را برداشت", en: "{actor} removed the DNS limit[ on “{target}”]" },
+  // docs/41: templates, transfers, signing, blocking, backup
+  "dns.template.create": { fa: "{actor} قالب دامنه[ «{target}»] را ساخت", en: "{actor} made the domain template[ “{target}”]" },
+  "dns.template.update": { fa: "{actor} قالب دامنه[ «{target}»] را تغییر داد", en: "{actor} changed the domain template[ “{target}”]" },
+  "dns.template.delete": { fa: "{actor} قالب دامنه[ «{target}»] را پاک کرد", en: "{actor} deleted the domain template[ “{target}”]" },
+  "dns.template.default": { fa: "{actor} قالب پیش‌فرض دامنه‌ها را[ «{target}»] کرد", en: "{actor} set the default domain template[ to “{target}”]" },
+  "dns.zone.apply_template": { fa: "{actor} رکوردهای یک قالب را به دامنه[ «{target}»] اضافه کرد", en: "{actor} added a template's records to[ “{target}”]" },
+  "dns.zone.refresh": { fa: "{actor} نسخه تازه دامنه[ «{target}»] را از سرور اصلی خواست", en: "{actor} asked for a fresh copy of[ “{target}”]" },
+  "dns.zone.dnssec_rollover": { fa: "{actor} کلید امضای دامنه[ «{target}»] را عوض کرد", en: "{actor} changed the signing key of[ “{target}”]" },
+  "dns.tsig.create": { fa: "{actor} کلید امضای انتقال[ «{target}»] را ساخت", en: "{actor} made the transfer signing key[ “{target}”]" },
+  "dns.tsig.delete": { fa: "{actor} کلید امضای انتقال[ «{target}»] را پاک کرد", en: "{actor} deleted the transfer signing key[ “{target}”]" },
+  "dns.filtering.refresh": { fa: "{actor} فهرست‌های مسدودسازی DNS را به‌روز کرد", en: "{actor} updated the DNS block lists" },
+  "dns.backup.download": { fa: "{actor} از DNS پشتیبان دانلود کرد", en: "{actor} downloaded a DNS backup" },
+  "dns.restore": { fa: "{actor} DNS را از فایل پشتیبان بازگردانی کرد", en: "{actor} restored DNS from a backup file" },
 
   // File space
   "s3.settings.update": { fa: "{actor} تنظیم فضای فایل را تغییر داد", en: "{actor} changed file space settings" },

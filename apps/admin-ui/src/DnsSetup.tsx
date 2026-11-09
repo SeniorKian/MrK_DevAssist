@@ -1,7 +1,7 @@
 /**
  * «DNS › راه‌اندازی» (docs/36 §7, contract docs/37 §4 `GET /api/v1/dns/setup`).
  * Step-by-step checklist: each step has its state, a plain explanation of `detail_code`, the exact
- * commands to copy (MRK never changes system files itself) and, folded away, the commands that undo it.
+ * commands to copy (Pishkar never changes system files itself) and, folded away, the commands that undo it.
  * «دوباره بررسی کن» runs the checks again.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -16,16 +16,16 @@ import { commandTitle, fetchDnsSetup, setupDetail, setupStateWord, SETUP_STEP_WO
 
 const COPY = {
   intro: {
-    fa: "این قدم‌ها را به ترتیب روی سرور انجام دهید. MRK خودش به فایل‌های سیستم دست نمی‌زند؛ فقط دستور دقیق می‌دهد و بعد بررسی می‌کند.",
-    en: "Do these steps on the server, in order. MRK never edits system files itself; it gives you the exact commands, then checks."
+    fa: "این قدم‌ها را به ترتیب روی سرور انجام دهید. پیشکار خودش به فایل‌های سیستم دست نمی‌زند؛ فقط دستور دقیق می‌دهد و بعد بررسی می‌کند.",
+    en: "Do these steps on the server, in order. Pishkar never edits system files itself; it gives you the exact commands, then checks."
   },
   progress: { fa: "{done} از {total} قدم انجام شده", en: "{done} of {total} steps done" },
-  allDone: { fa: "همه قدم‌ها انجام شده. سرور و کانتینرها نام‌ها را از MRK می‌پرسند.", en: "Every step is done. The server and its containers ask MRK for names." },
+  allDone: { fa: "همه قدم‌ها انجام شده. سرور و کانتینرها نام‌ها را از پیشکار می‌پرسند.", en: "Every step is done. The server and its containers ask Pishkar for names." },
   recheck: { fa: "دوباره بررسی کن", en: "Check again" },
   checking: { fa: "در حال بررسی…", en: "Checking…" },
   noAgent: {
-    fa: "دستیار سرور وصل نیست، پس MRK بعضی قدم‌ها را خودش نمی‌تواند بررسی کند. دستورها کامل‌اند؛ اجرا کنید و ادامه دهید.",
-    en: "The server helper isn't connected, so MRK can't check some steps itself. The commands are complete; run them and carry on."
+    fa: "دستیار سرور وصل نیست، پس پیشکار بعضی قدم‌ها را خودش نمی‌تواند بررسی کند. دستورها کامل‌اند؛ اجرا کنید و ادامه دهید.",
+    en: "The server helper isn't connected, so Pishkar can't check some steps itself. The commands are complete; run them and carry on."
   },
   step: { fa: "قدم {n}", en: "Step {n}" },
   commands: { fa: "دستورها", en: "Commands" },
@@ -39,11 +39,11 @@ const COPY = {
     en: "Careful: restarting Docker also stops and restarts every Dokploy app, for a few seconds to a few minutes. Do it at a quiet time."
   },
   backupNote: {
-    fa: "دستورها همیشه یک DNS پشتیبان هم کنار MRK می‌گذارند تا اگر MRK افتاد، اینترنت سرور قطع نشود.",
-    en: "The commands always add a backup DNS next to MRK, so the server keeps its internet if MRK goes down."
+    fa: "دستورها همیشه یک DNS پشتیبان هم کنار پیشکار می‌گذارند تا اگر پیشکار افتاد، اینترنت سرور قطع نشود.",
+    en: "The commands always add a backup DNS next to Pishkar, so the server keeps its internet if Pishkar goes down."
   },
   loadFailed: { fa: "قدم‌های راه‌اندازی خوانده نشد.", en: "The setup steps didn't load." },
-  moduleMissing: { fa: "بخش DNS روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "DNS isn't on your server's current version. Update MRK." },
+  moduleMissing: { fa: "بخش DNS روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "DNS isn't on your server's current version. Update Pishkar." },
   empty: { fa: "سرور هنوز قدمی برای راه‌اندازی نفرستاده است.", en: "The server hasn't sent any setup steps yet." },
   technicalCode: { fa: "کد بررسی", en: "Check code" },
   technicalParams: { fa: "جزئیات", en: "Details" }

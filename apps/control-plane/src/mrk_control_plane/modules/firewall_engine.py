@@ -69,7 +69,7 @@ BUILTIN_RULES: tuple[dict[str, Any], ...] = (
     {"id": "ssh-bruteforce", "name": "SSH brute force",
      "signal_kinds": ["ssh_failed_password", "ssh_invalid_user"],
      "threshold": 5, "window_seconds": 600, "ban_seconds": 3600},
-    {"id": "mrk-login", "name": "MRK login failures", "signal_kinds": ["mrk_login_failure"],
+    {"id": "mrk-login", "name": "Pishkar login failures", "signal_kinds": ["mrk_login_failure"],
      "threshold": 10, "window_seconds": 600, "ban_seconds": 1800},
     {"id": "http-auth", "name": "HTTP 401/403 burst", "signal_kinds": ["http_401", "http_403"],
      "threshold": 30, "window_seconds": 60, "ban_seconds": 900},

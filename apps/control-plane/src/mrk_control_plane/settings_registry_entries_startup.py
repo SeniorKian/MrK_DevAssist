@@ -314,6 +314,11 @@ NPM = (
         ("درگاه بررسی سلامت npm", "npm health port"),
         ("درگاه داخلی مخزن npm برای بررسی سلامت.", "Internal npm registry port used by the health check."),
         danger="medium", min=1, max=65535),
+    env("npm.listen_host", "packages.npm", "string", "0.0.0.0", "MRK_NPM_LISTEN_HOST",  # noqa: S104
+        ("نشانی گوش‌دادن مخزن npm", "npm registry listen address"),
+        ("در Docker همان 0.0.0.0 داخل کانتینر می‌ماند؛ در نصب بدون Docker 127.0.0.1 تا فقط از خود سرور در دسترس باشد.",
+         "Inside Docker keep 0.0.0.0 (the container is private); a native install uses 127.0.0.1 so only the server itself can reach it."),
+        reason="lockout", danger="high", processes=("control-plane", "verdaccio"), validator="ip"),
     env("npm.port", "packages.npm", "int", 4873, "MRK_NPM_PORT",
         ("درگاه npm روی سرور", "npm port on the host"),
         ("پروژه‌ها مخزن npm را با این درگاه پیدا می‌کنند.", "Projects reach the npm registry on this host port."),
@@ -360,6 +365,11 @@ PYPI = (
         ("فایل حالت بدون اینترنت PyPI", "PyPI offline marker"),
         ("وجود این فایل یعنی PyPI فقط از حافظه خودش جواب بدهد.", "When this file exists PyPI answers from its cache only."),
         reason="path", danger="high", processes=ROUTER, nullable=True),
+    env("pypi.listen_host", "packages.pypi", "string", "0.0.0.0", "MRK_PYPI_LISTEN_HOST",  # noqa: S104
+        ("نشانی گوش‌دادن مخزن PyPI", "PyPI registry listen address"),
+        ("در Docker همان 0.0.0.0 داخل کانتینر می‌ماند؛ در نصب بدون Docker 127.0.0.1 تا فقط از خود سرور در دسترس باشد.",
+         "Inside Docker keep 0.0.0.0 (the container is private); a native install uses 127.0.0.1 so only the server itself can reach it."),
+        reason="shell_script", danger="high", processes=DEVPI, validator="ip"),
     env("pypi.port", "packages.pypi", "int", 3141, "MRK_PYPI_PORT",
         ("درگاه PyPI", "PyPI port"),
         ("پروژه‌ها مخزن PyPI را با این درگاه پیدا می‌کنند.", "Projects reach the PyPI registry on this port."),

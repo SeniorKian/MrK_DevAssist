@@ -30,6 +30,8 @@ type Compiled struct {
 	exists     map[string]struct{}
 	cuts       map[string]*cut
 	apexLabels int
+	// D5 is set for zones compiled from full RR lists (d5.go).
+	D5 *D5Data
 }
 
 // Compile builds the lookup structure from z (enabled records only).
@@ -49,7 +51,7 @@ func Compile(z *Zone) (*Compiled, error) {
 	c.add(c.soa)
 	for i := range z.Records {
 		r := &z.Records[i]
-		if r.Disabled {
+		if r.Disabled || r.View != "" { // view records: CompileView (views.go)
 			continue
 		}
 		rr, err := r.RR(z.Name)
@@ -312,12 +314,15 @@ func (s *Set) Answer(qname string, qtype uint16) (res Result, ok bool) {
 	var seen map[string]bool
 	for i := 0; i < MaxChain; i++ {
 		z := s.Find(name)
-		if z == nil || z.Type != TypePrimary {
+		if z == nil || !z.Authoritative() || z.Unavailable() && i > 0 {
 			if i == 0 {
 				return res, false
 			}
 			res.Dangling = name
 			return res, true
+		}
+		if z.Unavailable() { // secondary not loaded or expired (docs/41 §2.1)
+			return Result{Rcode: dns.RcodeServerFailure, Zone: z.Origin}, true
 		}
 		st := z.lookup(name, qtype)
 		if i == 0 {

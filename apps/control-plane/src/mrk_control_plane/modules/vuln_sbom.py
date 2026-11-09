@@ -27,7 +27,7 @@ from .. import __version__
 from .vuln_inventory import Inventory
 
 FORMATS = ("cyclonedx", "spdx")
-TOOL_NAME = "MRK"
+TOOL_NAME = "Pishkar"
 CDX_MEDIA_TYPE = "application/vnd.cyclonedx+json"
 SPDX_MEDIA_TYPE = "application/spdx+json"
 SEVERITY_MAP = {"critical": "critical", "high": "high", "medium": "medium", "low": "low"}
@@ -296,7 +296,7 @@ def _vulnerability(
     if finding.get("ignored"):
         entry["analysis"] = {
             "state": "not_affected",
-            "detail": str(finding.get("ignore_reason") or "Ignored by an MRK rule"),
+            "detail": str(finding.get("ignore_reason") or "Ignored by an Pishkar rule"),
         }
     return entry
 
@@ -307,7 +307,7 @@ def cyclonedx(
     now: float,
     whole_host: bool,
     include_vulns: bool,
-    host_name: str = "MRK server",
+    host_name: str = "Pishkar server",
 ) -> dict[str, Any]:
     """CycloneDX 1.5 document. ``targets``: (image payload, inventory, annotated findings)."""
     components: list[dict[str, Any]] = []
@@ -356,7 +356,7 @@ def cyclonedx(
             "tools": {
                 "components": [
                     {"type": "application", "name": TOOL_NAME, "version": __version__,
-                     "publisher": "MRK DevAssist"}
+                     "publisher": "Pishkar DevAssist"}
                 ]
             },
             "component": metadata_component,
@@ -378,7 +378,7 @@ def spdx(
     *,
     now: float,
     whole_host: bool,
-    host_name: str = "MRK server",
+    host_name: str = "Pishkar server",
 ) -> dict[str, Any]:
     """SPDX 2.3 JSON document (packages + CONTAINS relationships; no vulnerabilities)."""
     packages: list[dict[str, Any]] = []
@@ -452,7 +452,7 @@ def spdx(
         "documentNamespace": f"https://spdx.mrk.invalid/sbom/{uuid.uuid4()}",
         "creationInfo": {
             "created": _timestamp(now),
-            "creators": [f"Tool: {TOOL_NAME}-{__version__}", "Organization: MRK DevAssist"],
+            "creators": [f"Tool: {TOOL_NAME}-{__version__}", "Organization: Pishkar DevAssist"],
         },
         "documentDescribes": roots,
         "packages": packages,

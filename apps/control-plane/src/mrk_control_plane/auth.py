@@ -69,6 +69,8 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             "services:read", "services:operate", "domains:read", "domains:write",
             # docs/37 (DNS server)
             "dns:read", "dns:write", "dns:logs", "dns:admin",
+            # docs/43 (my space)
+            "tenancy:admin", "tenancy:impersonate_write",
         }
     ),
     "operator": frozenset(
@@ -115,6 +117,8 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             "dns:read",
         }
     ),
+    # docs/43 §1: a «my space» only account; no server permission at all.
+    "customer": frozenset(),
 }
 
 BUILTIN_ROLES: Final[tuple[str, ...]] = tuple(ROLE_PERMISSIONS)
@@ -206,11 +210,12 @@ PERMISSION_CATALOG: Final[tuple[PermissionSpec, ...]] = (
        "Connect/disconnect and tune Dokploy",
        "اتصال به Dokploy و کلید دسترسی آن را تنظیم می‌کند.",
        "Sets up the Dokploy connection and its access key.", "high", ("dokploy:read",)),
-    _P("services:read", "server", "دیدن سرویس‌های MRK و مصرفشان", "See MRK services and usage",
-       "وضعیت روشن/خاموش، مصرف فضا و دامنه‌های هر سرویس MRK.",
-       "On/off state, disk use and domains of each MRK service."),
-    _P("services:operate", "server", "روشن، خاموش و راه‌اندازی دوباره سرویس‌های MRK",
-       "Start, stop and restart MRK services",
+    _P("services:read", "server", "دیدن سرویس‌های پیشکار و مصرفشان",
+       "See Pishkar services and usage",
+       "وضعیت روشن/خاموش، مصرف فضا و دامنه‌های هر سرویس پیشکار.",
+       "On/off state, disk use and domains of each Pishkar service."),
+    _P("services:operate", "server", "روشن، خاموش و راه‌اندازی دوباره سرویس‌های پیشکار",
+       "Start, stop and restart Pishkar services",
        "مخزن npm، PyPI و فضای فایل را خاموش یا روشن می‌کند؛ کاربران تا روشن شدن دسترسی ندارند.",
        "Stops or starts the npm, PyPI and file-storage services; users lose access meanwhile.",
        "medium", ("services:read",)),
@@ -263,7 +268,7 @@ PERMISSION_CATALOG: Final[tuple[PermissionSpec, ...]] = (
        "پوشه‌های اصلی، کاربران و کلیدهای فضای فایل را می‌سازد و حذف می‌کند.",
        "Creates and removes buckets, file-space users and keys.", "high", ("s3:read",)),
     _P("backup:read", "files", "دیدن پشتیبان‌های پنل", "See panel backups",
-       "فهرست پشتیبان‌های خود پنل MRK.", "Lists backups of the MRK panel itself."),
+       "فهرست پشتیبان‌های خود پنل پیشکار.", "Lists backups of the Pishkar panel itself."),
     _P("backup:write", "files", "ساخت پشتیبان پنل و آماده‌سازی بازگردانی",
        "Create panel backups; prepare restore",
        "از پنل پشتیبان می‌گیرد و برنامه بازگردانی آماده می‌کند.",
@@ -298,6 +303,17 @@ PERMISSION_CATALOG: Final[tuple[PermissionSpec, ...]] = (
        "Invite, disable and change roles",
        "افراد را دعوت یا غیرفعال می‌کند و نقششان را عوض می‌کند.",
        "Invites or disables people and changes their roles.", "critical", ("user:read",)),
+    _P("tenancy:admin", "people", "مدیریت بسته‌ها و فضاهای کاری کاربران",
+       "Manage plans and user workspaces",
+       "بسته‌ها، فضاهای کاری، ثبت‌نام‌ها و مالکیت منابع کاربران را مدیریت می‌کند"
+       " و فضای آن‌ها را می‌بیند.",
+       "Manages plans, workspaces, sign-ups and resource ownership, and can view a user's space.",
+       "critical", ("user:read",)),
+    _P("tenancy:impersonate_write", "people", "تغییر در فضای کاربر به‌جای او",
+       "Make changes in a user's space for them",
+       "در حالت «دیدن به‌جای کاربر» اجازه تغییر هم می‌دهد؛ همه کارها ثبت می‌شود.",
+       "Allows changes while viewing a user's space; everything is recorded.",
+       "critical", ("tenancy:admin",)),
     _P("token:read", "people", "دیدن کلیدهای برنامه خود", "See own app keys",
        "کلیدهای برنامه‌ای که خودتان ساخته‌اید.", "The app keys you created yourself."),
     _P("token:write", "people", "ساخت و لغو کلید برنامه", "Create and revoke app keys",
@@ -327,6 +343,11 @@ WILDCARD_PERMISSION: Final = PermissionSpec(
     "Allows everything; only the owner role holds it.", "critical",
 )
 KNOWN_PERMISSIONS: Final[frozenset[str]] = frozenset(item.id for item in PERMISSION_CATALOG)
+# docs/43 §3: the only scopes a «my space» token may carry (never a server permission).
+MY_TOKEN_SCOPES: Final[frozenset[str]] = frozenset({
+    "my.dns:read", "my.dns:write", "my.s3:read", "my.s3:write",
+    "my.packages:read", "my.packages:write",
+})
 PERMISSION_REQUIRES: Final[dict[str, frozenset[str]]] = {
     item.id: frozenset(item.requires) for item in PERMISSION_CATALOG
 }
@@ -387,6 +408,16 @@ BUILTIN_ROLE_INFO: Final[dict[str, dict[str, object]]] = {
                    "Create own app keys"],
         "cannot_fa": ["تغییر هر چیزی روی سرور", "دیدن لاگ‌ها", "دیدن تاریخچه"],
         "cannot_en": ["Change anything on the server", "See logs", "See history"],
+    },
+    "customer": {
+        "name_fa": "کاربر فضای من", "name_en": "My space user",
+        "description_fa": "فقط دامنه‌ها، فایل‌ها و بسته‌های خودش را مدیریت می‌کند",
+        "description_en": "Manages only their own domains, files and packages",
+        "can_fa": ["مدیریت دامنه‌ها و فایل‌های فضای خودش", "ساختن کلید برای فضای خودش"],
+        "can_en": ["Manage the domains and files of their own space",
+                   "Create keys for their own space"],
+        "cannot_fa": ["دیدن یا تغییر هر چیزی در مدیریت سرور"],
+        "cannot_en": ["See or change anything in server management"],
     },
     "viewer": {
         "name_fa": "بیننده", "name_en": "Viewer",
@@ -586,6 +617,9 @@ class Principal:
     display_name: str | None = None
     email: str | None = None
     must_change_password: bool = False
+    # docs/43: set for a «my space» API token (its permissions are my.* scopes only).
+    workspace_id: str | None = None
+    token_ip_allow: tuple[str, ...] = ()
 
     def allows(self, permission: str) -> bool:
         return "*" in self.permissions or permission in self.permissions
@@ -825,12 +859,18 @@ class AuthStore:
             items = [
                 {**_role_card(name, permissions), "user_count": int(counts.get(name, 0))}
                 for name, permissions in ROLE_PERMISSIONS.items()
+                if name != "customer" or self._tenancy_enabled(db) or counts.get(name)
             ]
             for row in rows:
                 card = _custom_role_card(row)
                 card["user_count"] = int(counts.get(str(card["id"]), 0))
                 items.append(card)
             return items
+
+    @staticmethod
+    def _tenancy_enabled(db: OrmSession) -> bool:
+        row = db.get(SystemSetting, "tenancy.settings")
+        return bool(row is not None and isinstance(row.value, dict) and row.value.get("enabled"))
 
     def get_role(self, role: str) -> dict[str, object] | None:
         role = self._normalize_role_id(role)
@@ -1113,10 +1153,16 @@ class AuthStore:
         password: str,
         source_ip: str | None,
         request_id: str | None,
+        *,
+        role: str = "viewer",
+        enabled: bool = True,
+        allowed: bool | None = None,
+        created: list[int] | None = None,
     ) -> str:
+        """Self sign-up. ``allowed``/``role``/``enabled`` come from «my space» (docs/43 §2)."""
         key = f"register:{source_ip or '-'}"
         with self._lock:
-            if not self.public_registration_enabled():
+            if not (self.public_registration_enabled() if allowed is None else allowed):
                 raise ValueError("public registration is disabled")
             if self._rate_limited(key):
                 raise ValueError("registration is rate limited")
@@ -1133,10 +1179,11 @@ class AuthStore:
                 user_id = self.create_user(
                     username,
                     password,
-                    "viewer",
+                    role,
                     actor_user_id=None,
                     display_name=normalized_name,
                     email=normalized_email,
+                    enabled=enabled,
                 )
             except ValueError:
                 self._record_attempt(key)
@@ -1144,6 +1191,8 @@ class AuthStore:
             # Successful sign-ups count too, so one address cannot create
             # accounts without limit.
             self._record_attempt(key)
+            if created is not None:
+                created.append(user_id)
             self.record_audit(
                 user_id,
                 "auth.register",
@@ -1165,6 +1214,7 @@ class AuthStore:
         email: str | None = None,
         actor_permissions: frozenset[str] | None = None,
         must_change_password: bool = False,
+        enabled: bool = True,
     ) -> int:
         normalized = self.validate_username(username)
         self.validate_password(password)
@@ -1183,7 +1233,7 @@ class AuthStore:
                     username=normalized,
                     password_hash=password_hash,
                     role=role,
-                    enabled=True,
+                    enabled=enabled,
                     display_name=normalized_name,
                     email=normalized_email,
                     identity_provider="local",
@@ -1709,6 +1759,20 @@ class AuthStore:
             if role_permissions is None:
                 return None
             api_token.last_used_at = now
+            if api_token.workspace_id is not None:
+                # docs/43 §3: my.* scopes only, bound to one workspace; the membership
+                # role is intersected per request by the tenancy layer.
+                scopes = frozenset(
+                    item for item in api_token.scopes if item in MY_TOKEN_SCOPES
+                )
+                if not scopes:
+                    return None
+                return Principal(
+                    int(user.id), user.username, user.role, scopes, None, "",
+                    int(api_token.id), user.display_name, user.email,
+                    self._must_change(db, int(user.id)), api_token.workspace_id,
+                    tuple(api_token.ip_allow or ()),
+                )
             requested = frozenset(api_token.scopes)
             # Intersect with the role as it is *now* (built-in or custom), so a
             # narrowed custom role narrows every token at once.
@@ -2000,7 +2064,9 @@ class AuthStore:
     def list_api_tokens(self, user_id: int) -> list[dict[str, object]]:
         with self.db.session() as db:
             rows = db.scalars(
-                select(ApiToken).where(ApiToken.user_id == user_id).order_by(ApiToken.id.desc())
+                select(ApiToken)
+                .where(ApiToken.user_id == user_id, ApiToken.workspace_id.is_(None))
+                .order_by(ApiToken.id.desc())
             ).all()
             return [
                 {
@@ -2018,7 +2084,7 @@ class AuthStore:
                 update(ApiToken)
                 .where(
                     ApiToken.id == token_id, ApiToken.user_id == user_id,
-                    ApiToken.revoked_at.is_(None),
+                    ApiToken.revoked_at.is_(None), ApiToken.workspace_id.is_(None),
                 )
                 .values(revoked_at=now)
             )
@@ -2104,6 +2170,7 @@ class AuthStore:
         since: int | None = None,
         until: int | None = None,
         max_limit: int = 500,
+        workspace_id: str | None = None,
     ) -> list[dict[str, object]]:
         """Newest-first audit events; ``before_id`` pages backwards (keyset).
 
@@ -2135,6 +2202,8 @@ class AuthStore:
             query = query.where(AuditEvent.occurred_at >= since)
         if until is not None:
             query = query.where(AuditEvent.occurred_at <= until)
+        if workspace_id is not None:
+            query = query.where(AuditEvent.workspace_id == workspace_id)
         with self.db.session() as db:
             rows = db.scalars(
                 query.order_by(AuditEvent.id.desc()).limit(min(max(limit, 1), max_limit))
@@ -2145,6 +2214,7 @@ class AuthStore:
                     "object_type": row.object_type, "object_id": row.object_id,
                     "result": row.result, "source_ip": row.source_ip,
                     "request_id": row.request_id, "occurred_at": row.occurred_at,
+                    "workspace_id": row.workspace_id, "on_behalf_of": row.on_behalf_of,
                 }
                 for row in rows
             ]
@@ -2158,10 +2228,14 @@ class AuthStore:
         result: str = "success",
         source_ip: str | None = None,
         request_id: str | None = None,
+        *,
+        workspace_id: str | None = None,
+        on_behalf_of: int | None = None,
     ) -> None:
         with self.db.session() as db, db.begin():
             self._audit_db(
-                db, actor_user_id, action, object_type, object_id, result, source_ip, request_id
+                db, actor_user_id, action, object_type, object_id, result, source_ip, request_id,
+                workspace_id=workspace_id, on_behalf_of=on_behalf_of,
             )
 
     @staticmethod
@@ -2174,6 +2248,9 @@ class AuthStore:
         result: str,
         source_ip: str | None = None,
         request_id: str | None = None,
+        *,
+        workspace_id: str | None = None,
+        on_behalf_of: int | None = None,
     ) -> None:
         # Clip to the column sizes: PostgreSQL rejects over-long values (SQLite
         # does not), which turned a long package name or backup filename into a
@@ -2188,5 +2265,7 @@ class AuthStore:
                 source_ip=source_ip[:64] if source_ip is not None else None,
                 request_id=request_id[:128] if request_id is not None else None,
                 occurred_at=int(time.time()),
+                workspace_id=workspace_id[:16] if workspace_id is not None else None,
+                on_behalf_of=on_behalf_of,
             )
         )

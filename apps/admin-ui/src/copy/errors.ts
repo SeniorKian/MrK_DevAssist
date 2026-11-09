@@ -17,6 +17,7 @@
  */
 import type { Language } from "../i18n";
 import type { Bi } from "./text";
+import { planErrorSentence } from "./mySpace";
 
 /** The single helpful next step for an error. FriendlyError turns it into a button. */
 export type ErrorAction =
@@ -49,8 +50,8 @@ export const ERROR_ACTION_LABEL: Record<ErrorAction, Bi> = {
 /** Fallbacks by HTTP status / failure kind, used when a code is unknown. */
 export const FALLBACK_ERRORS = {
   network: {
-    fa: "سرور MRK جواب نمی‌دهد. اتصال اینترنت خودتان را بررسی کنید و چند لحظه بعد دوباره امتحان کنید.",
-    en: "MRK isn't responding. Check your internet connection and try again in a moment.",
+    fa: "سرور پیشکار جواب نمی‌دهد. اتصال اینترنت خودتان را بررسی کنید و چند لحظه بعد دوباره امتحان کنید.",
+    en: "Pishkar isn't responding. Check your internet connection and try again in a moment.",
     action: "retry"
   },
   unauthorized: { fa: "زمان ورودتان تمام شده. لطفاً دوباره وارد شوید.", en: "Your sign-in has expired. Please sign in again.", action: "signIn" },
@@ -243,7 +244,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
 
   // ── Dokploy ───────────────────────────────────────────────────────────────
   dokploy_not_configured: { fa: "هنوز Dokploy را وصل نکرده‌اید.", en: "Dokploy isn't connected yet.", action: "connectDokploy" },
-  dokploy_unreachable: { fa: "MRK نتوانست به Dokploy وصل شود. نشانی آن و روشن بودنش را بررسی کنید.", en: "MRK couldn't reach Dokploy. Check its address and that it's running.", action: "retry" },
+  dokploy_unreachable: { fa: "پیشکار نتوانست به Dokploy وصل شود. نشانی آن و روشن بودنش را بررسی کنید.", en: "Pishkar couldn't reach Dokploy. Check its address and that it's running.", action: "retry" },
   dokploy_unavailable: { fa: "Dokploy الان جواب نمی‌دهد. چند لحظه بعد دوباره امتحان کنید.", en: "Dokploy isn't answering right now. Try again in a moment.", action: "retry" },
   dokploy_timeout: { fa: "Dokploy دیر جواب داد. چند لحظه بعد دوباره امتحان کنید.", en: "Dokploy answered too slowly. Try again in a moment.", action: "retry" },
   dokploy_auth_failed: { fa: "Dokploy این کلید را قبول نکرد. در Dokploy یک کلید تازه بسازید و این‌جا بگذارید.", en: "Dokploy didn't accept this key. Create a new key in Dokploy and paste it here.", action: "connectDokploy" },
@@ -280,8 +281,8 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   backup_rejected: { fa: "این پشتیبان پذیرفته نشد. فایل را بررسی کنید.", en: "This backup wasn't accepted. Check the file." },
   backup_unavailable: { fa: "پشتیبان‌گیری از پنل الان ممکن نیست. فضای دیسک و رمز پشتیبان را بررسی کنید.", en: "A panel backup isn't possible right now. Check disk space and the backup password." },
   unknown_profile: { fa: "نوع پشتیبان شناخته نشد. یکی از گزینه‌ها را انتخاب کنید.", en: "Unknown backup type. Pick one of the options." },
-  unknown_format: { fa: "این فایل، پشتیبان MRK نیست.", en: "This file isn't an MRK backup." },
-  unsupported_kdf: { fa: "این پشتیبان با روشی ساخته شده که این نسخه MRK آن را نمی‌شناسد.", en: "This backup was made in a way this MRK version doesn't recognise." },
+  unknown_format: { fa: "این فایل، پشتیبان پیشکار نیست.", en: "This file isn't an Pishkar backup." },
+  unsupported_kdf: { fa: "این پشتیبان با روشی ساخته شده که این نسخه پیشکار آن را نمی‌شناسد.", en: "This backup was made in a way this Pishkar version doesn't recognise." },
   corrupt: { fa: "فایل پشتیبان آسیب دیده است. فایل دیگری انتخاب کنید.", en: "The backup file is damaged. Pick another file." },
   invalid_archive: { fa: "فایل پشتیبان آسیب دیده یا ناقص است.", en: "The backup file is damaged or incomplete." },
   insufficient_space: { fa: "فضای دیسک کافی نیست. اول کمی فضا آزاد کنید.", en: "There isn't enough disk space. Free some space first." },
@@ -300,6 +301,36 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   backup_retry_unsupported: { fa: "این کار را نمی‌شود تکرار کرد؛ یک پشتیبان تازه بسازید.", en: "This job can't be retried; create a new backup instead." },
 
   // ── File space (S3) ───────────────────────────────────────────────────────
+  // «فضای من» (docs/43 §3): the quota sentence with the limit's name and numbers is built by my/MyError.tsx.
+  "my:quota_exceeded": { fa: "به سقف بسته‌تان رسیده‌اید. اول چیزی پاک کنید یا بسته بزرگ‌تری بخواهید.", en: "You've reached your plan's limit. Remove something first, or ask for a bigger plan." },
+  feature_disabled: { fa: "این امکان در بسته شما نیست. برای داشتنش با مدیر سامانه صحبت کنید.", en: "This isn't in your plan. Talk to the system admin to get it." },
+  workspace_suspended: { fa: "این فضا موقتاً بسته شده و فقط می‌شود دید. برای باز شدنش با مدیر سامانه صحبت کنید.", en: "This space is paused, so you can only look. Talk to the system admin to reopen it." },
+  zone_unavailable: { fa: "این دامنه را نمی‌شود این‌جا آورد؛ یا مال فضای دیگری است یا بخشی از خود پیشکار است.", en: "This domain can't be added here: it belongs to another space or to Pishkar itself.", field: "name" },
+  zone_not_verified: { fa: "مالکیت این دامنه هنوز ثابت نشده. رکورد را بگذارید و چند دقیقه بعد «بررسی کن» را بزنید.", en: "This domain isn't proven yet. Add the record and press “Check now” in a few minutes." },
+  verification_failed: { fa: "رکورد اثبات هنوز پیدا نشد. اگر همین الان گذاشته‌اید، چند دقیقه بعد دوباره امتحان کنید.", en: "The proof record isn't visible yet. If you just added it, try again in a few minutes.", action: "retry" },
+  plan_in_use: { fa: "این بسته هنوز به چند فضا داده شده. اول بسته آن‌ها را عوض کنید.", en: "Some workspaces still use this plan. Change their plan first." },
+  plan_not_found: { fa: "این بسته پیدا نشد؛ شاید پاک شده باشد. فهرست را تازه کنید.", en: "That plan wasn't found; it may be gone. Refresh the list.", action: "refreshList" },
+  workspace_not_found: { fa: "این فضا پیدا نشد؛ شاید پاک شده باشد. صفحه را تازه کنید.", en: "That space wasn't found; it may be gone. Refresh the page.", action: "refreshList" },
+  not_a_member: { fa: "شما عضو این فضا نیستید. از صاحب فضا بخواهید دعوتتان کند.", en: "You're not a member of this space. Ask its owner to invite you." },
+  role_escalation: { fa: "نمی‌توانید نقشی بالاتر از نقش خودتان بدهید.", en: "You can't give a role above your own.", field: "role" },
+  last_owner: { fa: "این فضا دست‌کم یک صاحب لازم دارد. اول یک صاحب دیگر بگذارید.", en: "This space needs at least one owner. Make someone else owner first." },
+  already_member: { fa: "این شخص همین حالا عضو این فضاست.", en: "This person is already a member.", field: "user" },
+  user_not_found: { fa: "کسی با این ایمیل یا نام کاربری پیدا نشد. املایش را بررسی کنید.", en: "Nobody has that email or username. Check the spelling.", field: "user" },
+  tenancy_disabled: { fa: "«فضای من» هنوز روشن نشده. از مدیر سامانه بخواهید روشنش کند.", en: "My space isn't turned on yet. Ask the system admin to turn it on." },
+  view_as_read_only: { fa: "در حالت «دیدن به‌جای» فقط می‌شود دید؛ چیزی تغییر نمی‌کند.", en: "In view-as mode you can only look; nothing changes." },
+  view_as_expired: { fa: "زمان «دیدن به‌جای» تمام شده. اگر لازم است دوباره شروع کنید.", en: "The view-as time is over. Start again if you need to." },
+  scope_escalation: { fa: "کلید نمی‌تواند کاری بیشتر از نقش خودتان بکند.", en: "A key can't do more than your own role.", field: "scopes" },
+  "my:permission_escalation": { fa: "نمی‌توانید نقش یا دسترسی‌ای بالاتر از نقش خودتان در این فضا بدهید.", en: "You can't give a role or access above your own in this space." },
+  "my:forbidden": { fa: "نقش شما در این فضا اجازه این کار را نمی‌دهد. از صاحب فضا بخواهید.", en: "Your role in this space can't do this. Ask the space's owner." },
+  "my:not_found": { fa: "این مورد پیدا نشد؛ شاید پاک شده یا مال فضای دیگری است. صفحه را تازه کنید.", en: "We couldn't find this; it may be gone or belong to another space. Refresh the page.", action: "refreshList" },
+  permission_escalation: { fa: "نمی‌توانید نقش یا دسترسی‌ای بالاتر از نقش خودتان بدهید.", en: "You can't give a role or access above your own." },
+  scope_unavailable: { fa: "این نام بسته در دسترس نیست؛ قبلاً بسته‌های عمومی با همین نام ذخیره شده. با مدیر سامانه صحبت کنید.", en: "This package scope isn't available: public packages with this name are already stored. Talk to the system admin." },
+  personal_workspace: { fa: "فضای شخصی فقط مال خودتان است و عضو نمی‌پذیرد. برای کار گروهی یک فضای تیمی بسازید.", en: "A personal space is just for you. Make a team space to work with others." },
+  plan_builtin: { fa: "بسته‌های آماده را نمی‌شود پاک کرد؛ فقط تغییرشان دهید.", en: "Ready-made plans can't be deleted; you can only edit them." },
+  plan_default: { fa: "این بسته پیش‌فرض است. اول بسته دیگری را پیش‌فرض کنید.", en: "This is the default plan. Make another plan the default first." },
+  dns_record_type_not_allowed: { fa: "بسته شما این نوع رکورد را اجازه نمی‌دهد. نوع دیگری انتخاب کنید.", en: "Your plan doesn't allow this record type. Pick another type.", field: "type" },
+  admin_area_local_only: { fa: "بخش «مدیریت سرور» فقط از همین شبکه یا شبکه خصوصی باز می‌شود.", en: "Server admin only opens from this network or the private network (VPN)." },
+  signup_pending: { fa: "ثبت‌نام شما رسید و منتظر تأیید مدیر سامانه است.", en: "Your sign-up arrived and is waiting for the system admin's approval." },
   bucket_exists: { fa: "پوشه اصلی دیگری همین نام را دارد؛ نام دیگری بنویسید.", en: "Another bucket has this name; pick a different one.", field: "name" },
   bucket_not_empty: { fa: "این پوشه اصلی خالی نیست. اگر مطمئنید، گزینه «پاک کردن با همه فایل‌ها» را بزنید.", en: "This bucket isn't empty. If you're sure, choose “delete with all files”." },
   bucket_not_found: { fa: "این پوشه اصلی پیدا نشد. فهرست را تازه کنید.", en: "This bucket wasn't found. Refresh the list.", action: "refreshList" },
@@ -333,7 +364,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   key_not_found: { fa: "این کلید پیدا نشد. فهرست را تازه کنید.", en: "This key wasn't found. Refresh the list.", action: "refreshList" },
   key_limit_reached: { fa: "این کاربر به سقف تعداد کلید رسیده. اول یک کلید قدیمی را پاک کنید.", en: "This user has the maximum number of keys. Remove an old one first." },
   link_path_in_use: { fa: "این پوشه سرور قبلاً به پوشه اصلی دیگری وصل شده است.", en: "This server folder is already linked to another bucket.", field: "link_path" },
-  link_path_invalid: { fa: "فقط پوشه‌هایی که در فایل Compose به MRK داده شده‌اند قابل اتصال‌اند.", en: "Only folders given to MRK in the Compose file can be linked.", field: "link_path" },
+  link_path_invalid: { fa: "فقط پوشه‌هایی که در فایل Compose به پیشکار داده شده‌اند قابل اتصال‌اند.", en: "Only folders given to Pishkar in the Compose file can be linked.", field: "link_path" },
   linked_requires_owner: { fa: "فقط «مالک» می‌تواند پوشه‌های سرور را وصل کند.", en: "Only the owner can link server folders." },
   object_not_found: { fa: "این فایل پیدا نشد. فهرست را تازه کنید.", en: "This file wasn't found. Refresh the list.", action: "refreshList" },
   object_too_large: { fa: "این فایل از سقف حجم مجاز بزرگ‌تر است.", en: "This file is larger than the allowed size." },
@@ -362,8 +393,8 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   destination_not_found: { fa: "این مقصد پیدا نشد. فهرست را تازه کنید.", en: "This destination wasn't found. Refresh the list.", action: "refreshList" },
   invalid_destination: { fa: "مقصد پشتیبان ذخیره نشد. نشانی و کلیدها را بررسی کنید.", en: "The backup destination wasn't saved. Check the address and keys.", action: "fixFields" },
   destination_forbidden: { fa: "این مقصد برای امنیت مجاز نیست؛ مقصد دیگری انتخاب کنید.", en: "This destination isn't allowed for safety; pick another." },
-  path_forbidden: { fa: "این پوشه مال خود MRK است؛ پوشه دیگری انتخاب کنید.", en: "This folder belongs to MRK itself; pick another folder.", field: "path" },
-  path_not_writable: { fa: "MRK نمی‌تواند در این پوشه بنویسد. دسترسی پوشه را بررسی کنید.", en: "MRK can't write to this folder. Check its permissions.", field: "path" },
+  path_forbidden: { fa: "این پوشه مال خود پیشکار است؛ پوشه دیگری انتخاب کنید.", en: "This folder belongs to Pishkar itself; pick another folder.", field: "path" },
+  path_not_writable: { fa: "پیشکار نمی‌تواند در این پوشه بنویسد. دسترسی پوشه را بررسی کنید.", en: "Pishkar can't write to this folder. Check its permissions.", field: "path" },
   invalid_path: { fa: "مسیر پوشه درست نیست.", en: "The folder path isn't valid.", field: "path" },
   invalid_schedule: { fa: "زمان‌بندی را نفهمیدیم. یکی از گزینه‌های آماده را انتخاب کنید.", en: "We couldn't understand the schedule. Pick one of the ready-made options.", field: "schedule" },
   invalid_retention: { fa: "تعداد یا مدت نگه‌داری باید عددی مثبت باشد.", en: "How many or how long to keep must be a positive number.", field: "retention" },
@@ -371,7 +402,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   invalid_source_path: { fa: "مسیر منبع پشتیبان درست نیست.", en: "The backup source path isn't valid.", field: "path" },
   invalid_kind: { fa: "نوع را از گزینه‌ها انتخاب کنید.", en: "Pick a type from the options.", field: "kind" },
   invalid_timezone: { fa: "منطقه زمانی را از فهرست انتخاب کنید.", en: "Pick a time zone from the list.", field: "timezone" },
-  source_failed: { fa: "MRK نتوانست از منبع پشتیبان بخواند. روشن بودن برنامه را بررسی کنید.", en: "MRK couldn't read from the backup source. Check that the app is running." },
+  source_failed: { fa: "پیشکار نتوانست از منبع پشتیبان بخواند. روشن بودن برنامه را بررسی کنید.", en: "Pishkar couldn't read from the backup source. Check that the app is running." },
   dump_failed: { fa: "گرفتن خروجی از پایگاه داده انجام نشد. نام کاربری و رمز پایگاه داده را بررسی کنید.", en: "Exporting the database didn't work. Check the database username and password." },
   archive_failed: { fa: "بسته‌بندی فایل‌های پشتیبان انجام نشد. فضای دیسک را بررسی کنید.", en: "Packing the backup files didn't work. Check disk space." },
   credentials_unavailable: { fa: "نام کاربری و رمز پایگاه داده پیدا نشد. آن‌ها را در تنظیم پشتیبان بنویسید.", en: "The database username and password weren't found. Add them to the backup setup." },
@@ -530,8 +561,8 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   domain_exists: { fa: "این دامنه قبلاً اضافه شده است.", en: "This domain was already added.", field: "host" },
   domain_not_found: { fa: "این دامنه دیگر وجود ندارد. صفحه را تازه کنید.", en: "This domain no longer exists. Refresh the page.", action: "refreshList" },
   routing_unavailable: {
-    fa: "الان MRK نمی‌تواند دامنه را خودش وصل کند. روش «دستی» را انتخاب کنید یا اتصال Dokploy را بررسی کنید.",
-    en: "MRK can't attach the domain by itself right now. Pick the manual way, or check the Dokploy connection."
+    fa: "الان پیشکار نمی‌تواند دامنه را خودش وصل کند. روش «دستی» را انتخاب کنید یا اتصال Dokploy را بررسی کنید.",
+    en: "Pishkar can't attach the domain by itself right now. Pick the manual way, or check the Dokploy connection."
   },
   invalid_routing_mode: { fa: "این روش اتصال روی این سرور در دسترس نیست. یکی دیگر را انتخاب کنید.", en: "This routing method isn't available on this server. Pick another one." },
   "domains:invalid_mode": { fa: "این روش اتصال روی این سرور در دسترس نیست. یکی دیگر را انتخاب کنید.", en: "This routing method isn't available on this server. Pick another one." },
@@ -544,7 +575,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   "domains:confirmation_mismatch": { fa: "نام دامنه درست نوشته نشد. دوباره بنویسید.", en: "The domain name wasn't typed correctly. Type it again.", field: "confirm" },
   "domains:confirmation_required": { fa: "برای اطمینان، نام دامنه را بنویسید.", en: "To be sure, type the domain name.", field: "confirm" },
 
-  // ── MRK DNS (docs/37 §4) ──────────────────────────────────────────────────
+  // ── Pishkar DNS (docs/37 §4) ──────────────────────────────────────────────────
   dns_not_installed: { fa: "DNS هنوز روی این سرور راه نیفتاده است. از «راه‌اندازی» شروع کنید.", en: "DNS isn't set up on this server yet. Start from Set up." },
   dns_unreachable: { fa: "برنامه DNS جواب نمی‌دهد. مطمئن شوید روی سرور روشن است و دوباره امتحان کنید.", en: "The DNS program isn't answering. Make sure it's running on the server and try again.", action: "retry" },
   dns_config_conflict: {
@@ -558,6 +589,37 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
     action: "refreshList"
   },
   dns_zone_exists: { fa: "این دامنه قبلاً در DNS اضافه شده است.", en: "This domain is already in DNS.", field: "name" },
+  // docs/41: secondary zones, templates, TSIG, signing, blocking, backup
+  zone_read_only: { fa: "این دامنه نسخه دوم است و رکوردهایش فقط از سرور اصلی تغییر می‌کند.", en: "This domain is a copy; its records change only on the main server." },
+  dns_zone_read_only: { fa: "این دامنه نسخه دوم است و رکوردهایش فقط از سرور اصلی تغییر می‌کند.", en: "This domain is a copy; its records change only on the main server." },
+  dns_zone_invalid: { fa: "چند خانه این دامنه درست نیست؛ با رنگ قرمز مشخص شده‌اند.", en: "A few fields of this domain need fixing; they're marked in red.", action: "fixFields" },
+  dns_template_not_found: { fa: "این قالب دیگر وجود ندارد. فهرست را تازه کنید.", en: "This template no longer exists. Refresh the list.", action: "refreshList" },
+  dns_template_invalid: { fa: "چند خانه این قالب درست نیست؛ نام، نوع و مقدار رکوردها را بررسی کنید.", en: "A few fields of this template need fixing; check the records' names, types and values.", action: "fixFields" },
+  dns_template_builtin: { fa: "قالب‌های آماده تغییر نمی‌کنند؛ یک کپی بگیرید و کپی را تغییر دهید.", en: "Built-in templates don't change; copy one and edit the copy." },
+  dns_template_exists: { fa: "قالبی با همین نام هست؛ نام دیگری بنویسید.", en: "A template with this name exists; pick another name.", field: "name" },
+  dns_template_in_use: { fa: "این قالب پیش‌فرض است؛ اول قالب دیگری را پیش‌فرض کنید.", en: "This is the default template; make another one the default first." },
+  dns_template_variable_missing: { fa: "چند پرسش قالب جواب نگرفته؛ خانه‌های لازم را پر کنید.", en: "Some of the template's questions aren't answered; fill in the needed fields.", action: "fixFields" },
+  dns_template_conflict: { fa: "چند رکورد قالب با رکوردهای فعلی این دامنه جور نیست؛ چیزی تغییر نکرد.", en: "Some template records clash with this domain's records; nothing changed." },
+  dns_tsig_not_found: { fa: "این کلید دیگر وجود ندارد. فهرست را تازه کنید.", en: "This key no longer exists. Refresh the list.", action: "refreshList" },
+  dns_tsig_exists: { fa: "کلیدی با همین نام هست؛ نام دیگری بنویسید.", en: "A key with this name exists; pick another name.", field: "name" },
+  dns_tsig_in_use: { fa: "یک یا چند دامنه از این کلید استفاده می‌کنند؛ اول آن‌ها را عوض کنید.", en: "One or more domains use this key; change them first." },
+  dns_tsig_key_not_found: { fa: "این کلید دیگر وجود ندارد. فهرست را تازه کنید.", en: "This key no longer exists. Refresh the list.", action: "refreshList" },
+  dns_tsig_key_exists: { fa: "کلیدی با همین نام هست؛ نام دیگری بنویسید.", en: "A key with this name exists; pick another name.", field: "name" },
+  dns_tsig_key_in_use: { fa: "یک یا چند دامنه از این کلید استفاده می‌کنند؛ اول آن‌ها را عوض کنید.", en: "One or more domains use this key; change them first." },
+  dns_rollover_in_progress: { fa: "یک تعویض کلید در جریان است؛ بعد از تمام شدن آن دوباره امتحان کنید.", en: "A key change is already in progress; try again after it finishes." },
+  dns_tsig_invalid: { fa: "نام یا رمز این کلید درست نیست؛ رمز باید base64 باشد.", en: "This key's name or secret isn't valid; the secret must be base64.", action: "fixFields" },
+  dns_secondary_only: { fa: "این کار فقط برای دامنه‌های نسخه دوم است.", en: "This works only for copied domains." },
+  dns_dnssec_disabled: { fa: "امضای امنیتی این دامنه خاموش است؛ اول روشنش کنید.", en: "Security signing is off for this domain; turn it on first." },
+  dns_dnssec_rollover_in_progress: { fa: "یک تعویض کلید در جریان است؛ بعد از تمام شدن آن دوباره امتحان کنید.", en: "A key change is already in progress; try again after it finishes." },
+  dns_filter_list_invalid: { fa: "این فهرست پذیرفته نشد؛ نشانی باید HTTPS باشد و شکل فهرست درست انتخاب شود.", en: "This list wasn't accepted; the address must be HTTPS and the format must match.", action: "fixFields" },
+  dns_filter_list_not_found: { fa: "این فهرست مسدودسازی دیگر وجود ندارد. صفحه را تازه کنید.", en: "This block list no longer exists. Refresh the page.", action: "refreshList" },
+  dns_zone_type_mismatch: { fa: "این کار برای این نوع دامنه نیست؛ قالب فقط روی دامنه‌ای با رکوردهای خودتان اعمال می‌شود.", en: "This doesn't fit this kind of domain; templates apply only to domains with your own records." },
+  dns_template_variables_invalid: { fa: "چند پرسش قالب جواب نگرفته یا درست نیست؛ خانه‌های قرمز را پر کنید.", en: "Some of the template's questions are empty or not right; fill in the fields in red.", action: "fixFields" },
+  dns_template_replace_unsafe: { fa: "جایگزینی ممکن نیست چون رکوردی خاموش یا مخصوص یک گروه در این دامنه هست؛ آن را اول دستی تغییر دهید.", en: "Replacing isn't possible because a turned-off or group-only record is in this domain; change it by hand first." },
+  dns_backup_failed: { fa: "پشتیبان DNS ساخته نشد. چند لحظه بعد دوباره امتحان کنید.", en: "The DNS backup wasn't made. Try again in a moment.", action: "retry" },
+  dns_filtering_disabled: { fa: "مسدودسازی خاموش است؛ اول در «مسدودسازی» روشنش کنید.", en: "Blocking is off; turn it on under Blocking first." },
+  restore_invalid: { fa: "این فایل پشتیبان پذیرفته نشد (خراب است یا مال نسخه دیگری است). چیزی تغییر نکرد.", en: "This backup file wasn't accepted (it's damaged or from another version). Nothing changed." },
+  dns_restore_invalid: { fa: "این فایل پشتیبان پذیرفته نشد (خراب است یا مال نسخه دیگری است). چیزی تغییر نکرد.", en: "This backup file wasn't accepted (it's damaged or from another version). Nothing changed." },
   dns_zone_not_found: { fa: "این دامنه دیگر در DNS نیست. فهرست را تازه کنید.", en: "This domain is no longer in DNS. Refresh the list.", action: "refreshList" },
   dns_record_not_found: { fa: "این رکورد دیگر وجود ندارد. فهرست را تازه کنید.", en: "This record no longer exists. Refresh the list.", action: "refreshList" },
   dns_override_not_found: { fa: "این نام دیگر وجود ندارد. فهرست را تازه کنید.", en: "This name no longer exists. Refresh the list.", action: "refreshList" },
@@ -571,7 +633,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   "dns:invalid_settings": { fa: "این تنظیم ذخیره نشد؛ مقدار خانه قرمز را بررسی کنید.", en: "This setting wasn't saved; check the field in red.", action: "fixFields" },
   dns_version_not_found: { fa: "این نسخه دیگر در تاریخچه نیست. تاریخچه را تازه کنید.", en: "This version is no longer in the history. Refresh it.", action: "refreshList" },
 
-  // ── MRK DNS D2: logs, monitoring, limits (docs/38 §4) ──────────────────────
+  // ── Pishkar DNS D2: logs, monitoring, limits (docs/38 §4) ──────────────────────
   dns_limit_reached: { fa: "به بیشترین تعداد مجاز رسیده‌اید. اول چند مورد قدیمی را بردارید.", en: "You've reached the most allowed. Remove a few old ones first." },
   dns_not_found: { fa: "این مورد دیگر وجود ندارد. فهرست را تازه کنید.", en: "This item no longer exists. Refresh the list.", action: "refreshList" },
   dns_mitigation_not_found: { fa: "این محدودیت دیگر وجود ندارد؛ شاید وقتش تمام شده. فهرست را تازه کنید.", en: "This limit no longer exists; its time may be up. Refresh the list.", action: "refreshList" },
@@ -580,7 +642,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   dns_querylog_disabled: { fa: "ثبت لاگ پرسش‌ها خاموش است. از «لاگ» در حالت پیشرفته روشنش کنید.", en: "The question log is off. Turn it on under Log in Advanced mode." },
   dns_query_invalid: { fa: "فیلترهای جست‌وجو درست نیست؛ زمان، نشانی یا نام را بررسی کنید.", en: "The search filters aren't right; check the time, address or name.", action: "fixFields" },
   dns_stream_limit: { fa: "الان نمایش‌های زنده زیادی باز است. یکی را ببندید و دوباره امتحان کنید.", en: "Too many live views are open. Close one and try again.", action: "retry" },
-  // ── MRK DNS D4: root, DNSSEC, encrypted DNS (docs/40 §3, §5) ─────────────
+  // ── Pishkar DNS D4: root, DNSSEC, encrypted DNS (docs/40 §3, §5) ─────────────
   dns_settings_invalid: { fa: "تنظیمات DNS ذخیره نشد؛ خانه‌های قرمز را بررسی کنید.", en: "The DNS settings weren't saved; check the fields in red.", action: "fixFields" },
   certificate_required: { fa: "این اتصال رمزدار گواهی لازم دارد. اول در کارت «گواهی» یکی بسازید یا بارگذاری کنید.", en: "This encrypted connection needs a certificate. Make or upload one in the Certificate card first." },
   dns_certificate_required: { fa: "این اتصال رمزدار گواهی لازم دارد. اول در کارت «گواهی» یکی بسازید یا بارگذاری کنید.", en: "This encrypted connection needs a certificate. Make or upload one in the Certificate card first." },
@@ -623,7 +685,7 @@ export const REASON_CATALOG: Record<string, Bi> = {
 };
 
 /** Shape of `ApiError` from api.ts (duck-typed to avoid an import cycle). `field`/`reason` arrive with BE4. */
-export type ApiErrorLike = { name: string; status: number; code: string; detail: string; field?: string; reason?: string; requestId?: string | null };
+export type ApiErrorLike = { name: string; status: number; code: string; detail: string; field?: string; reason?: string; requestId?: string | null; extra?: Record<string, unknown> };
 
 export function isApiErrorLike(error: unknown): error is ApiErrorLike {
   return (
@@ -680,6 +742,16 @@ export function errorEntry(code: string | null | undefined, scope?: string): Err
 /** Full description of any thrown value: sentence + action + field + technical details. */
 export function describeError(language: Language, error: unknown, scope?: string): FriendlyErrorInfo {
   if (isApiErrorLike(error)) {
+    // docs/43 §3: plan limits name the limit and the numbers; plan features name the feature.
+    const planSentence = planErrorSentence(language, error.code, error.extra, error.detail);
+    if (planSentence) {
+      return {
+        message: planSentence,
+        field: error.field,
+        known: true,
+        technical: { code: error.code || undefined, status: error.status, detail: error.detail || undefined, requestId: error.requestId || undefined }
+      };
+    }
     const entry = errorEntry(error.code, scope);
     const chosen = entry ?? fallbackForStatus(error.status);
     const reason = error.reason && Object.prototype.hasOwnProperty.call(REASON_CATALOG, error.reason) ? REASON_CATALOG[error.reason] : undefined;

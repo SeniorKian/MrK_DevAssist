@@ -20,7 +20,7 @@ from .dns_validate import DnsInputError, name_problem
 FILTER_KEYS = ("from", "to", "client", "name", "qtype", "rcode", "source", "blocked", "min_ms",
                "dnssec", "proto")
 SOURCES = ("authoritative", "override", "cache", "upstream", "refused", "rate_limited",
-           "mitigated", "forwarder", "recursive")
+           "mitigated", "forwarder", "recursive", "blocked")  # blocked: docs/41 §3.1
 PROTOS = ("udp", "tcp", "dot", "doh", "doq")
 DNSSEC_STATES = ("secure", "insecure", "bogus", "none")
 RCODES = ("NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED", "FORMERR", "NOTIMP", "YXDOMAIN",

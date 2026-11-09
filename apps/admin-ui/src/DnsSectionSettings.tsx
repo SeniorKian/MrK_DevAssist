@@ -29,7 +29,8 @@ const COPY = {
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-export type SectionDraft = Record<string, Record<string, unknown>>;
+/** Section name → its value: an object (merged with defaults) or a list such as `client_groups` (docs/41 §3.2). */
+export type SectionDraft = Record<string, object>;
 
 export type DnsSectionSettingsProps<D extends SectionDraft> = {
   title: string;
@@ -63,7 +64,10 @@ export function DnsSectionSettings<D extends SectionDraft>({ title, hint, permis
 
   const adopt = useCallback((settings: DnsSettings) => {
     const sections = {} as D;
-    for (const key of keys) (sections as SectionDraft)[key] = withDefaults(settings[key], defaults[key]);
+    for (const key of keys) {
+      const base = defaults[key];
+      (sections as SectionDraft)[key] = Array.isArray(base) ? clone(Array.isArray(settings[key]) ? (settings[key] as object) : base) : withDefaults(settings[key], base);
+    }
     const copy = clone(settings);
     delete copy.warnings;
     setFull(copy);

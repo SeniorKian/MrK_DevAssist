@@ -19,8 +19,8 @@ import { fill, pick, type Bi } from "./copy/text";
 
 const COPY = {
   loading: { fa: "در حال باز کردن دعوت…", en: "Opening your invite…" },
-  title: { fa: "به MRK خوش آمدید", en: "Welcome to MRK" },
-  titleNamed: { fa: "{name}، به MRK خوش آمدید", en: "Welcome to MRK, {name}" },
+  title: { fa: "به پیشکار خوش آمدید", en: "Welcome to Pishkar" },
+  titleNamed: { fa: "{name}، به پیشکار خوش آمدید", en: "Welcome to Pishkar, {name}" },
   hint: { fa: "شما را به این پنل دعوت کرده‌اند. فقط یک رمز برای خودتان بگذارید و وارد شوید.", en: "You've been invited to this panel. Just choose a password and you're in." },
   signInAs: { fa: "با این حساب وارد می‌شوید:", en: "You'll sign in as:" },
   expires: { fa: "این دعوت {when} تمام می‌شود.", en: "This invite expires {when}." },

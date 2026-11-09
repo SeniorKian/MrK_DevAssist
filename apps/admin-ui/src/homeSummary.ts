@@ -122,16 +122,16 @@ const COMPONENT_WORDS: Record<string, Bi> = {
   pypi_registry: { fa: "مخزن PyPI", en: "The PyPI registry" },
   pypi_upstream_router: { fa: "مسیریاب PyPI", en: "The PyPI router" },
   database: { fa: "پایگاه داده پنل", en: "The panel's database" },
-  control_plane: { fa: "سرور MRK", en: "The MRK server" },
+  control_plane: { fa: "سرور پیشکار", en: "The Pishkar server" },
   s3_engine: { fa: "فضای فایل", en: "File space" },
   s3: { fa: "فضای فایل", en: "File space" },
   dns: { fa: "DNS سرور", en: "The server's DNS" },
   dns_engine: { fa: "DNS سرور", en: "The server's DNS" }
 };
 
-/** Plain name of a system component («مخزن npm»). Unknown → «یکی از بخش‌های MRK». */
+/** Plain name of a system component («مخزن npm»). Unknown → «یکی از بخش‌های Pishkar». */
 export function componentWord(language: Language, component: string): string {
-  return COMPONENT_WORDS[component]?.[language] ?? (language === "fa" ? "یکی از بخش‌های MRK" : "Part of MRK");
+  return COMPONENT_WORDS[component]?.[language] ?? (language === "fa" ? "یکی از بخش‌های پیشکار" : "Part of Pishkar");
 }
 
 function ecosystemWord(language: Language, value: unknown): string {
@@ -220,7 +220,7 @@ const RULES: Record<string, RuleCopy> = {
   },
   dns_under_pressure: {
     title: { fa: "DNS سرور زیر فشار است", en: "The server's DNS is under load" },
-    why: { fa: "MRK خودکار کارهای کم‌اهمیت را کم کرده تا پرسش‌ها جواب بگیرند. ببینید چه کسی بیشتر می‌پرسد.", en: "MRK has cut back less important work so questions still get answers. See who is asking the most." },
+    why: { fa: "پیشکار خودکار کارهای کم‌اهمیت را کم کرده تا پرسش‌ها جواب بگیرند. ببینید چه کسی بیشتر می‌پرسد.", en: "Pishkar has cut back less important work so questions still get answers. See who is asking the most." },
     button: { fa: "دیدن پایش", en: "See monitor" }
   },
   dns_attack_detected: {
@@ -238,6 +238,16 @@ const RULES: Record<string, RuleCopy> = {
     why: { fa: "تا درست نشود، بررسی امضای امنیتی جواب‌ها ممکن است درست کار نکند. در تنظیمات DNS «به‌روزرسانی» را بزنید.", en: "Until it's fixed, checking answers' security signatures may not work right. Press Update in DNS settings." },
     button: { fa: "بررسی امضای امنیتی", en: "Check signatures" }
   },
+  dns_secondary_problem: {
+    title: { fa: "نسخه دوم دامنه {zone} به‌روز نمی‌شود", en: "The copy of the domain {zone} isn't updating" },
+    why: { fa: "پیشکار نمی‌تواند رکوردها را از سرور اصلی بگیرد. اگر مدت زیادی بماند، این دامنه دیگر جواب نمی‌گیرد.", en: "Pishkar can't copy the records from the main server. If it lasts too long, this domain stops getting answers." },
+    button: { fa: "بررسی دامنه", en: "Check the domain" }
+  },
+  dns_signing_problem: {
+    title: { fa: "امضای امنیتی دامنه {zone} مشکل دارد", en: "Security signing for the domain {zone} has a problem" },
+    why: { fa: "اگر امضاها تمدید نشوند، دامنه برای خیلی از کاربران باز نمی‌شود. وضعیت امضا را ببینید.", en: "If the signatures aren't renewed, the domain stops opening for many people. See the signing state." },
+    button: { fa: "دیدن امضا", en: "See signing" }
+  },
   domain_problem: {
     title: { fa: "دامنه {host} مشکل دارد", en: "The domain {host} has a problem" },
     why: { fa: "تا درست نشود، این دامنه از بیرون باز نمی‌شود.", en: "Until it's fixed, this domain won't open from outside." },
@@ -251,6 +261,12 @@ const UNKNOWN_RULE: RuleCopy = {
 };
 
 const DNS_MONITOR_RULES = new Set(["dns_under_pressure", "dns_attack_detected"]);
+
+/** docs/41 §6: open the domain (and its tab) the item names. */
+function zoneRoute(zone: unknown, tab: "records" | "signing"): string {
+  if (typeof zone !== "string" || !zone) return "#/dns/names";
+  return `#/dns/names?zone=${encodeURIComponent(zone)}${tab === "records" ? "" : `&ztab=${tab}`}`;
+}
 
 export type AttentionText = { title: string; why?: string; button: string; severity: "critical" | "warning" | "info"; route?: string };
 
@@ -273,7 +289,8 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
     count: typeof params.count === "number" ? params.count : null,
     days: typeof params.days === "number" ? params.days : null,
     buckets: typeof params.buckets === "number" ? params.buckets : null,
-    host: typeof params.host === "string" && params.host ? params.host : language === "fa" ? "یکی از سرویس‌ها" : "for one of your services"
+    host: typeof params.host === "string" && params.host ? params.host : language === "fa" ? "یکی از سرویس‌ها" : "for one of your services",
+    zone: typeof params.zone === "string" && params.zone ? params.zone : ""
   };
   let why = copy.why ? fill(copy.why[language], values, language) : undefined;
   if (item.rule === "backup_failed") {
@@ -287,8 +304,8 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
   }
   if (item.rule === "dns_under_pressure" && params.level === "emergency") {
     why = language === "fa"
-      ? "فشار خیلی زیاد است و MRK فقط کارهای ضروری را انجام می‌دهد. ببینید چه کسی بیشتر می‌پرسد."
-      : "The load is very heavy and MRK is doing only what's essential. See who is asking the most.";
+      ? "فشار خیلی زیاد است و پیشکار فقط کارهای ضروری را انجام می‌دهد. ببینید چه کسی بیشتر می‌پرسد."
+      : "The load is very heavy and Pishkar is doing only what's essential. See who is asking the most.";
   }
   if (item.rule === "dns_attack_detected" && typeof params.parent === "string" && params.parent) {
     why = language === "fa"
@@ -301,13 +318,19 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
       ? (language === "fa" ? "گواهی تمام شده و دستگاه‌ها رمزدار وصل نمی‌شوند. گواهی را تمدید یا جایگزین کنید." : "The certificate has ended and devices can't connect encrypted. Renew or replace it.")
       : (language === "fa" ? `گواهی ${days} روز دیگر تمام می‌شود. پیش از آن تمدید یا جایگزینش کنید.` : `The certificate ends in ${days} days. Renew or replace it before then.`);
   }
+  if (item.rule === "dns_secondary_problem" && params.expired === true) {
+    why = language === "fa"
+      ? "نسخه دوم از اعتبار افتاده و پیشکار برای این دامنه جواب خطا می‌دهد. سرور اصلی را بررسی کنید."
+      : "The copy has run out and Pishkar answers this domain with an error. Check the main server.";
+  }
   if (item.rule === "agent_unreachable" && typeof params.since === "number") {
     const when = formatRelative(params.since * 1000, language);
     why = language === "fa" ? `آخرین بار ${when} جواب داد. مطمئن شوید روی سرور روشن است.` : `It last answered ${when}. Make sure it's running on the server.`;
   }
   const severity = item.severity === "critical" || item.severity === "error" ? "critical" : item.severity === "warning" ? "warning" : "info";
   const route = item.action?.route ?? (item.rule === "domain_problem" ? "#/services" : item.rule === "dns_unreachable" ? "#/dns/status" : DNS_MONITOR_RULES.has(item.rule) ? "#/dns/monitor"
-    : item.rule === "dns_certificate_expiring" ? "#/dns/encrypted" : item.rule === "dns_trust_anchor_problem" ? "#/dns/settings" : undefined);
+    : item.rule === "dns_certificate_expiring" ? "#/dns/encrypted" : item.rule === "dns_trust_anchor_problem" ? "#/dns/settings"
+    : item.rule === "dns_secondary_problem" ? zoneRoute(params.zone, "records") : item.rule === "dns_signing_problem" ? zoneRoute(params.zone, "signing") : undefined);
   return { title: fill(copy.title[language], values, language), why, button: copy.button[language], severity, route };
 }
 

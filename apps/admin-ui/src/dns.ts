@@ -1,5 +1,5 @@
 /**
- * MRK DNS (docs/36, contract docs/37 §4): types, API calls and the plain words used by the «DNS» pages.
+ * Pishkar DNS (docs/36, contract docs/37 §4): types, API calls and the plain words used by the «DNS» pages.
  *
  * Every field from the backend is treated as optional so an older server (no DNS module) or a
  * partly filled answer never breaks a page. Panel API base: `/api/v1/dns`.
@@ -94,7 +94,7 @@ export type DnsSettings = {
   [key: string]: unknown;
 };
 
-export type ZoneType = "primary" | "forwarder";
+export type ZoneType = "primary" | "forwarder" | "secondary";
 export type DnsZone = {
   name: string;
   type: ZoneType | string;
@@ -103,6 +103,18 @@ export type DnsZone = {
   disabled?: boolean;
   updated_at?: number | string | null;
   forwarders?: string[] | null;
+  /** docs/41 §2.1: secondary zones. */
+  primaries?: string[] | null;
+  tsig_key?: string | null;
+  notify_allow?: string[] | null;
+  /** docs/41 §2.1 status of a secondary zone. */
+  secondary?: import("./dnsFinal").ZoneSecondaryStatus | null;
+  /** docs/41 §2.2–§2.5 settings of a primary zone. */
+  transfer?: import("./dnsFinal").ZoneTransfer | null;
+  notify?: import("./dnsFinal").ZoneNotify | null;
+  update?: import("./dnsFinal").ZoneUpdate | null;
+  dnssec?: Partial<import("./dnsFinal").ZoneDnssecSettings> | null;
+  views?: { group_id: string; records_override?: boolean }[] | null;
 };
 
 export const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "SRV", "NS", "PTR", "CAA"] as const;
@@ -116,6 +128,8 @@ export type DnsRecord = {
   data: Record<string, unknown>;
   disabled?: boolean;
   comment?: string | null;
+  /** docs/41 §3.3: client group id this record answers for (empty = everyone). */
+  view?: string | null;
 };
 
 export type DnsZoneVersion = {
@@ -153,8 +167,19 @@ export type ResolveInput = { name: string; type: string; client_ip?: string; dns
 
 // ── API ──────────────────────────────────────────────────────────────────────
 
-const BASE = "/api/v1/dns";
-const zonePath = (zone: string) => `${BASE}/zones/${encodeURIComponent(zone)}`;
+const DEFAULT_DNS_BASE = "/api/v1/dns";
+let currentDnsBase = DEFAULT_DNS_BASE;
+/**
+ * The API base of every zone/record/template call (`/api/v1/dns`). «فضای من» renders the same
+ * dialogs against `/api/v1/my/dns` (docs/43 §3) by wrapping them in `<DnsApiScope>` (dnsUi.tsx).
+ */
+export function dnsBase() {
+  return currentDnsBase;
+}
+export function setDnsBase(base: string | null) {
+  currentDnsBase = base || DEFAULT_DNS_BASE;
+}
+const zonePath = (zone: string) => `${dnsBase()}/zones/${encodeURIComponent(zone)}`;
 const fresh = () => `_=${Date.now()}`;
 
 function itemsOf<T>(payload: unknown): T[] {
@@ -163,17 +188,17 @@ function itemsOf<T>(payload: unknown): T[] {
   return Array.isArray(items) ? (items as T[]) : [];
 }
 
-export const fetchDnsStatus = (signal?: AbortSignal) => getJson<DnsStatus>(`${BASE}/status?${fresh()}`, signal);
+export const fetchDnsStatus = (signal?: AbortSignal) => getJson<DnsStatus>(`${dnsBase()}/status?${fresh()}`, signal);
 
 /** `refresh` asks the server to run every check again instead of using its short cache. */
 export async function fetchDnsSetup(signal?: AbortSignal, refresh = false): Promise<DnsSetup> {
-  const payload = await getJson<{ steps?: DnsSetupStep[] }>(`${BASE}/setup?${refresh ? "refresh=true&" : ""}${fresh()}`, signal);
+  const payload = await getJson<{ steps?: DnsSetupStep[] }>(`${dnsBase()}/setup?${refresh ? "refresh=true&" : ""}${fresh()}`, signal);
   return { steps: Array.isArray(payload?.steps) ? payload.steps : [] };
 }
 
 /** Settings come either as the object itself or wrapped in `{settings, config_version}`. */
 export async function fetchDnsSettings(signal?: AbortSignal): Promise<DnsSettings> {
-  const payload = await getJson<Record<string, unknown>>(`${BASE}/settings?${fresh()}`, signal);
+  const payload = await getJson<Record<string, unknown>>(`${dnsBase()}/settings?${fresh()}`, signal);
   if (payload && typeof payload.settings === "object" && payload.settings) {
     const inner = payload.settings as DnsSettings;
     return { ...inner, config_version: inner.config_version ?? (payload.config_version as number | string | undefined) };
@@ -182,13 +207,25 @@ export async function fetchDnsSettings(signal?: AbortSignal): Promise<DnsSetting
 }
 
 export const saveDnsSettings = (settings: DnsSettings) =>
-  mutateJson<DnsSettings | { settings?: DnsSettings }>(`${BASE}/settings`, { method: "PUT", body: settings });
+  mutateJson<DnsSettings | { settings?: DnsSettings }>(`${dnsBase()}/settings`, { method: "PUT", body: settings });
 
 export async function fetchZones(signal?: AbortSignal) {
-  return itemsOf<DnsZone>(await getJson(`${BASE}/zones?${fresh()}`, signal));
+  return itemsOf<DnsZone>(await getJson(`${dnsBase()}/zones?${fresh()}`, signal));
 }
-export const createZone = (body: { name: string; type: ZoneType; forwarders?: string[] }) => mutateJson<DnsZone>(`${BASE}/zones`, { method: "POST", body });
-export const patchZone = (zone: string, body: { disabled?: boolean; forwarders?: string[] }) => mutateJson<DnsZone>(zonePath(zone), { method: "PATCH", body });
+export type CreateZoneInput = {
+  name: string;
+  type: ZoneType;
+  forwarders?: string[];
+  primaries?: string[];
+  tsig_key?: string;
+  notify_allow?: string[];
+  /** docs/41 §5: a template applied in the same change. */
+  template_id?: string | null;
+  variables?: Record<string, string>;
+};
+export const createZone = (body: CreateZoneInput) => mutateJson<DnsZone>(`${dnsBase()}/zones`, { method: "POST", body });
+export type PatchZoneInput = Partial<Omit<DnsZone, "name" | "type" | "serial" | "records" | "updated_at" | "secondary">>;
+export const patchZone = (zone: string, body: PatchZoneInput) => mutateJson<DnsZone>(zonePath(zone), { method: "PATCH", body });
 /** The typed zone name goes along as `confirmation` (the server may ignore it). */
 export const deleteZone = (zone: string) => mutateJson(zonePath(zone), { method: "DELETE", body: { confirmation: zone } });
 export const fetchZone = (zone: string, signal?: AbortSignal) => getJson<DnsZone>(`${zonePath(zone)}?${fresh()}`, signal);
@@ -215,19 +252,19 @@ export const rollbackZone = (zone: string, version: number | string) => mutateJs
 export async function fetchRecords(zone: string, signal?: AbortSignal) {
   return itemsOf<DnsRecord>(await getJson(`${zonePath(zone)}/records?${fresh()}`, signal));
 }
-export type RecordInput = { name: string; type: string; ttl: number; data: Record<string, unknown>; disabled?: boolean; comment?: string };
+export type RecordInput = { name: string; type: string; ttl: number; data: Record<string, unknown>; disabled?: boolean; comment?: string; view?: string | null };
 export const createRecord = (zone: string, body: RecordInput) => mutateJson<DnsRecord>(`${zonePath(zone)}/records`, { method: "POST", body });
 export const updateRecord = (zone: string, id: string, body: RecordInput) =>
   mutateJson<DnsRecord>(`${zonePath(zone)}/records/${encodeURIComponent(id)}`, { method: "PUT", body });
 export const deleteRecord = (zone: string, id: string) => mutateJson(`${zonePath(zone)}/records/${encodeURIComponent(id)}`, { method: "DELETE" });
 
 export async function fetchOverrides(signal?: AbortSignal) {
-  return itemsOf<DnsOverride>(await getJson(`${BASE}/overrides?${fresh()}`, signal));
+  return itemsOf<DnsOverride>(await getJson(`${dnsBase()}/overrides?${fresh()}`, signal));
 }
 export type OverrideInput = { name: string; type: OverrideType; value: string; ttl: number; disabled?: boolean };
-export const createOverride = (body: OverrideInput) => mutateJson<DnsOverride>(`${BASE}/overrides`, { method: "POST", body });
-export const updateOverride = (id: string, body: OverrideInput) => mutateJson<DnsOverride>(`${BASE}/overrides/${encodeURIComponent(id)}`, { method: "PUT", body });
-export const deleteOverride = (id: string) => mutateJson(`${BASE}/overrides/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const createOverride = (body: OverrideInput) => mutateJson<DnsOverride>(`${dnsBase()}/overrides`, { method: "POST", body });
+export const updateOverride = (id: string, body: OverrideInput) => mutateJson<DnsOverride>(`${dnsBase()}/overrides/${encodeURIComponent(id)}`, { method: "PUT", body });
+export const deleteOverride = (id: string) => mutateJson(`${dnsBase()}/overrides/${encodeURIComponent(id)}`, { method: "DELETE" });
 
 /** Panel-side DNS integration (`GET/PUT /api/v1/dns/integration`, dns:admin to change). */
 export type DnsIntegrationSettings = {
@@ -243,11 +280,11 @@ export type DnsIntegration = {
   internal_names?: string[] | null;
   last_sync?: { status?: string; created?: number; updated?: number; deleted?: number; error_code?: string | null; at?: number } | null;
 };
-export const fetchDnsIntegration = (signal?: AbortSignal) => getJson<DnsIntegration>(`${BASE}/integration?${fresh()}`, signal);
-export const saveDnsIntegration = (body: Partial<DnsIntegrationSettings>) => mutateJson<DnsIntegration>(`${BASE}/integration`, { method: "PUT", body });
+export const fetchDnsIntegration = (signal?: AbortSignal) => getJson<DnsIntegration>(`${dnsBase()}/integration?${fresh()}`, signal);
+export const saveDnsIntegration = (body: Partial<DnsIntegrationSettings>) => mutateJson<DnsIntegration>(`${dnsBase()}/integration`, { method: "PUT", body });
 
-export const resolveName = (body: ResolveInput) => mutateJson<ResolveResult>(`${BASE}/resolve`, { method: "POST", body });
-export const flushDnsCache = (name?: string) => mutateJson(`${BASE}/cache/flush`, { method: "POST", body: name ? { name } : {} });
+export const resolveName = (body: ResolveInput) => mutateJson<ResolveResult>(`${dnsBase()}/resolve`, { method: "POST", body });
+export const flushDnsCache = (name?: string) => mutateJson(`${dnsBase()}/cache/flush`, { method: "POST", body: name ? { name } : {} });
 
 /**
  * `GET /api/v1/dns/status`, polled while the tab is visible. `missing` = this server version has no
@@ -452,11 +489,15 @@ export const STRATEGY_WORDS: Record<UpstreamStrategy, { label: Bi; body: Bi }> =
 export const ZONE_TYPE_WORDS: Record<ZoneType, { label: Bi; body: Bi }> = {
   primary: {
     label: { fa: "دامنه با رکوردهای خودم", en: "My own records" },
-    body: { fa: "همه نام‌های این دامنه را خودتان اینجا می‌نویسید و MRK جواب می‌دهد.", en: "You write every name of this domain here and MRK answers." }
+    body: { fa: "همه نام‌های این دامنه را خودتان اینجا می‌نویسید و پیشکار جواب می‌دهد.", en: "You write every name of this domain here and Pishkar answers." }
   },
   forwarder: {
     label: { fa: "فرستادن به سرور دیگر", en: "Send to another server" },
     body: { fa: "پرسش‌های این دامنه به سرورهای DNS که می‌گویید فرستاده می‌شود؛ مثلاً DNS شبکه شرکت.", en: "Questions for this domain go to the DNS servers you name, like your office network's DNS." }
+  },
+  secondary: {
+    label: { fa: "نسخه دوم از سرور دیگر", en: "Copy from another server" },
+    body: { fa: "رکوردها را سرور اصلی دیگری نگه می‌دارد و پیشکار خودکار یک نسخه از آن‌ها می‌گیرد و جواب می‌دهد.", en: "Another main server keeps the records; Pishkar copies them automatically and answers too." }
   }
 };
 
@@ -466,10 +507,11 @@ export function zoneTypeWord(language: Language, type: string): string {
 
 export const SOURCE_WORDS: Record<string, { label: Bi; body: Bi; tone: Tone }> = {
   override: { label: { fa: "از نام‌های شما", en: "From your names" }, body: { fa: "این جواب را خودتان در «نام‌ها» نوشته‌اید.", en: "You wrote this answer yourself under Names." }, tone: "ok" },
-  authoritative: { label: { fa: "از دامنه‌های شما", en: "From your domains" }, body: { fa: "این نام در یکی از دامنه‌هایی است که MRK خودش جواب می‌دهد.", en: "This name is in one of the domains MRK answers for itself." }, tone: "ok" },
-  cache: { label: { fa: "از جواب‌های ذخیره‌شده", en: "From stored answers" }, body: { fa: "MRK این را قبلاً پرسیده بود و جواب را نگه داشته بود؛ برای همین سریع بود.", en: "MRK asked this before and kept the answer, so it was quick." }, tone: "ok" },
-  upstream: { label: { fa: "از اینترنت", en: "From the internet" }, body: { fa: "MRK این را از یک DNS بیرونی پرسید.", en: "MRK asked an outside DNS server." }, tone: "info" },
-  recursive: { label: { fa: "خودش از ریشه پیدا کرد", en: "Found from the root" }, body: { fa: "MRK بدون واسطه، از سرورهای ریشه اینترنت شروع کرد و خودش جواب را پیدا کرد.", en: "MRK started at the internet's root servers and found the answer itself, with no middleman." }, tone: "info" },
+  authoritative: { label: { fa: "از دامنه‌های شما", en: "From your domains" }, body: { fa: "این نام در یکی از دامنه‌هایی است که پیشکار خودش جواب می‌دهد.", en: "This name is in one of the domains Pishkar answers for itself." }, tone: "ok" },
+  cache: { label: { fa: "از جواب‌های ذخیره‌شده", en: "From stored answers" }, body: { fa: "پیشکار این را قبلاً پرسیده بود و جواب را نگه داشته بود؛ برای همین سریع بود.", en: "Pishkar asked this before and kept the answer, so it was quick." }, tone: "ok" },
+  upstream: { label: { fa: "از اینترنت", en: "From the internet" }, body: { fa: "پیشکار این را از یک DNS بیرونی پرسید.", en: "Pishkar asked an outside DNS server." }, tone: "info" },
+  blocked: { label: { fa: "مسدود شد", en: "Blocked" }, body: { fa: "این نام در فهرست مسدودسازی است و پیشکار جوابش را نداد. در «مسدودسازی» می‌بینید چرا.", en: "This name is on a block list, so Pishkar didn't answer it. See why under Blocking." }, tone: "warn" },
+  recursive: { label: { fa: "خودش از ریشه پیدا کرد", en: "Found from the root" }, body: { fa: "پیشکار بدون واسطه، از سرورهای ریشه اینترنت شروع کرد و خودش جواب را پیدا کرد.", en: "Pishkar started at the internet's root servers and found the answer itself, with no middleman." }, tone: "info" },
   refused: { label: { fa: "جواب داده نشد", en: "Refused" }, body: { fa: "این نشانی اجازه پرسیدن ندارد، یا پرسیدن از اینترنت خاموش است.", en: "This address isn't allowed to ask, or asking the internet is turned off." }, tone: "warn" }
 };
 
@@ -550,15 +592,15 @@ export const SETUP_STEP_WORDS: Record<string, { title: Bi; why: Bi }> = {
   },
   engine_running: {
     title: { fa: "روشن کردن برنامه DNS", en: "Start the DNS program" },
-    why: { fa: "DNS یک کانتینر جدا کنار MRK است تا اگر زیر فشار رفت، پنل و بقیه سرویس‌ها سالم بمانند.", en: "DNS runs in its own container next to MRK, so the panel and other services stay healthy under load." }
+    why: { fa: "DNS یک کانتینر جدا کنار پیشکار است تا اگر زیر فشار رفت، پنل و بقیه سرویس‌ها سالم بمانند.", en: "DNS runs in its own container next to Pishkar, so the panel and other services stay healthy under load." }
   },
   host_resolver: {
     title: { fa: "استفاده خود سرور از این DNS", en: "Make the server itself use it" },
-    why: { fa: "تا خود سرور هم نام‌ها را از MRK بپرسد. یک DNS پشتیبان هم کنارش می‌ماند تا اینترنت سرور قطع نشود.", en: "So the server itself asks MRK. A backup DNS stays next to it so the server never loses the internet." }
+    why: { fa: "تا خود سرور هم نام‌ها را از پیشکار بپرسد. یک DNS پشتیبان هم کنارش می‌ماند تا اینترنت سرور قطع نشود.", en: "So the server itself asks Pishkar. A backup DNS stays next to it so the server never loses the internet." }
   },
   docker_daemon: {
     title: { fa: "استفاده کانتینرها از این DNS", en: "Make containers use it" },
-    why: { fa: "تا برنامه‌های داخل Docker هم نام‌ها را از MRK بپرسند.", en: "So the apps inside Docker ask MRK too." }
+    why: { fa: "تا برنامه‌های داخل Docker هم نام‌ها را از پیشکار بپرسند.", en: "So the apps inside Docker ask Pishkar too." }
   },
   verify_from_host: {
     title: { fa: "بررسی از روی سرور", en: "Check from the server" },
@@ -588,8 +630,8 @@ export function setupStateWord(language: Language, state: string) {
 }
 
 const AGENT_WORDS: Bi = {
-  fa: "دستیار سرور وصل نیست یا جواب نمی‌دهد، پس MRK این را خودش نمی‌تواند بررسی کند. دستورها را اجرا کنید و بعد «دوباره بررسی کن» را بزنید.",
-  en: "The server helper isn't connected or isn't answering, so MRK can't check this itself. Run the commands, then press Check again."
+  fa: "دستیار سرور وصل نیست یا جواب نمی‌دهد، پس پیشکار این را خودش نمی‌تواند بررسی کند. دستورها را اجرا کنید و بعد «دوباره بررسی کن» را بزنید.",
+  en: "The server helper isn't connected or isn't answering, so Pishkar can't check this itself. Run the commands, then press Check again."
 };
 
 /**
@@ -606,7 +648,7 @@ const DETAIL_WORDS: Record<string, Bi> = {
   agent_unavailable: AGENT_WORDS,
   host_proc_unavailable: { fa: "دستیار سرور به فهرست برنامه‌های سرور دسترسی ندارد، پس پورت ۵۳ بررسی نشد.", en: "The server helper can't see the server's programs, so port 53 wasn't checked." },
   host_root_unavailable: { fa: "دستیار سرور به فایل‌های تنظیم سرور دسترسی ندارد، پس این قدم بررسی نشد.", en: "The server helper can't read the server's settings files, so this step wasn't checked." },
-  unknown: { fa: "MRK نتوانست این را بررسی کند. اگر دستورها را اجرا کرده‌اید، به قدم بعد بروید.", en: "MRK couldn't check this. If you ran the commands, go on to the next step." },
+  unknown: { fa: "پیشکار نتوانست این را بررسی کند. اگر دستورها را اجرا کرده‌اید، به قدم بعد بروید.", en: "Pishkar couldn't check this. If you ran the commands, go on to the next step." },
   // engine_running
   running: { fa: "برنامه DNS روشن است و جواب می‌دهد.", en: "The DNS program is running and answering." },
   not_installed: { fa: "برنامه DNS هنوز روشن نیست. دستور زیر را روی سرور اجرا کنید.", en: "The DNS program isn't running yet. Run the command below on the server." },
@@ -614,20 +656,20 @@ const DETAIL_WORDS: Record<string, Bi> = {
   listener_failed: { fa: "برنامه DNS روشن است ولی نمی‌تواند روی {address} گوش بدهد. معمولاً یعنی برنامه دیگری پورت ۵۳ را گرفته؛ قدم بعد را ببینید.", en: "The DNS program runs but can't listen on {address}. Usually another program holds port 53; see the next step." },
   // port_53_free
   free: { fa: "پورت ۵۳ آزاد است.", en: "Port 53 is free." },
-  held_by_mrk: { fa: "پورت ۵۳ دست خود MRK است.", en: "MRK itself holds port 53." },
+  held_by_mrk: { fa: "پورت ۵۳ دست خود پیشکار است.", en: "Pishkar itself holds port 53." },
   "port_53_free:systemd_resolved_stub": {
     fa: "برنامه DNS خود لینوکس پورت ۵۳ را گرفته. دستور زیر فقط شنیدنش روی پورت ۵۳ را خاموش می‌کند؛ اینترنت سرور قطع نمی‌شود.",
     en: "Linux's own DNS helper holds port 53. The command below only stops it listening on port 53; the server keeps its internet."
   },
   port_in_use: { fa: "برنامه «{process}» پورت ۵۳ را گرفته. اول آن را خاموش کنید یا به پورت دیگری ببرید.", en: "The program “{process}” holds port 53. Stop it or move it to another port first." },
   // host_resolver
-  uses_mrk: { fa: "نام‌ها از MRK پرسیده می‌شوند و یک DNS پشتیبان هم هست.", en: "Names are asked from MRK, with a backup DNS too." },
-  no_fallback: { fa: "نام‌ها از MRK پرسیده می‌شوند ولی DNS پشتیبان ندارد. اگر MRK بیفتد، اینترنت هم می‌افتد. دستور زیر یک پشتیبان ({fallback}) اضافه می‌کند.", en: "Names are asked from MRK, but there's no backup DNS. If MRK goes down, so does the internet. The command below adds a backup ({fallback})." },
-  "host_resolver:systemd_resolved_stub": { fa: "خود سرور هنوز از برنامه DNS لینوکس می‌پرسد. دستور زیر آن را به MRK و یک DNS پشتیبان می‌فرستد.", en: "The server still asks Linux's own DNS helper. The command below points it at MRK plus a backup DNS." },
-  resolved_stub_forwarding: { fa: "خود سرور از برنامه DNS لینوکس می‌پرسد و آن هم به MRK می‌فرستد. کار می‌کند، ولی دستور زیر مستقیم‌ترش می‌کند.", en: "The server asks Linux's DNS helper, which forwards to MRK. It works, but the command below makes it direct." },
-  mrk_not_first: { fa: "MRK در فهرست هست ولی اول نیست، پس بیشتر پرسش‌ها جای دیگری می‌روند. دستور زیر MRK را اول می‌گذارد.", en: "MRK is listed but not first, so most questions go elsewhere. The command below puts MRK first." },
-  "host_resolver:uses_other_dns": { fa: "خود سرور الان از {nameservers} می‌پرسد. دستور زیر MRK را اول و یک DNS پشتیبان را بعدش می‌گذارد.", en: "The server currently asks {nameservers}. The command below puts MRK first with a backup DNS after it." },
-  static_resolv_conf: { fa: "فایل DNS سرور دستی نوشته شده و از {nameservers} می‌پرسد. دستور زیر MRK و یک DNS پشتیبان را در آن می‌نویسد.", en: "The server's DNS file is written by hand and asks {nameservers}. The command below writes MRK plus a backup DNS into it." },
+  uses_mrk: { fa: "نام‌ها از پیشکار پرسیده می‌شوند و یک DNS پشتیبان هم هست.", en: "Names are asked from Pishkar, with a backup DNS too." },
+  no_fallback: { fa: "نام‌ها از پیشکار پرسیده می‌شوند ولی DNS پشتیبان ندارد. اگر پیشکار بیفتد، اینترنت هم می‌افتد. دستور زیر یک پشتیبان ({fallback}) اضافه می‌کند.", en: "Names are asked from Pishkar, but there's no backup DNS. If Pishkar goes down, so does the internet. The command below adds a backup ({fallback})." },
+  "host_resolver:systemd_resolved_stub": { fa: "خود سرور هنوز از برنامه DNS لینوکس می‌پرسد. دستور زیر آن را به پیشکار و یک DNS پشتیبان می‌فرستد.", en: "The server still asks Linux's own DNS helper. The command below points it at Pishkar plus a backup DNS." },
+  resolved_stub_forwarding: { fa: "خود سرور از برنامه DNS لینوکس می‌پرسد و آن هم به پیشکار می‌فرستد. کار می‌کند، ولی دستور زیر مستقیم‌ترش می‌کند.", en: "The server asks Linux's DNS helper, which forwards to Pishkar. It works, but the command below makes it direct." },
+  mrk_not_first: { fa: "پیشکار در فهرست هست ولی اول نیست، پس بیشتر پرسش‌ها جای دیگری می‌روند. دستور زیر پیشکار را اول می‌گذارد.", en: "Pishkar is listed but not first, so most questions go elsewhere. The command below puts Pishkar first." },
+  "host_resolver:uses_other_dns": { fa: "خود سرور الان از {nameservers} می‌پرسد. دستور زیر پیشکار را اول و یک DNS پشتیبان را بعدش می‌گذارد.", en: "The server currently asks {nameservers}. The command below puts Pishkar first with a backup DNS after it." },
+  static_resolv_conf: { fa: "فایل DNS سرور دستی نوشته شده و از {nameservers} می‌پرسد. دستور زیر پیشکار و یک DNS پشتیبان را در آن می‌نویسد.", en: "The server's DNS file is written by hand and asks {nameservers}. The command below writes Pishkar plus a backup DNS into it." },
   // docker_daemon
   daemon_json_missing: { fa: "فایل تنظیم Docker هنوز وجود ندارد؛ دستور زیر آن را با DNS درست می‌سازد.", en: "Docker's settings file doesn't exist yet; the command below creates it with the right DNS." },
   daemon_json_invalid: { fa: "فایل تنظیم Docker خراب است و خوانده نمی‌شود. اول آن را درست کنید، بعد DNS را اضافه کنید.", en: "Docker's settings file is broken and can't be read. Fix it first, then add the DNS." },
@@ -639,11 +681,11 @@ const DETAIL_WORDS: Record<string, Bi> = {
   "verify_from_container:ok": { fa: "پرسش آزمایشی از داخل کانتینر جواب درست گرفت.", en: "The test question from a container got the right answer." },
   engine_not_running: { fa: "تا برنامه DNS روشن نشود، این بررسی ممکن نیست. اول قدم اول را انجام دهید.", en: "This can't be checked until the DNS program runs. Do the first step first." },
   resolve_failed: { fa: "پرسش آزمایشی جواب نگرفت. قدم‌های قبلی را بررسی کنید.", en: "The test question got no answer. Check the earlier steps." },
-  engine_ok_host_unknown: { fa: "DNS جواب می‌دهد، ولی MRK نمی‌داند خود سرور از آن می‌پرسد یا نه. با دستور زیر خودتان امتحان کنید.", en: "DNS answers, but MRK can't tell whether the server itself uses it. Try it yourself with the command below." },
+  engine_ok_host_unknown: { fa: "DNS جواب می‌دهد، ولی پیشکار نمی‌داند خود سرور از آن می‌پرسد یا نه. با دستور زیر خودتان امتحان کنید.", en: "DNS answers, but Pishkar can't tell whether the server itself uses it. Try it yourself with the command below." },
   engine_ok_host_not_using: { fa: "DNS جواب می‌دهد، ولی خود سرور هنوز از آن نمی‌پرسد. قدم «استفاده خود سرور از این DNS» را انجام دهید.", en: "DNS answers, but the server itself doesn't use it yet. Do the “Make the server itself use it” step." },
   docker_dns_not_set: { fa: "کانتینرها هنوز از این DNS نمی‌پرسند. قدم «استفاده کانتینرها از این DNS» را انجام دهید.", en: "Containers don't ask this DNS yet. Do the “Make containers use it” step." },
   gateway_not_listening: { fa: "DNS روی نشانی شبکه Docker ({gateway}) گوش نمی‌دهد. آن را در تنظیمات DNS به نشانی‌ها اضافه کنید.", en: "DNS isn't listening on the Docker network address ({gateway}). Add it to the addresses in DNS settings." },
-  manual_check: { fa: "این را MRK خودش نمی‌تواند بررسی کند. دستور زیر را روی سرور اجرا کنید؛ اگر نشانی آمد، درست است.", en: "MRK can't check this by itself. Run the command below on the server; if an address comes back, it works." }
+  manual_check: { fa: "این را پیشکار خودش نمی‌تواند بررسی کند. دستور زیر را روی سرور اجرا کنید؛ اگر نشانی آمد، درست است.", en: "Pishkar can't check this by itself. Run the command below on the server; if an address comes back, it works." }
 };
 
 const STATE_FALLBACK: Record<string, Bi> = {
@@ -863,7 +905,23 @@ const DNS_FIELD_REASONS: Record<string, Bi> = {
   token_invalid: { fa: "نام یا سقف این کلید درست نیست.", en: "This token's name or limit isn't valid." },
   invalid_format: { fa: "شکل این مقدار درست نیست.", en: "This value isn't in the right format." },
   invalid_type: { fa: "شکل این مقدار درست نیست.", en: "This value isn't in the right format." },
-  required: { fa: "این خانه را پر کنید.", en: "Fill in this field." }
+  required: { fa: "این خانه را پر کنید.", en: "Fill in this field." },
+  // docs/41 §0.3
+  too_broad: { fa: "این محدوده همه اینترنت را می‌گیرد؛ محدوده کوچک‌تری بنویسید.", en: "This range covers the whole internet; write a smaller one." },
+  invalid_key_name: { fa: "نام کلید فقط حروف انگلیسی، عدد، نقطه و خط تیره.", en: "Key names use letters, digits, dots and dashes only." },
+  not_below_validity: { fa: "زمان تمدید باید کمتر از اعتبار امضا باشد.", en: "Renewal must be shorter than the signature's life." },
+  https_required: { fa: "نشانی باید با https://‎ شروع شود.", en: "The address must start with https://." },
+  unknown_list: { fa: "این فهرست دیگر وجود ندارد؛ آن را از گروه بردارید.", en: "This list no longer exists; remove it from the group." },
+  unknown_upstream: { fa: "این DNS بیرونی دیگر وجود ندارد؛ آن را از گروه بردارید.", en: "This outside DNS no longer exists; remove it from the group." },
+  unknown_variable: { fa: "این نام در {…} شناخته نیست؛ آن را در «پرسش‌ها» اضافه کنید.", en: "This {…} name isn't known; add it under Questions." },
+  reserved: { fa: "این نام کوتاه رزرو شده است؛ نام دیگری بنویسید.", en: "This short name is reserved; pick another." },
+  not_allowed: { fa: "این مورد اینجا مجاز نیست.", en: "This isn't allowed here." },
+  unknown_tsig_key: { fa: "این کلید وجود ندارد؛ اول آن را در «کلیدهای امضای انتقال» بسازید.", en: "This key doesn't exist; make it under Transfer signing keys first." },
+  open_update: { fa: "بدون کلید، دست‌کم یک محدوده بدهید؛ وگرنه هر کسی می‌تواند رکوردها را تغییر دهد.", en: "Without a key, give at least one range; otherwise anyone could change records." },
+  algorithm_locked: { fa: "تا امضا روشن است الگوریتم عوض نمی‌شود.", en: "The algorithm can't change while signing is on." },
+  invalid_salt: { fa: "نمک باید عدد مبنای ۱۶ باشد (مثل ab12) یا خالی.", en: "The salt must be hex (like ab12) or empty." },
+  invalid_view: { fa: "شناسه گروه فقط حروف کوچک انگلیسی، عدد، _ و خط تیره.", en: "Group IDs use lowercase letters, digits, _ and dashes only." },
+  not_gzip: { fa: "این فایل پشتیبان DNS نیست؛ فایلی با پسوند ‎.tar.gz بدهید.", en: "This isn't a DNS backup; pick a .tar.gz file." }
 };
 
 /**
@@ -874,7 +932,7 @@ export function dnsFieldMessages(language: Language, error: unknown): Record<str
   const result: Record<string, string> = {};
   if (!(error instanceof ApiError)) return result;
   for (const issue of error.fields) {
-    const key = issue.field.replace(/^(data|body|record|override)\./, "");
+    const key = issue.field.replace(/^(data|body|record|override|zone)\./, "");
     if (result[key]) continue;
     const words = DNS_FIELD_REASONS[issue.reason_code];
     result[key] = words ? words[language] : fieldIssueMessage(language, issue);

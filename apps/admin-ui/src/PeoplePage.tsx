@@ -13,6 +13,8 @@ import { PeoplePanel } from "./PeoplePanel";
 import { RolesPanel } from "./RolesPanel";
 import { AppKeysPanel } from "./AppKeysPanel";
 import { RegistrationCard, SignInSecuritySettings } from "./RegistrationCard";
+import { TenancyPanel, type TenancyTab } from "./tenancy/TenancyPanel";
+import { TENANCY } from "./copy/mySpace";
 
 const T = {
   title: { fa: "کاربران و دسترسی", en: "People & access" },
@@ -35,6 +37,7 @@ export default function PeoplePage({ user, tab: tabProp }: PeoplePageProps) {
   const [inviteRequest, setInviteRequest] = useState(0);
   const [keyRequest, setKeyRequest] = useState(0);
   const [roleRequest, setRoleRequest] = useState(0);
+  const [planRequest, setPlanRequest] = useState(0);
   const isOwner = user.permissions.includes("*");
   const title = group ? pick(language, group.label) : pick(language, T.title);
 
@@ -53,6 +56,8 @@ export default function PeoplePage({ user, tab: tabProp }: PeoplePageProps) {
     primary = <Button variant="contained" startIcon={<PersonAddAlt1RoundedIcon />} onClick={() => setInviteRequest((value) => value + 1)} sx={{ minHeight: 44 }}>{pick(language, T.invite)}</Button>;
   } else if (tab === "app-keys" && hasPermission(user.permissions, "token:write")) {
     primary = <Button variant="contained" startIcon={<KeyRoundedIcon />} onClick={() => setKeyRequest((value) => value + 1)} sx={{ minHeight: 44 }}>{pick(language, T.newKey)}</Button>;
+  } else if (tab === "plans" && hasPermission(user.permissions, "tenancy:admin")) {
+    primary = <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => setPlanRequest((value) => value + 1)} sx={{ minHeight: 44 }}>{pick(language, TENANCY.newPlan)}</Button>;
   } else if (tab === "roles" && isOwner && isAdvanced) {
     primary = <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => setRoleRequest((value) => value + 1)} sx={{ minHeight: 44 }}>{pick(language, T.newRole)}</Button>;
   }
@@ -70,6 +75,7 @@ export default function PeoplePage({ user, tab: tabProp }: PeoplePageProps) {
         {tab === "people" && <PeoplePanel user={user} inviteRequest={inviteRequest} />}
         {tab === "roles" && <RolesPanel user={user} createRequest={roleRequest} />}
         {tab === "app-keys" && <AppKeysPanel user={user} createRequest={keyRequest} />}
+        {(tab === "workspaces" || tab === "plans" || tab === "signups" || tab === "my-space") && <TenancyPanel user={user} tab={tab as TenancyTab} createRequest={planRequest} />}
         {tab === "signup" && (
           <Stack spacing={2.5}>
             <RegistrationCard user={user} />

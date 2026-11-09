@@ -105,6 +105,54 @@ def _uplink_block(
     return block, env_name, token
 
 
+def _listen_host() -> str:
+    """MRK_NPM_LISTEN_HOST (0.0.0.0 in the container, 127.0.0.1 natively)."""
+    raw = os.environ.get("MRK_NPM_LISTEN_HOST", "").strip() or "0.0.0.0"  # noqa: S104
+    try:
+        address = ipaddress.ip_address(raw)
+    except ValueError:
+        LOGGER.warning("MRK_NPM_LISTEN_HOST %r is not an IP address; using 0.0.0.0", raw)
+        return "0.0.0.0"  # noqa: S104
+    return f"[{address}]" if address.version == 6 else str(address)
+
+
+_SCOPE = re.compile(r"^@[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
+_USER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+MANAGED_USER_PREFIX = "pk-"
+
+
+def _tenancy_rules(data_dir: Path) -> tuple[list[dict[str, object]], str]:
+    """«My space» npm scopes (docs/43) and who may publish outside them.
+
+    Without workspace scopes nothing changes ($authenticated). With them, workspace
+    token users must not publish elsewhere, so the generic rules name the other
+    htpasswd users (or nobody).
+    """
+    try:
+        payload = json.loads((data_dir / "npm" / "config" / "tenancy.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return [], "$authenticated"
+    scopes: list[dict[str, object]] = []
+    for item in payload.get("scopes") or [] if isinstance(payload, dict) else []:
+        if not isinstance(item, dict) or not _SCOPE.fullmatch(str(item.get("scope", ""))):
+            continue
+        users = [user for user in item.get("users") or [] if isinstance(user, str)
+                 and _USER.fullmatch(user) and user.startswith(MANAGED_USER_PREFIX)]
+        scopes.append({"scope": item["scope"], "users": users,
+                       "publish": item.get("publish", True) is True})
+    if not scopes:
+        return [], "$authenticated"
+    others: list[str] = []
+    try:
+        for line in (data_dir / "npm" / "auth" / "htpasswd").read_text("utf-8").splitlines():
+            user = line.split(":", 1)[0].strip()
+            if user and _USER.fullmatch(user) and not user.startswith(MANAGED_USER_PREFIX):
+                others.append(user)
+    except OSError:
+        pass
+    return scopes, " ".join(others) or QUARANTINE_GROUP
+
+
 def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
     store = UpstreamStore(data_dir)
     now = int(time.time())
@@ -172,12 +220,25 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
                 f"    unpublish: {QUARANTINE_GROUP}",
             ]
         )
+    scopes, generic_publish = _tenancy_rules(data_dir)
+    for scope in scopes:
+        # docs/43: a workspace's private scope, before the generic rules. Only its
+        # token users may read or publish; never fetched from an uplink.
+        users = " ".join(scope["users"]) or QUARANTINE_GROUP
+        lines.extend(
+            [
+                f"  {_yaml_scalar(scope['scope'] + '/*')}:",
+                f"    access: {users}",
+                f"    publish: {users if scope['publish'] else QUARANTINE_GROUP}",
+                f"    unpublish: {users}",
+            ]
+        )
     lines.extend(
         [
             "  '@*/*':",
             "    access: $all",
-            "    publish: $authenticated",
-            "    unpublish: $authenticated",
+            f"    publish: {generic_publish}",
+            f"    unpublish: {generic_publish}",
         ]
     )
     if proxy:
@@ -186,8 +247,8 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
         [
             "  '**':",
             "    access: $all",
-            "    publish: $authenticated",
-            "    unpublish: $authenticated",
+            f"    publish: {generic_publish}",
+            f"    unpublish: {generic_publish}",
         ]
     )
     if proxy:
@@ -205,7 +266,7 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
             "server:",
             "  keepAliveTimeout: 60",
             "",
-            "listen: 0.0.0.0:4873",
+            f"listen: {_listen_host()}:4873",
             "",
             "log:",
             "  type: stdout",

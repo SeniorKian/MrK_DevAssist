@@ -75,7 +75,7 @@ fi
 
 set -- devpi-server \
     --serverdir "$server_dir" \
-    --host 0.0.0.0 \
+    --host "${MRK_PYPI_LISTEN_HOST:-0.0.0.0}" \
     --port "${MRK_PYPI_PORT:-3141}" \
     --threads "${MRK_PYPI_THREADS:-16}" \
     --request-timeout "${MRK_PYPI_REQUEST_TIMEOUT:-900}" \

@@ -9,6 +9,9 @@
  *   and the user menu (change password, sign out).
  * - Routes are `#/<group>/<tab>` from nav.ts; old hashes redirect. Each group is one lazy page that
  *   renders its own tabs with GroupTabs/useGroupTab.
+ * - «فضای من» (docs/43 §4): `#/my/<tab>` is a second area with its own menu and workspace picker.
+ *   Admins switch areas in the top bar; a «فضای من»-only account (role `customer`) only ever sees it.
+ *   While an admin views a workspace "as" its owner, a fixed warning bar sits above everything.
  */
 import {
   Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState,
@@ -17,31 +20,36 @@ import {
 import {
   Alert, AppBar, Avatar, Badge, Box, BottomNavigation, BottomNavigationAction, Button, Dialog, DialogContent, Divider, Drawer,
   IconButton, InputAdornment, LinearProgress, List, ListItemButton, ListItemIcon, ListItemText, Menu, MenuItem,
-  Paper, Popover, Stack, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme
+  Paper, Popover, Stack, TextField, ToggleButton, ToggleButtonGroup, Toolbar, Tooltip, Typography, useMediaQuery, useTheme
 } from "@mui/material";
+import AdminPanelSettingsRoundedIcon from "@mui/icons-material/AdminPanelSettingsRounded";
+import WorkspacesRoundedIcon from "@mui/icons-material/WorkspacesRounded";
 import MenuRoundedIcon from "@mui/icons-material/MenuRounded";
 import LightModeRoundedIcon from "@mui/icons-material/LightModeRounded";
 import DarkModeRoundedIcon from "@mui/icons-material/DarkModeRounded";
 import NotificationsNoneRoundedIcon from "@mui/icons-material/NotificationsNoneRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
+import { PishkarMark } from "./brand";
 import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
 import TranslateRoundedIcon from "@mui/icons-material/TranslateRounded";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
 import MoreHorizRoundedIcon from "@mui/icons-material/MoreHorizRounded";
-import UpdateRoundedIcon from "@mui/icons-material/UpdateRounded";
 import ErrorRoundedIcon from "@mui/icons-material/ErrorRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import InfoRoundedIcon from "@mui/icons-material/InfoRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import packageMetadata from "../package.json";
 import type { AuthUser } from "./App";
-import { apiGet } from "./api";
+import { useBuildCheck, NewVersionBar } from "./NewVersionBar";
 import { translate, type Language, type MessageKey } from "./i18n";
 import {
-  MOBILE_PRIMARY_GROUPS, NAV_UTILITIES, findGroup, resolveRoute, routeHref, searchNav, utilityHref, visibleGroups,
-  type GroupKey, type GroupPageKey, type NavGroup, type Route, type UtilityKey
+  MOBILE_PRIMARY_GROUPS, MY_MOBILE_PRIMARY, MY_TABS, NAV_UTILITIES, findGroup, myHref, resolveRoute, routeHref, searchMy, searchNav, utilityHref,
+  visibleGroups, visibleMyTabs, type GroupKey, type GroupPageKey, type MyTab, type MyTabKey, type NavGroup, type Route, type UtilityKey
 } from "./nav";
+import { MY } from "./copy/mySpace";
+import { isMySpaceOnly, useMySpace } from "./my/MySpaceContext";
+import { VIEW_AS_BAR_HEIGHT, ViewAsBar } from "./my/ViewAsBar";
 import { UiModeToggle, useUiMode } from "./uiMode";
 import { useUndoSnackbar } from "./kit";
 import { roleName } from "./copy/roles";
@@ -89,10 +97,11 @@ const UTILITY_PAGES: Record<UtilityKey, LazyExoticComponent<ComponentType<Utilit
 };
 
 const KitDemo = lazy(() => import("./kit/KitDemo"));
+const MySpacePage = lazy(() => import("./my/MySpacePage"));
+const WorkspacePicker = lazy(() => import("./my/MySpacePage").then((module) => ({ default: module.WorkspacePicker })));
 
 const DRAWER_WIDTH = 264;
 const BOTTOM_NAV_HEIGHT = 64;
-const UI_COMMIT = import.meta.env.VITE_BUILD_COMMIT || "unknown";
 
 const COPY = {
   pageFailed: { fa: "این بخش باز نشد", en: "This section didn't open" },
@@ -142,15 +151,7 @@ class PageErrorBoundary extends Component<{ language: Language; resetKey: string
 function Brand({ language, compact = false }: { language: Language; compact?: boolean }) {
   return (
     <Stack direction="row" alignItems="center" spacing={1.5} sx={{ minWidth: 0 }}>
-      <Box
-        aria-hidden
-        sx={{
-          width: compact ? 32 : 38, height: compact ? 32 : 38, borderRadius: 1.25, display: "grid", placeItems: "center",
-          fontSize: 12, fontWeight: 850, color: "#042f2e", background: "linear-gradient(145deg, #99f6e4, #38bdf8)", flexShrink: 0
-        }}
-      >
-        MRK
-      </Box>
+      <PishkarMark size={compact ? 32 : 38} />
       {!compact && (
         <Box sx={{ minWidth: 0 }}>
           <Typography fontWeight={780} lineHeight={1.35} noWrap>{translate(language, "product")}</Typography>
@@ -172,72 +173,7 @@ function isMac() {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 }
 
-// ── Status poll (new panel version) ──────────────────────────────────────────
-
-type SystemBuild = { build?: { commit?: string; ui_version?: string } };
-
-function safeSessionGet(key: string) {
-  try {
-    return window.sessionStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function safeSessionSet(key: string, value: string) {
-  try {
-    window.sessionStorage.setItem(key, value);
-  } catch {
-    // storage may be unavailable
-  }
-}
-
-/** Reload once when the server runs a newer panel build; then offer a manual reload. */
-function useBuildCheck() {
-  const [updateState, setUpdateState] = useState<"none" | "updating" | "failed">("none");
-  const [offline, setOffline] = useState(false);
-  const target = useRef("latest");
-  const forceReload = useCallback((commit: string) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("_ui", commit.slice(0, 12));
-    window.location.replace(url.toString());
-  }, []);
-  const check = useCallback(async () => {
-    try {
-      const response = await apiGet(`/api/v1/system/status?_=${Date.now()}`);
-      // 401 is handled by the session; 403 means this role can't read the status (nothing to check).
-      if (response.status === 401 || response.status === 403) return;
-      if (!response.ok) throw new Error("status");
-      const payload = (await response.json()) as SystemBuild;
-      setOffline(false);
-      const commit = payload.build?.commit ?? "unknown";
-      const uiVersion = payload.build?.ui_version ?? packageMetadata.version;
-      if (uiVersion === packageMetadata.version && (commit === "unknown" || commit === UI_COMMIT)) return;
-      target.current = commit !== "unknown" ? commit : uiVersion;
-      const reloadKey = `mrk-ui-reload:${commit}:${uiVersion}`;
-      if (safeSessionGet(reloadKey) !== "attempted") {
-        safeSessionSet(reloadKey, "attempted");
-        setUpdateState("updating");
-        window.setTimeout(() => forceReload(target.current), 900);
-      } else {
-        setUpdateState("failed");
-      }
-    } catch {
-      setOffline(true);
-    }
-  }, [forceReload]);
-  useEffect(() => {
-    void check();
-    const timer = window.setInterval(() => void check(), 60_000);
-    const onVisible = () => document.visibilityState === "visible" && void check();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [check]);
-  return { updateState, offline, retry: check, reloadNow: () => forceReload(target.current) };
-}
+// ── Status poll (new panel version): src/NewVersionBar.tsx (docs/41 §7) ──────
 
 // ── Shell ────────────────────────────────────────────────────────────────────
 
@@ -260,14 +196,27 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
   const t = useCallback((key: MessageKey) => translate(language, key), [language]);
   const permissions = user.permissions;
   const groups = useMemo(() => visibleGroups(permissions, mode), [permissions, mode]);
+  // docs/43 §4: a «فضای من»-only account never sees Server admin.
+  const myOnly = isMySpaceOnly(user);
+  const space = useMySpace();
+  const canSwitch = !myOnly && space.status === "ready";
+  const myTabs = useMemo(() => visibleMyTabs(space.has), [space.has]);
 
   // ── routing
-  const [route, setRoute] = useState<Route>(() => resolveRoute(window.location.hash, permissions, mode).route);
+  const resolveFor = useCallback((hash: string) => {
+    const resolved = resolveRoute(hash, permissions, mode);
+    if (myOnly && resolved.route.kind !== "my") {
+      const tab: MyTabKey = "home";
+      return { route: { kind: "my", tab } as Route, href: myHref(tab), redirected: true };
+    }
+    return resolved;
+  }, [permissions, mode, myOnly]);
+  const [route, setRoute] = useState<Route>(() => resolveFor(window.location.hash).route);
   const sync = useCallback(() => {
-    const resolved = resolveRoute(window.location.hash, permissions, mode);
+    const resolved = resolveFor(window.location.hash);
     if (resolved.redirected) window.history.replaceState(null, "", resolved.href);
     setRoute(resolved.route);
-  }, [permissions, mode]);
+  }, [resolveFor]);
   useEffect(() => {
     sync();
     window.addEventListener("hashchange", sync);
@@ -279,7 +228,14 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
   }, [sync]);
 
   // Back to the top when the group or utility changes (not when a tab changes).
-  const routeKey = route.kind === "tab" ? `g:${route.group}` : route.kind === "utility" ? `u:${route.key}` : "kit";
+  const routeKey = route.kind === "tab" ? `g:${route.group}` : route.kind === "utility" ? `u:${route.key}` : route.kind === "my" ? `m:${route.tab}` : "kit";
+  const area: "admin" | "my" = route.kind === "my" ? "my" : "admin";
+  const viewAsOffset = space.viewAs ? VIEW_AS_BAR_HEIGHT : 0;
+  // Starting "view as" (from Workspaces) opens My space.
+  const viewAsToken = space.viewAs?.token ?? null;
+  useEffect(() => {
+    if (viewAsToken && window.location.hash.indexOf("#/my") !== 0) window.location.hash = myHref("home");
+  }, [viewAsToken]);
   useEffect(() => {
     window.scrollTo({ top: 0 });
   }, [routeKey]);
@@ -293,8 +249,8 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
   const [passwordOpen, setPasswordOpen] = useState(false);
   const { notify, snackbar } = useUndoSnackbar();
   const build = useBuildCheck();
-  const home = useHomeSummary(60_000);
-  const attention = home.data?.attention ?? [];
+  const home = useHomeSummary(myOnly ? undefined : 60_000);
+  const attention = myOnly ? [] : home.data?.attention ?? [];
 
   useEffect(() => {
     const root = document.documentElement;
@@ -317,9 +273,29 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
 
   const activeGroup: GroupKey | null = route.kind === "tab" ? route.group : null;
   const activeUtility: UtilityKey | null = route.kind === "utility" ? route.key : null;
+  const activeMy: MyTabKey | null = route.kind === "my" ? route.tab : null;
   const currentTitle =
     route.kind === "tab" ? findGroup(route.group)?.label[language] ?? "" :
-    route.kind === "utility" ? NAV_UTILITIES.find((item) => item.key === route.key)?.label[language] ?? "" : "";
+    route.kind === "utility" ? NAV_UTILITIES.find((item) => item.key === route.key)?.label[language] ?? "" :
+    route.kind === "my" ? MY_TABS.find((item) => item.key === route.tab)?.label[language] ?? "" : "";
+  const utilities = myOnly || area === "my" ? [] : NAV_UTILITIES;
+
+  const areaSwitch = canSwitch ? (
+    <ToggleButtonGroup
+      exclusive
+      size="small"
+      value={area}
+      aria-label={pick(language, MY.area)}
+      onChange={(_event, value: "admin" | "my" | null) => {
+        if (!value || value === area) return;
+        go(value === "my" ? myHref("home") : routeHref("home"));
+      }}
+      sx={{ "& .MuiToggleButton-root": { minHeight: 36, px: 1.25, gap: 0.5, whiteSpace: "nowrap" } }}
+    >
+      <ToggleButton value="admin"><AdminPanelSettingsRoundedIcon fontSize="small" />{pick(language, MY.areaAdmin)}</ToggleButton>
+      <ToggleButton value="my"><WorkspacesRoundedIcon fontSize="small" />{pick(language, MY.areaMine)}</ToggleButton>
+    </ToggleButtonGroup>
+  ) : null;
 
   useEffect(() => {
     document.title = currentTitle ? `${currentTitle} · ${t("product")}` : t("product");
@@ -336,6 +312,18 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
     <Box dir={language === "fa" ? "rtl" : "ltr"} sx={{ height: "100%", px: 1.5, py: 2, display: "flex", flexDirection: "column" }}>
       <Box sx={{ px: 1, py: 0.5 }}><Brand language={language} /></Box>
       <Divider sx={{ my: 2 }} />
+      {area === "my" ? (
+        <>
+          <Box sx={{ px: 0.5, mb: 1.5 }}>
+            <Suspense fallback={null}><WorkspacePicker dense /></Suspense>
+          </Box>
+          <List component="nav" aria-label={pick(language, MY.menu)} sx={{ px: 0 }}>
+            {myTabs.map((tab) => (
+              <MyNavItem key={tab.key} tab={tab} language={language} active={tab.key === activeMy} onClick={() => navigate(myHref(tab.key))} />
+            ))}
+          </List>
+        </>
+      ) : (
       <List component="nav" aria-label={pick(language, COPY.nav)} sx={{ px: 0 }}>
         {groups.map((group) => (
           <NavItem
@@ -348,10 +336,11 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
           />
         ))}
       </List>
+      )}
       <Box sx={{ mt: "auto" }}>
         <Divider sx={{ my: 1.5 }} />
         <List sx={{ px: 0 }}>
-          {NAV_UTILITIES.map((item) => {
+          {utilities.map((item) => {
             const Icon = item.icon;
             const active = activeUtility === item.key;
             return (
@@ -376,9 +365,13 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
   );
 
   // ── bottom nav (phones)
-  const primary = MOBILE_PRIMARY_GROUPS.map((key) => groups.find((group) => group.key === key)).filter(Boolean) as NavGroup[];
-  const others = groups.filter((group) => !primary.includes(group));
-  const bottomValue = activeGroup && primary.some((group) => group.key === activeGroup) ? activeGroup : "more";
+  const primary = area === "my" ? [] : MOBILE_PRIMARY_GROUPS.map((key) => groups.find((group) => group.key === key)).filter(Boolean) as NavGroup[];
+  const others = area === "my" ? [] : groups.filter((group) => !primary.includes(group));
+  const myPrimary = area === "my" ? myTabs.filter((tab) => MY_MOBILE_PRIMARY.includes(tab.key)) : [];
+  const myOthers = area === "my" ? myTabs.filter((tab) => !MY_MOBILE_PRIMARY.includes(tab.key)) : [];
+  const bottomValue = area === "my"
+    ? activeMy && myPrimary.some((tab) => tab.key === activeMy) ? `my:${activeMy}` : "more"
+    : activeGroup && primary.some((group) => group.key === activeGroup) ? activeGroup : "more";
 
   // ── page
   let page: ReactNode = null;
@@ -398,6 +391,8 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
         onChangePassword={() => setPasswordOpen(true)}
       />
     );
+  } else if (route.kind === "my") {
+    page = <MySpacePage tab={route.tab} />;
   } else {
     page = <KitDemo permissions={permissions} />;
   }
@@ -441,6 +436,7 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
       >
         {t("skipToContent")}
       </Box>
+      <ViewAsBar />
 
       <AppBar
         position={isPhone ? "absolute" : "fixed"}
@@ -449,6 +445,7 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
         sx={{
           width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           insetInlineStart: { md: `${DRAWER_WIDTH}px` },
+          top: viewAsOffset,
           borderBottom: 1,
           borderColor: "divider",
           bgcolor: colorMode === "dark" ? "rgba(7,16,25,.86)" : "rgba(244,247,250,.86)",
@@ -484,20 +481,32 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
               <SearchRoundedIcon />
             </IconButton>
           )}
-          {!isPhone && <Box sx={{ mx: 0.5 }}><UiModeToggle /></Box>}
+          {!isPhone && areaSwitch && <Box sx={{ mx: 0.5, display: { xs: "none", lg: "block" } }}>{areaSwitch}</Box>}
+          {!isPhone && areaSwitch && (
+            <Tooltip title={pick(language, area === "my" ? MY.areaAdmin : MY.areaMine)}>
+              <IconButton
+                aria-label={pick(language, area === "my" ? MY.areaAdmin : MY.areaMine)}
+                onClick={() => go(area === "my" ? routeHref("home") : myHref("home"))}
+                sx={{ display: { xs: "inline-flex", lg: "none" } }}
+              >
+                {area === "my" ? <AdminPanelSettingsRoundedIcon /> : <WorkspacesRoundedIcon />}
+              </IconButton>
+            </Tooltip>
+          )}
+          {!isPhone && !myOnly && <Box sx={{ mx: 0.5 }}><UiModeToggle /></Box>}
           {!isPhone && themeButton}
           {!isPhone && (
             <Button variant="outlined" size="small" onClick={onLanguageChange} lang={language === "fa" ? "en" : "fa"} sx={{ minWidth: 72, minHeight: 36, mx: 0.5 }}>
               {t("language")}
             </Button>
           )}
-          <Tooltip title={bellLabel}>
+          {!myOnly && <Tooltip title={bellLabel}>
             <IconButton aria-label={bellLabel} onClick={(event) => setBellAnchor(event.currentTarget)}>
               <Badge badgeContent={bellCount} color={attention.some((item) => item.severity === "critical" || item.severity === "error") ? "error" : "warning"} max={99}>
                 <NotificationsNoneRoundedIcon />
               </Badge>
             </IconButton>
-          </Tooltip>
+          </Tooltip>}
           <Tooltip title={t("userMenu")}>
             <IconButton aria-label={t("userMenu")} onClick={(event) => setUserAnchor(event.currentTarget)} sx={{ p: 0.5 }}>
               <Avatar sx={{ width: 34, height: 34, fontSize: 13, bgcolor: "primary.main", color: "primary.contrastText" }}>{initials(user)}</Avatar>
@@ -510,7 +519,7 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
         <Box sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}>
           {/* anchor="left" is logical: MUI mirrors it to the right edge when the theme is RTL. */}
           {isDesktop ? (
-            <Drawer variant="permanent" anchor="left" open sx={{ "& .MuiDrawer-paper": { width: DRAWER_WIDTH, borderColor: "divider" } }}>
+            <Drawer variant="permanent" anchor="left" open sx={{ "& .MuiDrawer-paper": { width: DRAWER_WIDTH, borderColor: "divider", top: viewAsOffset, height: `calc(100% - ${viewAsOffset}px)` } }}>
               {navList}
             </Drawer>
           ) : (
@@ -534,18 +543,9 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
         }}
       >
         <Toolbar sx={{ minHeight: { xs: "56px !important", sm: "64px !important" } }} />
+        {viewAsOffset > 0 && <Box aria-hidden sx={{ height: viewAsOffset }} />}
         <Box sx={{ px: { xs: 2, sm: 3, xl: 4 }, pt: { xs: 1.5, sm: 3 }, maxWidth: 1480, mx: "auto" }}>
-          {build.updateState !== "none" && (
-            <Alert
-              severity={build.updateState === "updating" ? "info" : "warning"}
-              icon={<UpdateRoundedIcon />}
-              action={build.updateState === "failed" ? <Button color="inherit" size="small" onClick={build.reloadNow}>{t("updateNow")}</Button> : undefined}
-              sx={{ mb: 2.5 }}
-            >
-              <Typography fontWeight={750}>{t("updateAvailable")}</Typography>
-              <Typography variant="body2">{t(build.updateState === "updating" ? "updating" : "updateFailed")}</Typography>
-            </Alert>
-          )}
+          {build.available && <NewVersionBar language={language} onReload={build.reloadNow} onLater={build.dismiss} />}
           {build.offline && (
             <Alert severity="error" action={<Button color="inherit" size="small" onClick={() => void build.retry()}>{t("retry")}</Button>} sx={{ mb: 2.5 }}>
               {t("connectionError")}
@@ -569,10 +569,23 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
             value={bottomValue}
             onChange={(_event, value: string) => {
               if (value === "more") setMoreOpen(true);
+              else if (value.startsWith("my:")) navigate(myHref(value.slice(3) as MyTabKey));
               else navigate(routeHref(value as GroupKey));
             }}
             sx={{ height: BOTTOM_NAV_HEIGHT, bgcolor: "transparent", "& .MuiBottomNavigationAction-root": { minWidth: 0, px: 0.5 } }}
           >
+            {myPrimary.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <BottomNavigationAction
+                  key={tab.key}
+                  value={`my:${tab.key}`}
+                  label={tab.label[language]}
+                  icon={<Icon />}
+                  sx={{ "& .MuiBottomNavigationAction-label": { fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" } }}
+                />
+              );
+            })}
             {primary.map((group) => {
               const Icon = group.icon;
               return (
@@ -597,8 +610,16 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
             {others.map((group) => (
               <NavItem key={group.key} group={group} language={language} active={group.key === activeGroup} onClick={() => navigate(routeHref(group.key))} />
             ))}
-            {others.length > 0 && <Divider sx={{ my: 1 }} />}
-            {NAV_UTILITIES.map((item) => {
+            {myOthers.map((tab) => (
+              <MyNavItem key={tab.key} tab={tab} language={language} active={tab.key === activeMy} onClick={() => navigate(myHref(tab.key))} />
+            ))}
+            {area === "my" && (
+              <Box sx={{ px: 2.5, py: 1.5 }}>
+                <Suspense fallback={null}><WorkspacePicker /></Suspense>
+              </Box>
+            )}
+            {others.length > 0 && utilities.length > 0 && <Divider sx={{ my: 1 }} />}
+            {utilities.map((item) => {
               const Icon = item.icon;
               return (
                 <ListItemButton key={item.key} selected={activeUtility === item.key} onClick={() => navigate(utilityHref(item.key))} sx={{ minHeight: 52, gap: 1.5, px: 2.5 }}>
@@ -636,7 +657,7 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
           {user.email && <Typography variant="caption" color="text.secondary" display="block" noWrap component="bdi" dir="ltr">{user.email}</Typography>}
         </Box>
         <Divider />
-        {isPhone && (
+        {isPhone && !myOnly && (
           <Box sx={{ px: 2, py: 1.25 }}>
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
               <TuneRoundedIcon fontSize="small" color="action" />
@@ -644,6 +665,12 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
             </Stack>
             <UiModeToggle />
           </Box>
+        )}
+        {isPhone && canSwitch && (
+          <MenuItem onClick={() => { setUserAnchor(null); go(area === "my" ? routeHref("home") : myHref("home")); }} sx={{ minHeight: 48 }}>
+            <ListItemIcon>{area === "my" ? <AdminPanelSettingsRoundedIcon fontSize="small" /> : <WorkspacesRoundedIcon fontSize="small" />}</ListItemIcon>
+            <ListItemText>{pick(language, area === "my" ? MY.areaAdmin : MY.areaMine)}</ListItemText>
+          </MenuItem>
         )}
         {isPhone && (
           <MenuItem onClick={() => { setUserAnchor(null); onLanguageChange(); }} sx={{ minHeight: 48 }}>
@@ -662,7 +689,7 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
           <ListItemIcon><KeyRoundedIcon fontSize="small" /></ListItemIcon>
           <ListItemText>{t("changePassword")}</ListItemText>
         </MenuItem>
-        {NAV_UTILITIES.filter((item) => item.key === "settings").map((item) => {
+        {utilities.filter((item) => item.key === "settings").map((item) => {
           const Icon = item.icon;
           return (
             <MenuItem key={item.key} onClick={() => { setUserAnchor(null); navigate(utilityHref(item.key)); }} sx={{ minHeight: 48 }}>
@@ -683,6 +710,7 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
         language={language}
         permissions={permissions}
         mode={mode}
+        myTabs={area === "my" ? myTabs : null}
         onClose={() => setSearchOpen(false)}
         onPick={(href) => {
           setSearchOpen(false);
@@ -721,6 +749,25 @@ function NavItem({ group, language, active, badge = 0, onClick }: { group: NavGr
         <Badge variant="dot" color="warning" invisible={!badge}><Icon fontSize="small" /></Badge>
       </ListItemIcon>
       <ListItemText primary={group.label[language]} slotProps={{ primary: { noWrap: true, fontSize: 14.5, fontWeight: active ? 720 : 570 } }} />
+    </ListItemButton>
+  );
+}
+
+function MyNavItem({ tab, language, active, onClick }: { tab: MyTab; language: Language; active: boolean; onClick: () => void }) {
+  const Icon = tab.icon;
+  return (
+    <ListItemButton
+      selected={active}
+      aria-current={active ? "page" : undefined}
+      onClick={onClick}
+      sx={{
+        mb: 0.5, minHeight: 46, px: 1.5, gap: 1.25, borderRadius: 1,
+        "&.Mui-selected": { bgcolor: "rgba(45,212,191,.11)", color: "primary.main" },
+        "&.Mui-selected:hover": { bgcolor: "rgba(45,212,191,.15)" }
+      }}
+    >
+      <ListItemIcon sx={{ minWidth: 24, width: 24, justifyContent: "center", color: "inherit" }}><Icon fontSize="small" /></ListItemIcon>
+      <ListItemText primary={tab.label[language]} slotProps={{ primary: { noWrap: true, fontSize: 14.5, fontWeight: active ? 720 : 570 } }} />
     </ListItemButton>
   );
 }
@@ -775,12 +822,14 @@ function BellPopover({
 }
 
 function SearchDialog({
-  open, language, permissions, mode, onClose, onPick
+  open, language, permissions, mode, myTabs, onClose, onPick
 }: {
   open: boolean;
   language: Language;
   permissions: string[];
   mode: "simple" | "advanced";
+  /** In My space, search its tabs only. */
+  myTabs: MyTab[] | null;
   onClose: () => void;
   onPick: (href: string) => void;
 }) {
@@ -794,16 +843,19 @@ function SearchDialog({
       setIndex(0);
     }
   }, [open]);
-  const hits = useMemo(() => searchNav(query, language, permissions, mode).slice(0, 12), [language, mode, permissions, query]);
+  const hits = useMemo(
+    () => (myTabs ? searchMy(query, language, myTabs) : searchNav(query, language, permissions, mode)).slice(0, 12),
+    [language, mode, permissions, query, myTabs]
+  );
   const utilityHits = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return [];
+    if (!needle || myTabs) return [];
     return NAV_UTILITIES.filter((item) => item.label.fa.includes(query.trim()) || item.label.en.toLowerCase().includes(needle)).map((item) => ({
       href: utilityHref(item.key),
       title: item.label[language],
       hint: ""
     }));
-  }, [language, query]);
+  }, [language, query, myTabs]);
   const all = [...hits.map((hit) => ({ href: hit.href, title: hit.title, hint: hit.hint })), ...utilityHits];
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" fullScreen={fullScreen} aria-label={translate(language, "search")}>

@@ -26,7 +26,7 @@ export const GLOSSARY = {
     word: { fa: "منبع دریافت", en: "package source" },
     term: "upstream",
     english: "first",
-    hint: { fa: "جایی که MRK بسته‌ها را از آن می‌گیرد؛ مثل سایت اصلی npm.", en: "Where MRK fetches packages from, such as the official npm site." }
+    hint: { fa: "جایی که پیشکار بسته‌ها را از آن می‌گیرد؛ مثل سایت اصلی npm.", en: "Where Pishkar fetches packages from, such as the official npm site." }
   },
   registry: {
     word: { fa: "مخزن بسته", en: "package registry" },
@@ -165,7 +165,7 @@ export const GLOSSARY = {
   latency: { word: { fa: "زمان پاسخ", en: "response time" }, term: "latency", english: "never" },
   tls: { word: { fa: "اتصال امن", en: "secure connection" }, term: "TLS", english: "advanced" },
   reverseProxy: { word: { fa: "سرور جلویی", en: "front server" }, term: "reverse proxy", english: "first", hint: { fa: "سروری مثل Traefik که جلوی پنل می‌نشیند و اتصال امن را برقرار می‌کند.", en: "A server such as Traefik that sits in front and handles secure connections." } },
-  controlPlane: { word: { fa: "سرور MRK", en: "MRK server" }, term: "control plane", english: "never" },
+  controlPlane: { word: { fa: "سرور پیشکار", en: "Pishkar server" }, term: "control plane", english: "never" },
   env: { word: { fa: "تنظیم شروع سرویس", en: "startup setting" }, term: "environment variable", english: "advanced", hint: { fa: "مقداری که در فایل Compose نوشته می‌شود و هنگام روشن شدن سرویس خوانده می‌شود.", en: "A value written in the Compose file and read when the service starts." } },
   restartRequired: { word: { fa: "پس از راه‌اندازی دوباره اعمال می‌شود", en: "applies after a restart" }, term: "restart required", english: "never" }
 } satisfies Record<string, GlossaryEntry>;

@@ -37,24 +37,33 @@ type Filter struct {
 }
 
 // Cursor is a position in newest-first order: rows with index < Row in
-// segment Seq, then older segments.
+// segment Seq, then older segments. Gen is the store's deletion generation
+// when the cursor was made and TS the timestamp of row Row-1 (the next row
+// to scan): when rows were deleted meanwhile (DELETE /v1/querylog rewrites
+// segments in place, so indices shift), the scan resumes at the first row
+// at or before TS instead of at a stale index (docs/41 §4).
 type Cursor struct {
 	Seq uint64
 	Row int
+	Gen uint64
+	TS  int64
 }
 
 func (c Cursor) String() string {
-	return base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("v1:%d:%d", c.Seq, c.Row)))
+	if c.Gen == 0 {
+		return base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("v1:%d:%d", c.Seq, c.Row)))
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("v2:%d:%d:%d:%d", c.Seq, c.Row, c.Gen, c.TS)))
 }
 
 // ParseCursor decodes a cursor string.
 func ParseCursor(s string) (*Cursor, bool) {
 	b, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil || len(b) > 64 {
+	if err != nil || len(b) > 128 {
 		return nil, false
 	}
 	parts := strings.Split(string(b), ":")
-	if len(parts) != 3 || parts[0] != "v1" {
+	if !(len(parts) == 3 && parts[0] == "v1" || len(parts) == 5 && parts[0] == "v2") {
 		return nil, false
 	}
 	seq, err1 := strconv.ParseUint(parts[1], 10, 64)
@@ -62,12 +71,21 @@ func ParseCursor(s string) (*Cursor, bool) {
 	if err1 != nil || err2 != nil || row < 0 || row > maxRows {
 		return nil, false
 	}
-	return &Cursor{Seq: seq, Row: row}, true
+	c := &Cursor{Seq: seq, Row: row}
+	if len(parts) == 5 {
+		gen, err3 := strconv.ParseUint(parts[3], 10, 64)
+		ts, err4 := strconv.ParseInt(parts[4], 10, 64)
+		if err3 != nil || err4 != nil || gen == 0 || ts < 0 {
+			return nil, false
+		}
+		c.Gen, c.TS = gen, ts
+	}
+	return c, true
 }
 
 // Blocked reports whether a source counts as blocked (blocked=true filter).
 func Blocked(src uint8) bool {
-	return src == SrcRefused || src == SrcRateLimited || src == SrcMitigated
+	return src == SrcRefused || src == SrcRateLimited || src == SrcMitigated || src == SrcBlocked
 }
 
 // ParseTime accepts unix milliseconds or RFC 3339 and returns unix µs.

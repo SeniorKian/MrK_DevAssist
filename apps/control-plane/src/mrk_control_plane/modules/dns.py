@@ -16,6 +16,11 @@ Routes (all under ``/api/v1/dns``; every change needs CSRF and is audited):
 * D4 (docs/40 §5, ``dns_encrypted``): ``dnssec[/refresh]``, ``tls[/self-signed]``,
   ``doh/tokens[/{id}]``, ``encrypted/clients``, ``encrypted/apple-profile``; settings
   answers carry ``warnings``; ``resolve`` takes ``dnssec/cd/trace/no_cache``.
+* Final phase (docs/41 §5–§6, ``dns_final``): domain templates (``templates[...]``,
+  ``zones/{zone}/apply-template``, the default template on ``POST zones``), secondary
+  zones and zone transfer/notify/update/DNSSEC/views via ``PATCH zones/{zone}``,
+  ``zones/{zone}/refresh``, ``zones/{zone}/dnssec[/rollover]``, ``tsig``,
+  ``filtering/{status,refresh,check}``, ``backup`` and ``restore``.
 
 The engine runs in its own container (compose profile ``dns``) and is reached
 over its admin unix socket (``dns_client``). Without the socket every engine
@@ -43,8 +48,11 @@ from ..config import setting_env
 from ..dns_client import DnsClient, DnsError
 from ..models import ServiceDomain, SystemSetting
 from ..module_context import Event, ModuleContext
-from . import dns_encrypted, dns_logs, dns_setup
+from . import dns_encrypted, dns_final, dns_logs, dns_setup
 from .dns_monitor import DnsMonitor
+from .dns_templates import TemplateStore
+from .dns_templates import render as render_template
+from .dns_templates_builtin import DEFAULT_TEMPLATE_ID
 from .dns_validate import (
     MAX_IMPORT_BYTES,
     DnsInputError,
@@ -82,7 +90,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "services_override_target": "",
     "internal_zone_enabled": False,
     "fallback_servers": ["1.1.1.1", "9.9.9.9"],
+    # docs/41 §5: applied to every zone created in the panel ("" = no template).
+    "default_template_id": DEFAULT_TEMPLATE_ID,
 }
+TEMPLATE_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+ZONE_PROBLEMS_EVERY_SECONDS = 60.0
+MAX_SECONDARY_DETAILS = 50
+EVENT_PROBLEM_SECONDS = 86400.0
 
 
 class SettingsError(ValueError):
@@ -117,6 +131,11 @@ def validate_settings(payload: Any, current: dict[str, Any]) -> dict[str, Any]:
             if address.is_unspecified or address.is_multicast:
                 raise SettingsError(f"{key} must be a usable address", key)
             merged[key] = str(address)
+        elif key == "default_template_id":
+            text = "" if value is None else value
+            if not isinstance(text, str) or len(text) > 32 or not set(text) <= TEMPLATE_ID_CHARS:
+                raise SettingsError(f"{key} must be a template id or empty", key)
+            merged[key] = text
         elif key == "fallback_servers":
             if isinstance(value, str):
                 value = [item for item in value.split(",") if item.strip()]
@@ -176,6 +195,40 @@ def _path(*parts: str) -> str:
     return "/" + "/".join(quote(part, safe="") for part in parts)
 
 
+def _ts(value: Any) -> float | None:
+    """Unix seconds from an engine time (RFC 3339 text, seconds or milliseconds)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value) / 1000.0 if value > 10**11 else float(value)
+    if isinstance(value, str) and value:
+        from .dns_validate_d4 import rfc3339
+
+        parsed = rfc3339(value)
+        return parsed.timestamp() if parsed is not None else None
+    return None
+
+
+def zone_view_problems(view: dict[str, Any], now: float) -> dict[str, dict[str, Any]]:
+    """Home-page problems of one zone view: ``secondary`` (stale/expired) and ``signing``."""
+    out: dict[str, dict[str, Any]] = {}
+    secondary = view.get("secondary") if isinstance(view.get("secondary"), dict) else None
+    if view.get("type") == "secondary" and secondary is not None:
+        expires = _ts(secondary.get("expires_at"))
+        error = secondary.get("error")
+        expired = bool(secondary.get("expired")) or (expires is not None and expires <= now)
+        if expired or (isinstance(error, str) and error):
+            out["secondary"] = {"expired": expired,
+                                "error": error[:200] if isinstance(error, str) else None,
+                                "last_success": secondary.get("last_success")}
+    dnssec = view.get("dnssec") if isinstance(view.get("dnssec"), dict) else None
+    if dnssec is not None and dnssec.get("enabled"):
+        error = dnssec.get("error") or dnssec.get("signing_error")
+        if isinstance(error, str) and error:
+            out["signing"] = {"error": error[:200]}
+    return out
+
+
 class DnsService:
     def __init__(self, ctx: ModuleContext) -> None:
         self.ctx = ctx
@@ -191,6 +244,12 @@ class DnsService:
         self._task: asyncio.Task[None] | None = None
         self._last_sync_at = 0.0
         self._engine_settings: tuple[float, dict[str, Any]] | None = None
+        self.templates = TemplateStore(ctx)
+        self.monitor.zone_problem = self.note_zone_problem
+        # docs/41 §6: secondary/signing trouble per zone for the home page (polled).
+        self.zone_problems: dict[tuple[str, str], dict[str, Any]] = {}
+        self.zone_problems_at: float | None = None
+        self._zones_next = 0.0
 
     # ------------------------------------------------------------------ engine settings cache
     async def current_settings(self, *, refresh: bool = False) -> dict[str, Any] | None:
@@ -313,14 +372,14 @@ class DnsService:
         if before.get("reachable") and not after["reachable"]:
             self.ctx.events.publish(Event(
                 type="dns.unreachable", severity="error",
-                title="MRK DNS is not answering",
+                title="Pishkar DNS is not answering",
                 message=str(after.get("reason") or after.get("error_code")),
                 module=MODULE_NAME, dedupe_key="dns.reachability",
                 details={"error_code": after.get("error_code"), "reason": after.get("reason")},
             ))
         elif not before.get("reachable") and after["reachable"] and before.get("installed"):
             self.ctx.events.publish(Event(
-                type="dns.recovered", severity="info", title="MRK DNS answers again",
+                type="dns.recovered", severity="info", title="Pishkar DNS answers again",
                 module=MODULE_NAME, dedupe_key="dns.reachability",
             ))
 
@@ -567,6 +626,70 @@ class DnsService:
             "last_sync": self.last_sync,
         }
 
+    # ------------------------------------------------------------------ zone problems
+    async def refresh_zone_problems(self) -> None:
+        """Secondary freshness and signing errors from the zone views (docs/41 §2, §6).
+
+        The engine's events feed the same cache between polls (``DnsMonitor``)."""
+        payload = await self.client.get("/v1/zones")
+        zones = [item for item in (payload.get("items") or [] if isinstance(payload, dict)
+                                   else []) if isinstance(item, dict)]
+        now = time.time()
+        found: dict[tuple[str, str], dict[str, Any]] = {}
+        # Event-made problems stay while the zone exists and its view says nothing.
+        kept_unknown: set[tuple[str, str]] = set()
+        details = 0
+        for summary_item in zones:
+            name = str(summary_item.get("name") or "")[:253]
+            if not name:
+                continue
+            view = summary_item
+            if summary_item.get("type") == "secondary" and not isinstance(
+                summary_item.get("secondary"), dict
+            ) and details < MAX_SECONDARY_DETAILS:
+                details += 1
+                try:
+                    detail = await self.client.get(_path("v1", "zones", name))
+                except DnsError:
+                    detail = None
+                view = detail if isinstance(detail, dict) else summary_item
+            if not isinstance(view.get("secondary"), dict):
+                kept_unknown.add(("secondary", name))
+            dnssec_view = view.get("dnssec")
+            # The zone view carries the signing settings, not always the last signing
+            # error: an event-made problem stays until signing is off or a day passes.
+            if not isinstance(dnssec_view, dict) or (
+                dnssec_view.get("enabled") is not False and not any(
+                    key in dnssec_view for key in ("error", "signing_error"))
+            ):
+                kept_unknown.add(("signing", name))
+            for kind, item in zone_view_problems(view, now).items():
+                previous = self.zone_problems.get((kind, name))
+                item["since"] = (previous or {}).get("since") or int(now)
+                found[(kind, name)] = item
+        for key in kept_unknown & set(self.zone_problems):
+            item = self.zone_problems[key]
+            if key[0] == "signing" and now - float(item.get("at") or item.get("since") or now) > \
+                    EVENT_PROBLEM_SECONDS:
+                continue
+            found.setdefault(key, item)
+        self.zone_problems = found
+        self.zone_problems_at = time.monotonic()
+
+    def note_zone_problem(self, kind: str, zone: str, item: dict[str, Any] | None) -> None:
+        """Event-driven update (``None`` clears the problem)."""
+        key = (kind, zone[:253])
+        if item is None:
+            self.zone_problems.pop(key, None)
+            return
+        previous = self.zone_problems.get(key)
+        self.zone_problems[key] = {**item, "since": (previous or {}).get("since")
+                                   or int(time.time()), "at": int(time.time())}
+
+    def cached_zone_problems(self) -> list[dict[str, Any]]:
+        return [{"kind": kind, "zone": zone, **item}
+                for (kind, zone), item in sorted(self.zone_problems.items())]
+
     # ------------------------------------------------------------------ lifecycle
     async def _tick(self) -> None:
         await self.status(refresh=True)
@@ -575,6 +698,12 @@ class DnsService:
                 await self.current_settings()
             except DnsError:
                 pass
+            if time.monotonic() >= self._zones_next:
+                self._zones_next = time.monotonic() + ZONE_PROBLEMS_EVERY_SECONDS
+                try:
+                    await self.refresh_zone_problems()
+                except DnsError:
+                    pass
         settings = self.get_settings()
         wanted = settings["services_overrides"] or settings["internal_zone_enabled"]
         due = time.monotonic() - self._last_sync_at >= SYNC_EVERY_SECONDS
@@ -653,9 +782,10 @@ def register(ctx: ModuleContext) -> None:
         """Auth + CSRF + run + audit for every mutating route."""
         principal = ctx.require_principal(request, permission)
         ctx.require_csrf(request, principal)
+        request.state.mrk_dns_user_id = principal.user_id
         token = dns_client.CURRENT_ACTOR.set(getattr(principal, "username", None))
         try:
-            result, final_id = await work(await body_of(request))
+            outcome = await work(await body_of(request))
         except DnsInputError as exc:
             return fail(exc)
         except DnsError as exc:
@@ -664,7 +794,11 @@ def register(ctx: ModuleContext) -> None:
             return fail(exc)
         finally:
             dns_client.CURRENT_ACTOR.reset(token)
+        # ``work`` returns (result, object id) or (result, object id, [extra audits]).
+        result, final_id = outcome[0], outcome[1]
         await audit(principal, action, object_type, final_id or object_id)
+        for extra_action, extra_type, extra_id in (outcome[2] if len(outcome) > 2 else ()):
+            await audit(principal, extra_action, extra_type, extra_id)
         service._setup = None
         return result
 
@@ -740,11 +874,54 @@ def register(ctx: ModuleContext) -> None:
     async def list_zones(request: Request) -> Any:
         return await read(request, "dns:read", lambda: service.client.get("/v1/zones"))
 
+    async def template_for_create(payload: dict[str, Any], chosen: Any,
+                                  variables: Any) -> dict[str, Any] | None:
+        """The template a new zone gets: the chosen one, none, or the default."""
+        if payload["type"] != "primary":
+            if chosen not in (Ellipsis, None, ""):
+                raise DnsInputError("dns_zone_invalid", "Templates are for primary zones",
+                                    [{"field": "template_id", "reason_code": "not_allowed"}])
+            return None
+        template: dict[str, Any] | None
+        if chosen is Ellipsis:
+            default = service.get_settings().get("default_template_id") or ""
+            template = await asyncio.to_thread(service.templates.get, default) if default \
+                else None
+        elif chosen in (None, ""):
+            template = None  # «no template»
+        else:
+            template = await asyncio.to_thread(service.templates.require, str(chosen))
+        if template is not None:
+            # Check the values before the zone exists, so a bad value creates nothing.
+            render_template(template, payload["name"], variables,
+                            dns_final.server_ips(ctx, service))
+        return template
+
     @router.post("/zones", status_code=201, response_model=None)
     async def create_zone(request: Request) -> Any:
-        async def work(body: Any) -> tuple[Any, str | None]:
-            payload = zone_create_body(body)
-            return await service.client.request("POST", "/v1/zones", payload), payload["name"]
+        async def work(body: Any) -> tuple[Any, ...]:
+            raw = dict(body) if isinstance(body, dict) else body
+            chosen = raw.pop("template_id", Ellipsis) if isinstance(raw, dict) else Ellipsis
+            variables = raw.pop("variables", None) if isinstance(raw, dict) else None
+            payload = zone_create_body(raw)
+            template = await template_for_create(payload, chosen, variables)
+            created = await service.client.request("POST", "/v1/zones", payload)
+            if not isinstance(created, dict):
+                created = {"name": payload["name"]}
+            if template is None:
+                return {**created, "template": None}, payload["name"]
+            # docs/41 §5: the (default) template fills the fresh zone in one change;
+            # the engine's own SOA/NS defaults may be replaced.
+            try:
+                applied = await dns_final.apply_template(service, template, payload["name"],
+                                                         variables, replace=True)
+            except (DnsError, DnsInputError) as exc:
+                info = {"template_id": template["id"], "applied": False,
+                        "error": {"code": exc.code, "message": exc.message}}
+                return {**created, "template": info}, payload["name"]
+            extra = [("dns.zone.apply_template", "dns_zone",
+                      f"{payload['name']}:{template['id']}")]
+            return {**created, "template": applied}, payload["name"], extra
 
         return await change(request, "dns:write", "dns.zone.create", "dns_zone", None, work)
 
@@ -760,8 +937,19 @@ def register(ctx: ModuleContext) -> None:
         async def work(body: Any) -> tuple[Any, str | None]:
             name = zone_from_path(zone)
             payload = zone_patch_body(body)
-            return await service.client.request("PATCH", _path("v1", "zones", name),
-                                                payload), name
+            try:
+                result = await service.client.request("PATCH", _path("v1", "zones", name),
+                                                      payload)
+            except DnsError as exc:
+                if exc.extra.get("engine_code") == "zone_invalid" and any(
+                    key not in {"disabled", "forwarders"} for key in payload
+                ):
+                    # docs/41 §0.1: section errors, not a bad zone name.
+                    exc.code = "dns_zone_invalid"
+                raise
+            # docs/41 §2: name the changed sections (never their keys or secrets).
+            sections = sorted(key for key in payload if key not in {"disabled", "forwarders"})
+            return result, f"{name}:{','.join(sections)}" if sections else name
 
         return await change(request, "dns:write", "dns.zone.update", "dns_zone", zone[:255],
                             work)
@@ -995,6 +1183,9 @@ def register(ctx: ModuleContext) -> None:
     # D4 (docs/40 §5): DNSSEC, certificates, DoH tokens, device guides.
     dns_encrypted.register_routes(ctx, router, service, fail=fail, change=change, read=read,
                                   body_of=body_of)
+    # Final phase (docs/41 §5–§6): templates, secondary/TSIG/signing, filtering, backup.
+    dns_final.register_routes(ctx, router, service, fail=fail, change=change, read=read,
+                              body_of=body_of, audit=audit)
 
     ctx.routers.append(router)
     ctx.start_hooks.append(service.start)

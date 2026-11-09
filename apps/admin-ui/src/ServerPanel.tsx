@@ -87,7 +87,7 @@ const COPY = {
   wizardTitle: { fa: "وصل کردن دستیار سرور", en: "Connect the server helper" },
   repairTitle: { fa: "وصل کردن دوباره یا عوض کردن کد اتصال", en: "Reconnect or change the pairing code" },
   step1: { fa: "روشن کردن", en: "Turn on" },
-  step1Hint: { fa: "این دستور را در پوشه MRK روی سرور اجرا کنید تا دستیار سرور روشن شود.", en: "Run this in the MRK folder on the server to turn the helper on." },
+  step1Hint: { fa: "این دستور را در پوشه پیشکار روی سرور اجرا کنید تا دستیار سرور روشن شود.", en: "Run this in the Pishkar folder on the server to turn the helper on." },
   step1Label: { fa: "دستور روشن کردن", en: "Command to turn it on" },
   step1Note: { fa: "دستیار سرور از قبل در فایل Compose هست؛ فقط باید روشنش کنید.", en: "The helper is already in the Compose file; you only need to turn it on." },
   step2: { fa: "کپی کد", en: "Copy the code" },

@@ -20,6 +20,7 @@ const (
 	SrcMitigated
 	SrcForwarder
 	SrcRecursive // resolved from the root (docs/40 §4)
+	SrcBlocked   // filtering (docs/41 §3.1)
 	SrcCount
 )
 
@@ -28,7 +29,7 @@ const srcCountV1 = 8
 
 // SourceNames are the API names of the sources.
 var SourceNames = [SrcCount]string{"authoritative", "override", "cache", "upstream", "refused", "rate_limited", "mitigated",
-	"forwarder", "recursive"}
+	"forwarder", "recursive", "blocked"}
 
 // Transports.
 const (

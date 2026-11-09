@@ -427,6 +427,13 @@ func (s *Server) serveTCP(c net.Conn) {
 		if _, err := io.ReadFull(c, pkt); err != nil {
 			return
 		}
+		if engine.IsTransfer(pkt) { // AXFR/IXFR stream several messages (docs/41 §2.2)
+			inner.Wait() // keep answers in order around the transfer
+			if !s.e.ServeTransfer(pkt, client, write) {
+				return
+			}
+			continue
+		}
 		resp, v := s.e.Fast(pkt, client, engine.TCP, sc)
 		switch v {
 		case engine.Reply:

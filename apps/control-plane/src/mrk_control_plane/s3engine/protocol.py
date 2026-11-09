@@ -453,6 +453,14 @@ class S3Api:
             ),
             "",
         )
+        if not suffix and host in snapshot.bucket_hosts:
+            # docs/43: a verified custom domain of one bucket (path = key).
+            request.bucket = snapshot.bucket_hosts[host]
+            remainder = path[1:] if path.startswith("/") else path
+            request.key = (
+                unquote_to_bytes(remainder).decode("utf-8", "replace") if remainder else None
+            )
+            return
         if suffix:
             request.bucket = host[: -(len(suffix) + 1)]
             remainder = path[1:] if path.startswith("/") else path
@@ -636,7 +644,7 @@ class S3Api:
             if exists and self.allowed(principal, request, "s3:ListBucket", name):
                 raise S3Error("BucketAlreadyOwnedByYou", BucketName=name)
             raise S3Error(
-                "AccessDenied", "Buckets are created in the MRK panel, not through the S3 API."
+                "AccessDenied", "Buckets are created in the Pishkar panel, not through the S3 API."
             )
         if method == "DELETE" and not any(
             item in query for item in ("tagging", "lifecycle", "policy", "cors", "website")
@@ -644,7 +652,7 @@ class S3Api:
             if not exists:
                 raise S3Error("NoSuchBucket", BucketName=name)
             raise S3Error(
-                "AccessDenied", "Buckets are deleted in the MRK panel, not through the S3 API."
+                "AccessDenied", "Buckets are deleted in the Pishkar panel, not through the S3 API."
             )
         bucket = self.bucket_for(name)
         if method == "HEAD":
@@ -1616,17 +1624,50 @@ class S3Api:
         if headers.get("x-amz-object-lock-mode") or headers.get("x-amz-object-lock-legal-hold"):
             raise S3Error("NotImplemented", "Object lock is not implemented.")
 
-    def check_quota(self, bucket: BaseBucket, adding: int, replacing: int = 0) -> int | None:
-        """Raise when ``adding`` bytes do not fit; return the remaining budget (None = unlimited)."""  # noqa: E501
+    def check_quota(
+        self, bucket: BaseBucket, adding: int, replacing: int = 0, *, new_object: bool = False
+    ) -> int | None:
+        """Raise when ``adding`` bytes do not fit; return the remaining budget (None = unlimited).
+
+        Checks the bucket's own quota and, for a «my space» bucket, the byte/object quota
+        its workspace shares across all its buckets (docs/43 §3).
+        """
+        remaining: int | None = None
         quota = bucket.config.quota_bytes
-        if quota is None:
-            return None
-        _objects, used = bucket.usage()
-        used += bucket.index.uploads_bytes() if isinstance(bucket, ManagedBucket) else 0
-        remaining = quota - used + replacing
-        if adding > remaining:
-            raise S3Error("QuotaExceeded", f"The bucket quota of {quota} bytes would be exceeded.")
-        return max(0, remaining)
+        if quota is not None:
+            _objects, used = bucket.usage()
+            used += bucket.index.uploads_bytes() if isinstance(bucket, ManagedBucket) else 0
+            remaining = quota - used + replacing
+            if adding > remaining:
+                raise S3Error(
+                    "QuotaExceeded", f"The bucket quota of {quota} bytes would be exceeded."
+                )
+        group = self.snapshot.groups.get(bucket.config.name)
+        if group is not None and (group.max_bytes is not None or group.max_objects is not None):
+            objects = used_bytes = 0
+            for name in group.buckets:
+                member = self.engine.bucket(name)
+                if member is None:
+                    continue
+                count, size = member.usage()
+                objects += count
+                used_bytes += size
+                if isinstance(member, ManagedBucket):
+                    used_bytes += member.index.uploads_bytes()
+            if group.max_objects is not None and new_object and objects + 1 > group.max_objects:
+                raise S3Error(
+                    "QuotaExceeded",
+                    f"The workspace file limit of {group.max_objects} would be exceeded.",
+                )
+            if group.max_bytes is not None:
+                left = group.max_bytes - used_bytes + replacing
+                if adding > left:
+                    raise S3Error(
+                        "QuotaExceeded",
+                        f"The workspace quota of {group.max_bytes} bytes would be exceeded.",
+                    )
+                remaining = left if remaining is None else min(remaining, left)
+        return None if remaining is None else max(0, remaining)
 
     def check_disk(self, bucket: BaseBucket) -> None:
         path = bucket.storage_path()
@@ -1655,7 +1696,9 @@ class S3Api:
             raise S3Error("EntityTooLarge", MaxSizeAllowed=str(limit), ProposedSize=str(declared))
         existing = await asyncio.to_thread(bucket.head, key)
         await self.check_conditional_write(request, existing)
-        remaining = self.check_quota(bucket, declared or 0, existing.size if existing else 0)
+        remaining = self.check_quota(
+            bucket, declared or 0, existing.size if existing else 0, new_object=existing is None
+        )
         self.check_disk(bucket)
         if key.endswith("/") and isinstance(bucket, LinkedBucket):
             if declared not in (0, None):
@@ -1833,7 +1876,9 @@ class S3Api:
         else:
             meta.pop("tagging", None)
         existing = await asyncio.to_thread(bucket.head, key)
-        self.check_quota(bucket, info.size, existing.size if existing else 0)
+        self.check_quota(
+            bucket, info.size, existing.size if existing else 0, new_object=existing is None
+        )
         self.check_disk(bucket)
         if info.is_dir and isinstance(bucket, LinkedBucket):
             result = await asyncio.to_thread(bucket.make_dir_marker, key)
@@ -2206,7 +2251,7 @@ class S3Api:
         etag = multipart_etag([part.etag for part in chosen])
         existing = await asyncio.to_thread(bucket.head, key)
         await self.check_conditional_write(request, existing)
-        self.check_quota(bucket, 0)
+        self.check_quota(bucket, 0, new_object=existing is None)
 
         async def assemble() -> ObjectInfo:
             async with bucket.lock_for(key):

@@ -106,9 +106,11 @@ type ZoneSummary struct {
 // ZoneDetail is GET /v1/zones/{zone}.
 type ZoneDetail struct {
 	ZoneSummary
-	Forwarders []string     `json:"forwarders"`
-	Version    int          `json:"version"`
-	SOA        *zone.Record `json:"soa,omitempty"`
+	Forwarders    []string     `json:"forwarders"`
+	Version       int          `json:"version"`
+	SOA           *zone.Record `json:"soa,omitempty"`
+	ZoneD5View                 // docs/41 §2 (zones_d5.go)
+	ZoneViewsView              // docs/41 §3.3 (policy.go)
 }
 
 func summary(z *zone.Zone) ZoneSummary {
@@ -146,6 +148,8 @@ func detail(z *zone.Zone) ZoneDetail {
 		s := z.SOARecord()
 		d.SOA = &s
 	}
+	d.ZoneD5View = d5View(z)
+	d.ZoneViewsView = zoneViewsView(z)
 	return d
 }
 
@@ -157,7 +161,9 @@ func (e *Engine) Zone(name string) (ZoneDetail, error) {
 	if err != nil {
 		return ZoneDetail{}, err
 	}
-	return detail(z), nil
+	d := detail(z)
+	e.d5Status(&d, z)
+	return d, nil
 }
 
 func parseUpstreamErr(s string) error { _, err := config.ParseUpstream(s); return err }
@@ -230,8 +236,12 @@ func (e *Engine) commitZoneLocked(old, z *zone.Zone, reason string) error {
 	z.UpdatedAt = now
 	z.Reason = reason
 	z.Actor = e.currentActor()
-	c, err := zone.Compile(z)
+	c, err := e.compileZone(z)
 	if err != nil {
+		var fe *fielderr.Error
+		if errors.As(err, &fe) {
+			return err
+		}
 		return fielderr.New(CodeRecordInvalid, err.Error())
 	}
 	if err := e.st.SaveZone(z); err != nil {
@@ -243,13 +253,16 @@ func (e *Engine) commitZoneLocked(old, z *zone.Zone, reason string) error {
 		return err
 	}
 	e.Cache.Flush(z.Name)
+	e.zoneCommittedD5(old, z)
 	return nil
 }
 
 // ZonePatch is PATCH /v1/zones/{zone}.
 type ZonePatch struct {
-	Disabled   *bool     `json:"disabled"`
-	Forwarders *[]string `json:"forwarders"`
+	Disabled       *bool     `json:"disabled"`
+	Forwarders     *[]string `json:"forwarders"`
+	ZonePatchD5              // docs/41 §2 (zones_d5.go)
+	ZonePatchViews           // docs/41 §3.3 (policy.go)
 }
 
 // PatchZone toggles disabled or replaces forwarders.
@@ -274,6 +287,12 @@ func (e *Engine) PatchZone(name string, p ZonePatch) (ZoneDetail, error) {
 		}
 		z.Forwarders = append([]string(nil), (*p.Forwarders)...)
 	}
+	if err := e.applyPatchD5(old, z, p.ZonePatchD5); err != nil {
+		return ZoneDetail{}, err
+	}
+	if err := applyPatchViews(z, p.ZonePatchViews); err != nil {
+		return ZoneDetail{}, err
+	}
 	if err := e.commitZoneLocked(old, z, "update"); err != nil {
 		return ZoneDetail{}, err
 	}
@@ -293,6 +312,7 @@ func (e *Engine) DeleteZone(name string) error {
 	}
 	delete(e.zones, z.Name)
 	delete(e.compiled, z.Name)
+	e.zoneDeletedD5(z)
 	if err := e.rebuildLocked(); err != nil {
 		return err
 	}
@@ -305,6 +325,9 @@ func (e *Engine) primaryLocked(name string) (*zone.Zone, error) {
 	if err != nil {
 		return nil, err
 	}
+	if z.Type == zone.TypeSecondary {
+		return nil, fielderr.New(CodeZoneReadOnly, "secondary zones are read-only copies of their primaries")
+	}
 	if z.Type != zone.TypePrimary {
 		return nil, fielderr.New(CodeZoneTypeMismatch, "operation needs a primary zone")
 	}
@@ -315,6 +338,9 @@ func (e *Engine) primaryLocked(name string) (*zone.Zone, error) {
 func (e *Engine) Export(name string) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if t, ok := e.secondaryExportLocked(name); ok {
+		return t, nil
+	}
 	z, err := e.primaryLocked(name)
 	if err != nil {
 		return "", err
@@ -418,6 +444,9 @@ func (e *Engine) Rollback(name string, version int) (ZoneDetail, error) {
 	if err != nil {
 		return ZoneDetail{}, err
 	}
+	if old.Type == zone.TypeSecondary {
+		return ZoneDetail{}, fielderr.New(CodeZoneReadOnly, "secondary zones are read-only copies of their primaries")
+	}
 	hv, err := e.st.LoadVersion(old.Name, version)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -440,6 +469,9 @@ func (e *Engine) Rollback(name string, version int) (ZoneDetail, error) {
 func (e *Engine) Records(name string) ([]zone.Record, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if rs, ok := e.secondaryRecordsLocked(name); ok {
+		return rs, nil
+	}
 	z, err := e.primaryLocked(name)
 	if err != nil {
 		return nil, err
@@ -878,7 +910,7 @@ func (e *Engine) FlushCache(name string) (int, error) {
 			return 0, fielderr.Single(CodeInvalidRequest, "invalid name", "name", "invalid_name")
 		}
 	}
-	return e.Cache.Flush(name), nil
+	return e.Cache.Flush(name) + e.flushGroupCaches(name), nil
 }
 
 // ListenerStatus is reported by the server.

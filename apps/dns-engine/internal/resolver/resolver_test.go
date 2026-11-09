@@ -118,26 +118,40 @@ func TestStrategiesAndHealth(t *testing.T) {
 	slow := testutil.StartUpstream(t, func(q dns.Question) *dns.Msg { return testutil.A(q, 60, "192.0.2.2") })
 	slow.SetDelay(80 * time.Millisecond)
 	dead := deadAddr(t)
+	// The assertions count which upstream answered instead of looking at the
+	// last answer only: under -race on a loaded CI runner a single scheduling
+	// stall (tens of ms) can make one exchange of "good" look slower than
+	// "slow" or push "slow" past its adaptive attempt timeout. The strategy
+	// is still verified because the expected upstream must win a clear
+	// majority of the queries after the warm-up.
+	const rounds = 10
 	for _, strat := range []string{config.StrategyFastest, config.StrategyInOrder, config.StrategyParallel} {
 		d := mustUp(t, "dead", dead)
 		g := NewGroup([]*Upstream{d, mustUp(t, "slow", slow.Addr), mustUp(t, "good", good.Addr)}, strat, NewLimiter(100))
 		g.AttemptTimeout = 300 * time.Millisecond
-		var answered *Upstream
-		for i := 0; i < 6; i++ {
-			r, u, err := g.Exchange(ctx(t), NewQuery("x.example.", dns.TypeA))
+		picks := map[string]int{}
+		for i := 0; i < rounds; i++ {
+			c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			r, u, err := g.Exchange(c, NewQuery("x.example.", dns.TypeA))
+			cancel()
 			if err != nil || len(r.Answer) != 1 {
 				t.Fatalf("%s: %v", strat, err)
 			}
-			answered = u
+			if i >= 2 { // the first queries learn RTTs and health
+				picks[u.ID]++
+			}
 		}
 		if d.Healthy() && strat == config.StrategyInOrder {
 			t.Errorf("%s: dead upstream still healthy", strat)
 		}
-		if strat == config.StrategyFastest && answered.ID != "good" {
-			t.Errorf("fastest picked %s (rtt good=%v slow=%v)", answered.ID, g.Upstreams[2].RTT(), g.Upstreams[1].RTT())
+		if picks["dead"] > 0 {
+			t.Errorf("%s: the dead upstream answered %v", strat, picks)
 		}
-		if strat == config.StrategyInOrder && answered.ID != "slow" {
-			t.Errorf("in_order picked %s", answered.ID)
+		if strat == config.StrategyFastest && picks["good"] < (rounds-2)/2+1 {
+			t.Errorf("fastest picks %v (rtt good=%v slow=%v)", picks, g.Upstreams[2].RTT(), g.Upstreams[1].RTT())
+		}
+		if strat == config.StrategyInOrder && picks["slow"] < (rounds-2)/2+1 {
+			t.Errorf("in_order picks %v", picks)
 		}
 	}
 	// health check revives an upstream that answers again

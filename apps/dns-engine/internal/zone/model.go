@@ -44,6 +44,9 @@ type Record struct {
 	Data     json.RawMessage `json:"data"`
 	Disabled bool            `json:"disabled"`
 	Comment  string          `json:"comment"`
+	// View is the client group seeing this record (split horizon, docs/41
+	// §3.3); empty = every client.
+	View string `json:"view,omitempty"`
 }
 
 // SOA holds the editable SOA fields; the serial is managed by the engine.
@@ -72,6 +75,10 @@ type Zone struct {
 	Actor      string    `json:"actor,omitempty"`
 	SOA        SOA       `json:"soa"`
 	Records    []Record  `json:"records"`
+	// D5Config: secondary, transfer, notify, update and signing (docs/41 §2).
+	D5Config
+	// Views are the split-horizon views (docs/41 §3.3, views.go).
+	Views []View `json:"views,omitempty"`
 }
 
 // Clone deep-copies z (record data slices are shared; they are immutable).
@@ -79,6 +86,7 @@ func (z *Zone) Clone() *Zone {
 	c := *z
 	c.Forwarders = append([]string(nil), z.Forwarders...)
 	c.Records = append([]Record(nil), z.Records...)
+	c.Views = append([]View(nil), z.Views...)
 	return &c
 }
 
@@ -560,6 +568,7 @@ type RecordInput struct {
 	Data     json.RawMessage `json:"data"`
 	Disabled bool            `json:"disabled"`
 	Comment  string          `json:"comment"`
+	View     string          `json:"view"`
 }
 
 // DefaultRecordTTL applies when ttl is omitted.
@@ -596,6 +605,14 @@ func BuildRecord(in RecordInput, origin string) (Record, dns.RR, fielderr.List) 
 	}
 	r.Comment = in.Comment
 	r.Disabled = in.Disabled
+	if in.View != "" {
+		if !ValidViewID(in.View) {
+			l.Add("view", "invalid_view")
+		} else if r.Type == "NS" && r.Name == "@" {
+			l.Add("view", "not_allowed") // the delegation of the zone is the same for everyone
+		}
+		r.View = in.View
+	}
 	if r.Type == "SOA" {
 		l.Add("type", "soa_managed")
 	}
@@ -620,4 +637,6 @@ func (r *Record) RR(origin string) (dns.RR, error) {
 }
 
 // dataKey identifies an RR's data for duplicate detection.
-func dataKey(r *Record) string { return r.Name + "\x00" + r.Type + "\x00" + string(r.Data) }
+func dataKey(r *Record) string {
+	return r.Name + "\x00" + r.Type + "\x00" + string(r.Data) + "\x00" + r.View
+}

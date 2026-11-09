@@ -7,3 +7,4 @@ export * from "./audit";
 export * from "./roles";
 export * from "./confirm";
 export * from "./kinds";
+export * from "./mySpace";

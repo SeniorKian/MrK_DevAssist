@@ -56,6 +56,8 @@ class BucketConfig:
     public_list: bool
     quota_bytes: int | None
     created_at_ns: int
+    # docs/43: the bucket's workspace is suspended, so nothing may be written.
+    frozen: bool = False
 
     @property
     def linked(self) -> bool:
@@ -63,7 +65,17 @@ class BucketConfig:
 
     @property
     def read_only(self) -> bool:
-        return self.linked and self.link_mode == "ro"
+        return self.frozen or (self.linked and self.link_mode == "ro")
+
+
+@dataclass(frozen=True, slots=True)
+class QuotaGroup:
+    """A «my space» workspace: byte/object limits shared by its buckets (docs/43 §3)."""
+
+    id: str
+    buckets: tuple[str, ...]
+    max_bytes: int | None
+    max_objects: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +112,9 @@ class Snapshot:
     generation: int = 0
     # Extra virtual-host suffixes (other S3 domains, docs/35 §4); the primary is above.
     extra_suffixes: tuple[str, ...] = ()
+    # docs/43: bucket name -> its workspace quota group; verified bucket domains.
+    groups: dict[str, QuotaGroup] = field(default_factory=dict)
+    bucket_hosts: dict[str, str] = field(default_factory=dict)
 
 
 def _created_ns(value: object) -> int:
@@ -189,6 +204,8 @@ def parse_snapshot(payload: Any, settings: EngineSettings, generation: int = 0) 
         keys=keys,
         generation=generation,
         extra_suffixes=extra,
+        groups=_parse_groups(payload.get("quota_groups"), buckets),
+        bucket_hosts=_parse_hosts(payload.get("bucket_hosts"), buckets),
     )
 
 
@@ -225,7 +242,40 @@ def _parse_bucket(item: Any, settings: EngineSettings) -> BucketConfig | None:
         public_list=item.get("public_list") is True,
         quota_bytes=quota,
         created_at_ns=_created_ns(item.get("created_at")),
+        frozen=item.get("frozen") is True,
     )
+
+
+def _limit(value: object) -> int | None:
+    if value is None or isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _parse_groups(raw: Any, buckets: dict[str, BucketConfig]) -> dict[str, QuotaGroup]:
+    if not isinstance(raw, list):
+        return {}
+    groups: dict[str, QuotaGroup] = {}
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        names = tuple(name for name in item.get("buckets") or [] if isinstance(name, str)
+                      and name in buckets)
+        group = QuotaGroup(item["id"], names, _limit(item.get("bytes")),
+                           _limit(item.get("objects")))
+        for name in names:
+            groups[name] = group
+    return groups
+
+
+def _parse_hosts(raw: Any, buckets: dict[str, BucketConfig]) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        host.strip().lower().rstrip("."): bucket
+        for host, bucket in list(raw.items())[:10000]
+        if isinstance(host, str) and isinstance(bucket, str) and bucket in buckets
+    }
 
 
 def _parse_identity(item: Any) -> Identity | None:

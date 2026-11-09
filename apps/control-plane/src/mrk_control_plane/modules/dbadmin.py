@@ -180,11 +180,11 @@ def network_guide() -> dict[str, Any]:
         "docker_command": f"docker network connect {DOKPLOY_NETWORK} <mrk-container-name>",
         "default_ports": dict(policy.DEFAULT_PORTS),
         "notes": [
-            "Add the network to the MRK service in your compose file and redeploy, or run "
+            "Add the network to the Pishkar service in your compose file and redeploy, or run "
             "the docker command once (it is lost when the container is recreated).",
             f"'{DOKPLOY_NETWORK}' is created by Dokploy; mark it 'external: true' so compose "
             "never creates or deletes it.",
-            "MRK does not change Dokploy or its network; joining only lets MRK open "
+            "Pishkar does not change Dokploy or its network; joining only lets Pishkar open "
             "connections to the databases you configure.",
             "Prefer a dedicated read-only database user for browsing; write mode is "
             "available to owner/admin with a typed confirmation.",

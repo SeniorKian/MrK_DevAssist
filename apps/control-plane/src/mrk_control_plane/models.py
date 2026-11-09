@@ -65,6 +65,9 @@ class AuditEvent(Base):
     source_ip: Mapped[str | None] = mapped_column(String(64))
     request_id: Mapped[str | None] = mapped_column(String(128), index=True)
     occurred_at: Mapped[int] = mapped_column(Integer, index=True)
+    # docs/43: the owning workspace and the person an admin acted for («view as»).
+    workspace_id: Mapped[str | None] = mapped_column(String(16), index=True)
+    on_behalf_of: Mapped[int | None] = mapped_column(Integer)
 
 
 class ApiToken(Base):
@@ -81,6 +84,9 @@ class ApiToken(Base):
     expires_at: Mapped[int] = mapped_column(Integer, index=True)
     last_used_at: Mapped[int | None] = mapped_column(Integer)
     revoked_at: Mapped[int | None] = mapped_column(Integer)
+    # docs/43 §3: a «my space» token is bound to one workspace and holds only my.* scopes.
+    workspace_id: Mapped[str | None] = mapped_column(String(16), index=True)
+    ip_allow: Mapped[list[str] | None] = mapped_column(JSON)
 
     user: Mapped[User] = relationship(back_populates="api_tokens")
 
@@ -520,3 +526,134 @@ class ServiceDomain(Base):
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int] = mapped_column(Integer)
     created_by_user_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class DnsTemplate(Base):
+    """A user-made DNS domain template (docs/41 §5); built-in templates live in code.
+
+    ``body`` holds ``{zone, records, variables}`` exactly as the API shows them.
+    """
+
+    __tablename__ = "dns_templates"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[dict[str, Any]] = mapped_column(JSON)
+    copied_from: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)
+    created_by_user_id: Mapped[int | None] = mapped_column(Integer)
+    updated_by_user_id: Mapped[int | None] = mapped_column(Integer)
+
+
+# ----------------------------------------------------------------------------- My space (docs/43)
+
+
+class TenancyPlan(Base):
+    """A package of features and quotas (docs/43 §1). ``None`` in a quota = unlimited."""
+
+    __tablename__ = "tenancy_plans"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name_fa: Mapped[str] = mapped_column(String(100))
+    name_en: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    features: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    quotas: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(16))
+    plan_id: Mapped[str] = mapped_column(String(32), index=True)
+    quota_overrides: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_by_user_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class WorkspaceMember(Base):
+    __tablename__ = "workspace_members"
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[int] = mapped_column(Integer)
+
+
+class ResourceOwner(Base):
+    """Which workspace owns a resource; no row = the system (admins only)."""
+
+    __tablename__ = "resource_owners"
+
+    kind: Mapped[str] = mapped_column(String(24), primary_key=True)
+    resource_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    created_by: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(Integer)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class WorkspaceInvite(Base):
+    __tablename__ = "workspace_invites"
+
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(254))
+    role: Mapped[str] = mapped_column(String(16))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_by: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[int] = mapped_column(Integer)
+    accepted_at: Mapped[int | None] = mapped_column(Integer)
+    revoked_at: Mapped[int | None] = mapped_column(Integer)
+
+
+class TenancySignup(Base):
+    __tablename__ = "tenancy_signups"
+
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    created_at: Mapped[int] = mapped_column(Integer)
+    decided_at: Mapped[int | None] = mapped_column(Integer)
+    decided_by: Mapped[int | None] = mapped_column(Integer)
+
+
+class ImpersonationSession(Base):
+    """«View as» grant: usable only together with the admin's own session (docs/43 §2)."""
+
+    __tablename__ = "impersonation_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    admin_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    write: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[int] = mapped_column(Integer)
+    revoked_at: Mapped[int | None] = mapped_column(Integer)

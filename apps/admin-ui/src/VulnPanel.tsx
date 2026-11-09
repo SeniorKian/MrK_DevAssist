@@ -90,7 +90,7 @@ const EXTRA_ECOSYSTEMS = ["Debian", "Ubuntu", "Alpine", "Wolfi", "Chainguard", "
 const STATUS_ORDER: Record<ImageStatus, number> = { critical: 0, warning: 1, error: 2, unsupported: 3, secure: 4 };
 
 const COPY = {
-  unavailable: { fa: "بررسی امنیتی روی نسخه فعلی سرور نیست. MRK را به‌روز کنید.", en: "Security checks aren't on this server version. Update MRK." },
+  unavailable: { fa: "بررسی امنیتی روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "Security checks aren't on this server version. Update Pishkar." },
   // verdict
   verdictTitle: { fa: "وضعیت امنیت برنامه‌ها", en: "Your apps' security" },
   off: { fa: "بررسی امنیتی خاموش است.", en: "Security checks are off." },
@@ -134,7 +134,7 @@ const COPY = {
   doFix: { fa: "{n} مورد با نسخه تازه‌تر درست می‌شود. نسخه پایه برنامه (ایمیج) را به‌روز کنید و برنامه را دوباره منتشر کنید.", en: "{n} can be fixed with a newer version. Update the base image and redeploy the app." },
   doWait: { fa: "هنوز نسخه اصلاح‌شده‌ای نیامده. خودکار دوباره بررسی می‌شود؛ تا آن موقع اگر برنامه رو به اینترنت است، دسترسی به آن را محدود کنید.", en: "No fixed version exists yet. It'll be checked again automatically; meanwhile, limit access if the app faces the internet." },
   doError: { fa: "این برنامه بررسی نشد: {reason}", en: "This app wasn't checked: {reason}" },
-  doUnsupported: { fa: "MRK نتوانست فهرست بسته‌های این برنامه را بخواند؛ معمولاً برای برنامه‌های خیلی کوچک یا ساخته‌شده از صفر این‌طور است.", en: "MRK couldn't read this app's package list; this is usual for very small or from-scratch images." },
+  doUnsupported: { fa: "پیشکار نتوانست فهرست بسته‌های این برنامه را بخواند؛ معمولاً برای برنامه‌های خیلی کوچک یا ساخته‌شده از صفر این‌طور است.", en: "Pishkar couldn't read this app's package list; this is usual for very small or from-scratch images." },
   doNothing: { fa: "کاری لازم نیست. مشکل شناخته‌شده‌ای پیدا نشد.", en: "Nothing to do. No known issues were found." },
   seeIssues: { fa: "دیدن مشکل‌ها", en: "See issues" },
   redeploy: { fa: "انتشار دوباره در Dokploy", en: "Redeploy in Dokploy" },
@@ -193,7 +193,7 @@ const COPY = {
   remove: { fa: "پاک کن", en: "Delete" },
   // feeds (Advanced)
   feedsTitle: { fa: "فهرست‌های مشکلات امنیتی", en: "Security issue lists" },
-  feedsHint: { fa: "MRK این فهرست‌ها را از OSV دانلود و روی همین سرور نگه می‌دارد.", en: "MRK downloads these lists from OSV and keeps them on this server." },
+  feedsHint: { fa: "پیشکار این فهرست‌ها را از OSV دانلود و روی همین سرور نگه می‌دارد.", en: "Pishkar downloads these lists from OSV and keeps them on this server." },
   feed: { fa: "فهرست", en: "List" },
   records: { fa: "تعداد مورد", en: "Entries" },
   size: { fa: "حجم", en: "Size" },

@@ -51,7 +51,7 @@ def _port_open(port: int) -> bool:
 def _assert_offline(data_dir: Path) -> None:
     heartbeat = data_dir / "control-plane" / "runtime-heartbeat"
     if heartbeat.is_file() and time.time() - heartbeat.stat().st_mtime < HEARTBEAT_MAX_AGE_SECONDS:
-        raise RestoreError("MRK is still running; stop the service before restore")
+        raise RestoreError("Pishkar is still running; stop the service before restore")
     # The package engines write into npm/ and pypi/ independently of the
     # control plane; swapping those trees under a live engine corrupts them.
     busy = [port for port in _engine_ports() if _port_open(port)]
@@ -483,7 +483,7 @@ def _start_embedded_pglite(data_dir: Path, database_url: str) -> subprocess.Pope
 
 
 def run() -> None:
-    parser = argparse.ArgumentParser(description="Apply a validated MRK backup offline")
+    parser = argparse.ArgumentParser(description="Apply a validated Pishkar backup offline")
     subparsers = parser.add_subparsers(dest="command", required=True)
     apply_parser = subparsers.add_parser("apply")
     apply_parser.add_argument("--plan", required=True)

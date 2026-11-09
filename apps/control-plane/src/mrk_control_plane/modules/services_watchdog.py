@@ -190,7 +190,7 @@ class ServiceWatchdog:
                 severity="error",
                 title=f"{service_id} stopped working",
                 message=(
-                    "MRK keeps the panel up and retries automatically"
+                    "Pishkar keeps the panel up and retries automatically"
                     if auto
                     else "automatic restart is off; restart it from My services"
                 ),
