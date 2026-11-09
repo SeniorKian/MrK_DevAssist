@@ -10,7 +10,9 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 ### Added
 - Open-source release files: new README (English and Persian), CONTRIBUTING, Code of Conduct,
   Security policy, issue and pull request templates, funding placeholder, this changelog.
-- Product name **DevAssist** (DevAssist). Code, image and container identifiers keep the `mrk` prefix.
+- Product name **MrK DevAssist**: product "DevAssist" with the maker signature "MrK", and a new
+  D+A logo. Code and container identifiers keep the `mrk` prefix; the published image is
+  `ghcr.io/<owner>/mrk-devassist`.
 - Native install without Docker for Debian 12/13 and Ubuntu 22.04/24.04:
   `scripts/install-native.sh` (install, upgrade, status, uninstall, `--dry-run`) and systemd units
   in `deploy/native/systemd/` that mirror the containers' processes, environment and hardening.

@@ -23,7 +23,7 @@ login و push، تست backend، audit و build UI دوباره اجرا می‌
 `linux/amd64` و `linux/arm64` در آدرس زیر منتشر می‌شود:
 
 ```text
-ghcr.io/<github-owner>/mrk-package-mirror:<version>
+ghcr.io/<github-owner>/mrk-devassist:<version>
 ```
 
 Workflow از `GITHUB_TOKEN` با permission محدود `packages: write` استفاده می‌کند؛ secret شخصی
@@ -43,7 +43,7 @@ git push origin v0.1.0
 ```yaml
 services:
   mrk-mirror:
-    image: ghcr.io/<github-owner>/mrk-package-mirror@sha256:<digest>
+    image: ghcr.io/<github-owner>/mrk-devassist@sha256:<digest>
     volumes:
       - /opt/mirrors/pypi:/data
 ```

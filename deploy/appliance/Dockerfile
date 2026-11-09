@@ -73,8 +73,8 @@ ARG BUILD_DATE="unknown"
 ARG SOURCE_URL="unknown"
 ARG PIP_INDEX_URL
 
-LABEL org.opencontainers.image.title="MRK Package Mirror" \
-      org.opencontainers.image.description="Single-container npm and PyPI mirror appliance" \
+LABEL org.opencontainers.image.title="MrK DevAssist" \
+      org.opencontainers.image.description="Self-hosted server and DevOps assistant next to Dokploy: npm/PyPI mirrors, S3, DNS, backups, monitoring" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="$SOURCE_URL" \
       org.opencontainers.image.revision="$VCS_REF" \

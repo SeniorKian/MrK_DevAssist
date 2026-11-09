@@ -10,7 +10,7 @@
 
 ## 1. چه چیزهایی اجرا می‌شود
 
-یک ایمیج (`mrk-package-mirror`) و حداکثر چهار کانتینر:
+یک ایمیج (`mrk-devassist`) و حداکثر چهار کانتینر:
 
 | سرویس Compose | پروفایل | کارش | دسترسی |
 |---|---|---|---|
@@ -74,7 +74,7 @@ echo 'MRK_HOST_DATA_PATH=/srv/devassist-data' >> .env
 <div dir="ltr">
 
 ```bash
-export MRK_IMAGE=ghcr.io/seniorkian/mrk-package-mirror@sha256:<digest>
+export MRK_IMAGE=ghcr.io/seniorkian/mrk-devassist@sha256:<digest>
 sudo install -d -o 10001 -g 10001 -m 0750 /opt/mirrors/pypi    # the /data mount of this file
 export MRK_TRUSTED_HOSTS=panel.example.com,npm.example.com,pypi.example.com
 export MRK_CORS_ORIGINS=https://panel.example.com

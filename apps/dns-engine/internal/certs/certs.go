@@ -315,7 +315,7 @@ func generate(ns []string, now time.Time) ([]byte, []byte, error) {
 	}
 	tpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: ns[0], Organization: []string{"MRK DevAssist DNS"}},
+		Subject:               pkix.Name{CommonName: ns[0], Organization: []string{"MrK DevAssist DNS"}},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(SelfSignedLife),
 		KeyUsage:              x509.KeyUsageDigitalSignature,

@@ -8,7 +8,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: MRK Package Mirror is unreachable
+          summary: MrK DevAssist is unreachable
           runbook: docs/18-operations-runbooks.md#service-down
 
       - alert: MrkRegistryUnavailable

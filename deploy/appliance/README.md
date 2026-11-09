@@ -32,7 +32,7 @@ upstream automatically.
 
 `compose.production.yaml` pulls the single GHCR image and mounts the requested host path
 `/opt/mirrors/pypi` at `/data`. `MRK_IMAGE` is mandatory and must be an immutable digest such as
-`ghcr.io/OWNER/mrk-package-mirror@sha256:...`; the Compose file deliberately has no `latest`
+`ghcr.io/OWNER/mrk-devassist@sha256:...`; the Compose file deliberately has no `latest`
 fallback.
 
 The production Compose file uses `expose` rather than publishing host ports. In Dokploy, create
