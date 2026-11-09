@@ -133,8 +133,10 @@ def test_plugin_refuses_over_quota_before_storage(tmp_path: Path) -> None:
 
 
 def _verdaccio_bin() -> Path | None:
-    candidates = [os.environ.get("MRK_TEST_VERDACCIO_DIR", ""), str(REPO / "deploy" / "verdaccio"),
-                  str(REPO.parents[2] / "deploy" / "verdaccio")]
+    candidates = [os.environ.get("MRK_TEST_VERDACCIO_DIR", ""), str(REPO / "deploy" / "verdaccio")]
+    # a worktree under <repo>/.claude/worktrees/<name> can reuse the main checkout's node_modules
+    if len(REPO.parents) > 2:
+        candidates.append(str(REPO.parents[2] / "deploy" / "verdaccio"))
     for candidate in candidates:
         if candidate:
             script = Path(candidate) / "node_modules" / "verdaccio" / "bin" / "verdaccio"
