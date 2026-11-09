@@ -700,6 +700,9 @@ func (e *Engine) reloadLocked(prevVersion int64) error {
 	if len(warns) > 0 {
 		return fmt.Errorf("load zones: %v", warns[0])
 	}
+	// the DNSSEC keys on disk may have been replaced: never sign with (or,
+	// on an algorithm mismatch, overwrite them with) stale cached keys
+	e.resetDNSSECCacheLocked()
 	zones := map[string]*zone.Zone{}
 	compiled := map[string]*zone.Compiled{}
 	for _, z := range zs {

@@ -121,6 +121,36 @@ func (s *Store) Load(zone string) (*KeySet, error) {
 	return ks, nil
 }
 
+// ValidateDir loads every key set under dir (missing dir = none) without
+// changing anything (backup restore).
+func ValidateDir(dir string) error {
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s := &Store{dir: dir}
+	for _, ent := range ents {
+		name, ok := strings.CutSuffix(ent.Name(), ".keys.json")
+		if ent.IsDir() || !ok || name == "" {
+			continue
+		}
+		ks, err := s.Load(name + ".")
+		if err != nil {
+			return err
+		}
+		if ks == nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSuffix(ks.Zone, "."), name) {
+			return fmt.Errorf("%s holds the keys of %s", ent.Name(), ks.Zone)
+		}
+	}
+	return nil
+}
+
 // Save writes a zone's keys atomically with mode 0600.
 func (s *Store) Save(ks *KeySet) error {
 	s.mu.Lock()

@@ -440,7 +440,9 @@ func TestProtocolSanity(t *testing.T) {
 	}{
 		{query("version.bind.", dns.TypeTXT, func(m *dns.Msg) { m.Question[0].Qclass = dns.ClassCHAOS }), dns.RcodeRefused},
 		{query("example.", dns.TypeAXFR), dns.RcodeRefused},
-		{query("example.", dns.TypeA, func(m *dns.Msg) { m.Opcode = dns.OpcodeNotify }), dns.RcodeNotImplemented},
+		// NOTIFY is handled now: a zone we are not secondary for is NOTAUTH
+		{query("example.", dns.TypeSOA, func(m *dns.Msg) { m.Opcode = dns.OpcodeNotify }), dns.RcodeNotAuth},
+		{query("example.", dns.TypeA, func(m *dns.Msg) { m.Opcode = dns.OpcodeStatus }), dns.RcodeNotImplemented},
 		{query("example.", dns.TypeA, func(m *dns.Msg) { m.Question = append(m.Question, m.Question[0]) }), dns.RcodeFormatError},
 		{query("example.", dns.TypeA, func(m *dns.Msg) { m.IsEdns0().SetVersion(1) }), dns.RcodeBadVers},
 		{query("localhost.", dns.TypeA), dns.RcodeSuccess},

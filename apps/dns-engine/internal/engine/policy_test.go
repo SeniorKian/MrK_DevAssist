@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"mrk/dns-engine/internal/fielderr"
 	"mrk/dns-engine/internal/filter"
 	"mrk/dns-engine/internal/pressure"
+	"mrk/dns-engine/internal/signer"
 	"mrk/dns-engine/internal/testutil"
 	"mrk/dns-engine/internal/zone"
 )
@@ -323,6 +325,18 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	if _, err := a.CreateToken("phone", nil); err != nil {
 		t.Fatal(err)
 	}
+	const tsigSecret = "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0IQ=="
+	if _, err := a.CreateTSIG(TSIGInput{Name: "backup.key", Secret: tsigSecret}); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	if _, err := a.PatchZone("backup.test", ZonePatch{ZonePatchD5: ZonePatchD5{DNSSEC: &SigningInput{Enabled: &on}}}); err != nil {
+		t.Fatal(err)
+	}
+	wantKeys, err := a.ZoneDNSSEC("backup.test")
+	if err != nil || len(wantKeys.Keys) == 0 || len(wantKeys.DS) == 0 {
+		t.Fatalf("signing on the source: %+v %v", wantKeys, err)
+	}
 	var buf bytes.Buffer
 	if err := a.Backup(&buf); err != nil {
 		t.Fatal(err)
@@ -332,6 +346,22 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	b := policyEngine(t, up.Addr, nil, nil)
 	_, before := b.Settings()
 	if _, err := b.CreateZone("gone.test", "primary", nil); err != nil {
+		t.Fatal(err)
+	}
+	// the target signs the same zone with another algorithm and has its own
+	// TSIG key: the restore must load the archived keys, not keep (or
+	// overwrite them with) the cached ones
+	if _, err := b.CreateZone("backup.test", "primary", nil); err != nil {
+		t.Fatal(err)
+	}
+	ed := "ED25519"
+	if _, err := b.PatchZone("backup.test", ZonePatch{ZonePatchD5: ZonePatchD5{DNSSEC: &SigningInput{Enabled: &on, Algorithm: &ed}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.ZoneDNSSEC("backup.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.CreateTSIG(TSIGInput{Name: "local.key", Secret: tsigSecret}); err != nil {
 		t.Fatal(err)
 	}
 	res, err := b.Restore(bytes.NewReader(archive))
@@ -357,6 +387,47 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	if !b.TLS().Present || len(b.Tokens()) != 1 {
 		t.Fatal("certificate or tokens not restored")
 	}
+	if ks := b.TSIGKeys(); len(ks) != 1 || ks[0].Name != "backup.key" {
+		t.Fatalf("TSIG keys not reloaded: %+v", ks)
+	}
+	gotKeys, err := b.ZoneDNSSEC("backup.test")
+	if err != nil || gotKeys.Error != "" || len(gotKeys.Keys) != len(wantKeys.Keys) {
+		t.Fatalf("DNSSEC keys not reloaded: %+v %v", gotKeys, err)
+	}
+	for i := range wantKeys.Keys {
+		if gotKeys.Keys[i].Tag != wantKeys.Keys[i].Tag || gotKeys.Keys[i].Algorithm != wantKeys.Keys[i].Algorithm {
+			t.Fatalf("DNSSEC key %d: want %+v got %+v", i, wantKeys.Keys[i], gotKeys.Keys[i])
+		}
+	}
+	if gotKeys.DS[0] != wantKeys.DS[0] {
+		t.Fatalf("DS changed by the restore: %+v → %+v", wantKeys.DS[0], gotKeys.DS[0])
+	}
+	// the zone is served signed with the restored keys
+	dq := query("backup.test.", dns.TypeDNSKEY, func(m *dns.Msg) { m.IsEdns0().SetDo() })
+	r := ask(t, b, lan, UDP, dq)
+	if r == nil || len(r.Answer) == 0 {
+		t.Fatalf("DNSKEY after restore: %v", r)
+	}
+	served := map[uint16]bool{}
+	for _, rr := range r.Answer {
+		if k, ok := rr.(*dns.DNSKEY); ok {
+			served[k.KeyTag()] = true
+		}
+	}
+	for _, k := range wantKeys.Keys {
+		if !served[k.Tag] {
+			t.Fatalf("restored key %d not served: %v", k.Tag, r)
+		}
+	}
+	// and the restored key file on disk was not overwritten
+	onDisk, err := signer.OpenStore(filepath.Join(b.st.Dir(), "dnssec-keys"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ks, err := onDisk.Load("backup.test."); err != nil || ks == nil || ks.Algorithm() != wantKeys.Keys[0].Algorithm ||
+		ks.Keys[0].Tag != wantKeys.Keys[0].Tag {
+		t.Fatalf("key file on disk after restore: %+v %v", ks, err)
+	}
 
 	// invalid archives change nothing
 	for name, arc := range map[string][]byte{
@@ -366,6 +437,8 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		"zone":      tamper(t, archive, "zones/backup.test.json", []byte(`{"name":"backup.test.","type":"primary","version":999,"records":[{"id":"x","name":"@","type":"CNAME","ttl":60,"data":{"target":"a.example."}}]}`), true),
 		"settings":  tamper(t, archive, "settings.json", []byte(`{"schema":1,"config_version":3,"settings":{"listen":[{"address":"bad"}]}}`), true),
 		"path":      tamper(t, archive, "../evil.json", []byte(`{}`), true),
+		"tsig":      tamper(t, archive, "tsig.json", []byte(`{"v":1,"keys":"not a list"}`), true),
+		"dnssec":    tamper(t, archive, "dnssec-keys/backup.test.keys.json", []byte(`{"v":1,"zone":"backup.test.","keys":[{"public":"bad"}]}`), true),
 	} {
 		_, err := b.Restore(bytes.NewReader(arc))
 		if !isCode(err, CodeRestoreInvalid) {

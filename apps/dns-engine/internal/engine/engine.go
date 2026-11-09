@@ -210,6 +210,7 @@ func Open(opts Options) (*Engine, error) {
 	if err := e.openEncrypted(); err != nil {
 		return nil, err
 	}
+	e.registerD5RestoreHooks()
 	e.mu.Lock()
 	err = e.rebuildLocked()
 	e.mu.Unlock()

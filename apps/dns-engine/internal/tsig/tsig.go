@@ -78,10 +78,20 @@ type Store struct {
 
 // Open loads path (missing = empty store).
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, keys: map[string]Key{}}
+	keys, err := readKeys(path)
+	if err != nil {
+		return nil, err
+	}
+	_ = os.Chmod(path, 0o600)
+	return &Store{path: path, keys: keys}, nil
+}
+
+// readKeys parses a key file (missing = no keys).
+func readKeys(path string) (map[string]Key, error) {
+	keys := map[string]Key{}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return s, nil
+		return keys, nil
 	}
 	if err != nil {
 		return nil, err
@@ -91,10 +101,28 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("tsig keys: %w", err)
 	}
 	for _, k := range d.Keys {
-		s.keys[dns.Fqdn(k.Name)] = k
+		keys[dns.Fqdn(k.Name)] = k
 	}
-	_ = os.Chmod(path, 0o600)
-	return s, nil
+	return keys, nil
+}
+
+// Validate checks a key file without loading it (backup restore).
+func Validate(path string) error {
+	_, err := readKeys(path)
+	return err
+}
+
+// Reload replaces the keys with the content of the file (backup restore).
+func (s *Store) Reload() error {
+	keys, err := readKeys(s.path)
+	if err != nil {
+		return err
+	}
+	_ = os.Chmod(s.path, 0o600)
+	s.mu.Lock()
+	s.keys = keys
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Store) saveLocked() error {

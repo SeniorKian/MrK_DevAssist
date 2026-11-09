@@ -145,6 +145,31 @@ func (e *Engine) openD5() error {
 	return nil
 }
 
+// registerD5RestoreHooks lets a backup restore reload the TSIG keys and the
+// DNSSEC key sets live (call after openPolicy, which resets the hook list).
+// The DNSSEC key cache is dropped by reloadLocked before the restored zones
+// are signed, so the hook only has to validate the staged files.
+func (e *Engine) registerD5RestoreHooks() {
+	e.RegisterRestoreHook(RestoreHook{
+		Prefix:   "tsig.json",
+		Validate: func(stage string) error { return tsig.Validate(filepath.Join(stage, "tsig.json")) },
+		Reload:   func() error { return e.d5.tsig.Reload() },
+	})
+	e.RegisterRestoreHook(RestoreHook{
+		Prefix:   "dnssec-keys/",
+		Validate: func(stage string) error { return signer.ValidateDir(filepath.Join(stage, "dnssec-keys")) },
+	})
+}
+
+// resetDNSSECCacheLocked forgets the cached key sets and signing status so
+// the next compile reads the keys from disk (backup restore; e.mu held).
+func (e *Engine) resetDNSSECCacheLocked() {
+	e.d5.mu.Lock()
+	e.d5.keysets = map[string]*signer.KeySet{}
+	e.d5.signed = map[string]signInfo{}
+	e.d5.mu.Unlock()
+}
+
 // SetZoneTiming replaces the zone timers (tests). Zero fields keep defaults.
 func (e *Engine) SetZoneTiming(t ZoneTiming) {
 	d := defaultZoneTiming()
