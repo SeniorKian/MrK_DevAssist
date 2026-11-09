@@ -306,6 +306,20 @@ export const MY_FILES = {
   domainRemoveBody: { fa: "فایل‌ها دیگر با این دامنه باز نمی‌شوند.", en: "Files will stop opening at this domain." },
   domainRemoveYes: { fa: "بله، جدا کن", en: "Yes, disconnect" },
   domainsEmpty: { fa: "هنوز دامنه‌ای به این پوشه وصل نیست.", en: "No domain points at this folder yet." },
+  // the public route of a proven domain (docs/43 §0.1 «مسیر دامنه باکت»)
+  route_ok: { fa: "از اینترنت باز می‌شود", en: "Open on the internet" },
+  route_pending: { fa: "در حال وصل شدن", en: "Connecting" },
+  route_manual: { fa: "منتظر مدیر سرور", en: "Waiting for the server admin" },
+  route_failed: { fa: "وصل نشد", en: "Not connected" },
+  route_conflict: { fa: "جای دیگری استفاده شده", en: "Used elsewhere" },
+  route_off: { fa: "وصل کردن خودکار خاموش است", en: "Automatic connecting is off" },
+  routeHint_ok: { fa: "فایل‌های این پوشه با این دامنه و با HTTPS باز می‌شوند.", en: "This folder's files open at this domain over HTTPS." },
+  routeHint_pending: { fa: "دامنه ثبت شد و چند دقیقه دیگر باز می‌شود؛ گاهی مدیر سرور باید یک بار سرویس را دوباره راه بیندازد.", en: "The domain is set up and opens in a few minutes; sometimes the server admin has to restart the service once." },
+  routeHint_manual: { fa: "این سرور دامنه‌ها را دستی وصل می‌کند. مدیر سرور در صفحه فضای فایل مراحلش را می‌بیند.", en: "This server connects domains by hand. The server admin sees the steps on the file space page." },
+  routeHint_failed: { fa: "وصل کردن این دامنه به سرور کار نکرد. کمی بعد «دوباره امتحان کن» را بزنید یا به مدیر سرور خبر دهید.", en: "Connecting this domain to the server didn't work. Press “Try again” a bit later, or tell the server admin." },
+  routeHint_conflict: { fa: "برنامه دیگری روی این سرور همین دامنه را دارد. با مدیر سرور صحبت کنید.", en: "Another app on this server already uses this domain. Talk to the server admin." },
+  routeHint_off: { fa: "مدیر سرور وصل کردن خودکار دامنه پوشه‌ها را خاموش کرده است.", en: "The server admin turned off automatic connecting of folder domains." },
+  routeRetry: { fa: "دوباره امتحان کن", en: "Try again" },
   publicNote: { fa: "پوشه‌های عمومی را هر کسی با آدرس فایل می‌بیند.", en: "Anyone with a file's address can see public folders." }
 } satisfies Record<string, Bi>;
 

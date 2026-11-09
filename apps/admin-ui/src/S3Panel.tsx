@@ -48,6 +48,7 @@ import { formatBytes, formatNumber } from "./format";
 import type { Language } from "./i18n";
 import { useVisibleInterval } from "./polling";
 import { KeySecretDialog, S3Connect, S3Identities, TEMPLATE_CARDS, createKeyFor, type NewKey } from "./S3Access";
+import { S3BucketRoutes } from "./S3BucketRoutes";
 import { S3FileManager } from "./S3FileManager";
 import { S3Lifecycle } from "./S3Lifecycle";
 import {
@@ -793,6 +794,7 @@ export function S3Panel({ language, permissions }: Props) {
               {!canAdmin && <Box sx={{ px: 2, pb: 2 }}><NoAccess needs="s3:admin" /></Box>}
             </SectionCard>
           ))}
+          {tab === "buckets" && !openBucket && <S3BucketRoutes permissions={permissions} />}
           {tab === "keys" && canAdmin && <S3Identities language={language} bucketNames={bucketNames} />}
           {tab === "connect" && <S3Connect language={language} bucketNames={bucketNames} canAdmin={canAdmin} />}
 

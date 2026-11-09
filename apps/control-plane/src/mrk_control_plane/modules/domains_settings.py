@@ -42,6 +42,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "sync_pypi_outside_url": True,
     "sync_pypi_restart": True,
     "sync_s3_endpoint": True,
+    "route_bucket_domains": True,
+    "bucket_domains_https": True,
     "auto_restart": True,
     "restart_base_delay_seconds": 30,
     "restart_max_delay_seconds": 900,
@@ -122,6 +124,8 @@ def validate(payload: Any, current: dict[str, Any]) -> dict[str, Any]:
             "sync_pypi_outside_url",
             "sync_pypi_restart",
             "sync_s3_endpoint",
+            "route_bucket_domains",
+            "bucket_domains_https",
             "auto_restart",
         }:
             merged[key] = _bool(value, key)
