@@ -134,6 +134,12 @@ PEOPLE = (
        ("خاموش، با تأیید مدیر، یا آزاد. وقتی فضای من روشن است جای «ثبت‌نام آزاد» را می‌گیرد.",
         "Off, with admin approval, or open. Replaces open sign-up while my space is on."),
        enum=("off", "approval", "open"), danger="high"),
+    rt("tenancy", "invite_signup", "tenancy.invite_signup", "people.security", "enum", "follow",
+       ("حساب تازه با دعوت تیم", "Accounts from team invites"),
+       ("کسی که به تیمی دعوت شده و حساب ندارد: مثل ثبت‌نام، خاموش، با تأیید مدیر، یا آزاد.",
+        "Someone invited to a team without an account: as sign-up, off, with approval, "
+        "or open."),
+       enum=("follow", "off", "approval", "open"), danger="high"),
     rt("tenancy", "default_plan_id", "tenancy.default_plan_id", "people.security", "string",
        "basic", ("بسته پیش‌فرض", "Default plan"),
        ("بسته‌ای که فضای تازه کاربران می‌گیرد.", "The plan new workspaces get.")),

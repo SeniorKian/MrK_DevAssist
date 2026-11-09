@@ -83,7 +83,8 @@
   مجاز؛ آخرین owner → 409 `last_owner`).
 - دعوت‌نامه: `GET /my/workspaces/{ws}/invites` → `{items:[{id, email, role, created_at, expires_at}]}`؛ `POST … {email,
   role}` → 201 `{id, email, role, token, expires_at}` (توکن یک‌بار)؛ `DELETE …/invites/{id}`؛ `POST /my/invites/accept
-  {token}` → `{workspace_id, role}` (ایمیل حساب باید همان ایمیل دعوت باشد، وگرنه 404).
+  {token}` → `{workspace_id, role}` (ایمیل حساب باید همان ایمیل دعوت باشد، وگرنه 404). کسی که حساب ندارد از خود لینک
+  حساب می‌سازد (§0.3).
 - **DNS** (`features.dns`): `GET /my/dns/zones` → `{items:[Zone]}` که `Zone` = شیء موتور + `{status:"active"|
   "pending_verification", verified_at}`؛ `GET /my/dns/templates` → `{items:[{id, name, description, builtin,
   variables}], default_id}`؛ `POST /my/dns/zones {name, template_id?, variables?}` → 201 Zone + `{template}` (فقط primary؛
@@ -133,8 +134,8 @@
   bucket}` و روی باکت فضای تعلیق‌شده `frozen:true` (موتور هر نوشتن را `AccessDenied` می‌دهد).
 - دامنه باکت در موتور S3 سرو می‌شود (Host → باکت)؛ **مسیردهی آن host در پروکسی/Traefik هنوز خودکار نیست** (مدیر باید
   دامنه را به سرویس S3 وصل کند).
-- سهمیه حجم npm/PyPI پس از انتشار سنجیده می‌شود: با رسیدن به سقف، انتشار برای آن فضا بسته می‌شود تا نسخه حذف شود.
-  scope npm اگر پیش‌تر بسته عمومی کش‌شده داشته باشد → 409 `scope_unavailable`.
+- سهمیه حجم npm/PyPI **پیش از ذخیره** سنجیده می‌شود (§0.3)؛ علاوه بر آن، فضایی که به سقف رسیده انتشارش بسته می‌شود تا
+  نسخه حذف شود. scope npm اگر پیش‌تر بسته عمومی کش‌شده داشته باشد → 409 `scope_unavailable`.
 - رد ثبت‌نام حساب در انتظار را حذف می‌کند؛ پذیرفتن آن را فعال و فضای شخصی (با `plan_id` اختیاری) می‌سازد.
 
 ### 0.2 پنل
@@ -193,6 +194,56 @@
 - ثبت‌نام با تأیید (202 بدون جلسه): App.tsx آن را `signup_pending` برمی‌گرداند و فرم ثبت‌نام همان جمله را نشان می‌دهد
   («ثبت‌نام شما رسید و منتظر تأیید…»)؛ صفحه ورود/ثبت‌نام (Login/AuthShell/Setup) تغییر نکرد.
 - مجوزهای `tenancy:admin` و `tenancy:impersonate_write` به `copy/roles.ts` اضافه شدند (نام ساده برای ماتریس نقش‌ها).
+
+### 0.3 بستن سه کمبود ساخت اول (سهمیه پیش از انتشار، ثبت‌نام با دعوت، devpi واقعی)
+
+**سهمیه حجم npm پیش از انتشار**
+- افزونه Verdaccio `deploy/verdaccio/plugins/verdaccio-mrk-quota` (middleware، بدون وابستگی). Verdaccio آن را بعد از
+  body-parser و پیش از مسیرهای publish اجرا می‌کند، پس هیچ فایلی پیش از بررسی نوشته نمی‌شود. Dockerfile و
+  `install-native.sh` آن را در `/opt/verdaccio/plugins` می‌گذارند (`MRK_NPM_PLUGINS_DIR` برای جای دیگر).
+- `tenancy.json` حالا برای هر scope فیلد `quota_bytes` (عدد یا `null` = بی‌سقف) دارد. افزونه آن را با هر تغییر فایل
+  دوباره می‌خواند؛ پس عوض کردن بسته/استثنا بدون راه‌اندازی دوباره Verdaccio اثر می‌کند.
+- قاعده: `PUT` زیر scope سقف‌دار که tarball دارد (`_attachments` با base64 رمزگشایی‌شده، یا طول بدنه خام) وقتی
+  `حجم فعلی پوشه scope + حجم تازه + انتشارهای هم‌زمان در جریان > سقف` → **413** با
+  `{error:"quota_exceeded: …", code:"quota_exceeded", limit, used, incoming}` (npm متن `error` را چاپ می‌کند).
+  به‌روزرسانی بدون tarball (unpublish، deprecate، dist-tag) هرگز بسته نمی‌شود.
+- شکست بسته: اگر scope سقف داشته باشد و افزونه در دیسک نباشد، `verdaccio_runtime` انتشار آن scope را می‌بندد.
+
+**سهمیه حجم PyPI پیش از آپلود**
+- devpi قلاب «پیش از آپلود» ندارد؛ `mrk_control_plane.devpi_quota` یک tween در ورودی Pyramid اضافه می‌کند. devpi با
+  `mrk-devpi-server` (= devpi-server با همین افزونه که همیشه ثبت می‌شود، نه از entry point) اجرا می‌شود
+  (`devpi-start.sh`)، پس افزونه نمی‌تواند جا بماند.
+- محدودیت‌ها در `pypi/quotas.json` (`{indexes:{"<slug>/dev": bytes|null}}`، مسیر `MRK_PYPI_QUOTA_FILE` یا
+  `$MRK_DATA_DIR/pypi/quotas.json`). کنترل‌پلین آن را پیش از ساختن index، با هر تغییر بسته/استثنا (`after_quota_change`)،
+  با حذف فضا و هنگام شروع می‌نویسد.
+- قاعده: POST به index سقف‌دار با اعتبارنامه وقتی `+files/<slug>/dev + Content-Length + آپلودهای در جریان > سقف` →
+  **413** با reason `quota_exceeded: …` (twine همین را نشان می‌دهد) و بدنه `{type:"error", code:"quota_exceeded",
+  message}`؛ پیش از خواندن بدنه. بدون `Content-Length` → 411. `push` بین indexها به index سقف‌دار پذیرفته نمی‌شود (حجمش
+  از پیش معلوم نیست). درخواست بی‌اعتبارنامه به devpi می‌رسد تا خودش 401 بدهد (حجم مصرف به ناشناس گفته نمی‌شود).
+  فایل خراب: آخرین نسخه سالم، وگرنه همه آپلودهای دارای اعتبارنامه رد (شکست بسته).
+
+**ثبت‌نام با لینک دعوت**
+- تنظیم تازه `tenancy.invite_signup`: `follow` (پیش‌فرض = همان `tenancy.signup`)، `off`، `approval`، `open`. در پنل
+  «تنظیمات فضای من» و registry.
+- `POST /api/v1/auth/workspace-invite {token}` (بی‌جلسه) → `{email, role, expires_at, workspace:{name, slug},
+  account_exists, signup:"off"|"approval"|"open", password_policy}`؛ توکن نادرست/مصرف‌شده/منقضی → 404.
+- `POST /api/v1/auth/workspace-invite/register {token, display_name, password, password_confirmation}`: ایمیل همیشه از
+  دعوت است (شخص نمی‌تواند ایمیل دیگری بگذارد). پیش از ساختن حساب: حساب موجود → 409 `account_exists` (باید وارد شود و
+  بپذیرد)، حالت `off` → 403 `invite_signup_off`، سقف اعضا → 409 `quota_exceeded`. سیاست رمز و محدودیت تکرار همان
+  ثبت‌نام عادی است. حالت `open` → 201 `{user, csrf_token, workspace_id, role, invite_error}` با جلسه و فضای شخصی؛
+  `approval` → 202 `{status:"pending_approval", workspace_id, role}`: حساب غیرفعال است ولی عضویت همان لحظه ثبت می‌شود؛
+  رد ثبت‌نام عضویت‌ها را هم پاک می‌کند. اگر پذیرفتن دعوت پس از ساختن حساب شکست بخورد (مثلاً تیم هم‌زمان پر شد) حساب
+  می‌ماند و `invite_error` کد خطا را دارد.
+- پنل: `#/my/team?accept=<token>` برای کسی که وارد نشده صفحه «دعوت به …» (`src/my/JoinTeamPage.tsx`، با همان
+  `AuthShell`) را نشان می‌دهد: فرم نام + رمز، یا «با این ایمیل حساب دارید؛ وارد شوید»، یا «ساختن حساب با دعوت این‌جا
+  ممکن نیست». «ورود با حسابی که دارم» صفحه ورود عادی را با همان لینک باز می‌کند تا پس از ورود «فضای من» دعوت را بپذیرد.
+
+**آزمون devpi واقعی**
+- `tests/test_devpi_integration.py` اگر `devpi-server` نصب باشد آن را در پوشه موقت با `mrk_control_plane.devpi_quota`
+  بالا می‌آورد و از راه API پنل: ساخت index و کلید انتشار، آپلود، رد کلید فضای دیگر و ناشناس، رد سقف پیش از ذخیره
+  (حجم `+files` تغییر نمی‌کند)، آپلود کوچک پس از آن، حذف نسخه. بدون devpi با دلیل روشن skip می‌شود.
+- `tests/test_npm_quota.py`: پیکربندی Verdaccio (افزونه + شکست بسته)، منطق افزونه با node، و اگر node_modules
+  Verdaccio پیدا شود (`MRK_TEST_VERDACCIO_DIR` یا `deploy/verdaccio`) یک publish واقعی که بالای سقف رد می‌شود.
 
 ## 1. مفاهیم
 

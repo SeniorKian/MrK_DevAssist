@@ -41,6 +41,7 @@ dev = [
 [project.scripts]
 mrk-control-plane = "mrk_control_plane.main:run"
 mrk-pypi-router = "mrk_control_plane.pypi_router:run"
+mrk-devpi-server = "mrk_control_plane.devpi_quota:run"
 mrk-restore = "mrk_control_plane.restore:run"
 mrk-agent = "mrk_control_plane.agent.main:run"
 mrk-s3-engine = "mrk_control_plane.s3engine.main:run"

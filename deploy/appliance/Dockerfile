@@ -38,6 +38,8 @@ ARG NPM_REGISTRY
 WORKDIR /opt/verdaccio
 COPY deploy/verdaccio/package.json deploy/verdaccio/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY" && npm config set replace-registry-host always; fi; npm ci --omit=dev --ignore-scripts
+# docs/43 §0.1: pre-publish size quota for «My space» scopes (no dependencies).
+COPY deploy/verdaccio/plugins ./plugins
 
 FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS pglite-builder
 ARG NPM_REGISTRY

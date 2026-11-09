@@ -13,7 +13,7 @@ import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, Query, Request
@@ -100,6 +100,17 @@ class LoginRequest(BaseModel):
 class SetupOwnerRequest(BaseModel):
     display_name: str = Field(min_length=2, max_length=100)
     email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
+    password_confirmation: str = Field(min_length=1, max_length=256)
+
+
+class InviteTokenRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+
+
+class InviteSignupRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+    display_name: str = Field(min_length=2, max_length=100)
     password: str = Field(min_length=1, max_length=256)
     password_confirmation: str = Field(min_length=1, max_length=256)
 
@@ -984,6 +995,72 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         token, csrf, principal = result
         response = JSONResponse(
             {"user": principal_payload(principal), "csrf_token": csrf},
+            status_code=201,
+        )
+        set_session_cookie(response, token)
+        return response
+
+    # docs/43 §0.1: a workspace invite to an email without an account. The email always
+    # comes from the invite; tenancy.invite_signup (default: as tenancy.signup) decides.
+    async def invite_tenancy() -> Any:
+        tenancy = getattr(app.state, "tenancy", None)
+        if tenancy is None or not await asyncio.to_thread(tenancy.enabled):
+            raise TenancyError("not_found", 404, "Not found")
+        return tenancy
+
+    @app.post("/api/v1/auth/workspace-invite", include_in_schema=False, response_model=None)
+    async def workspace_invite_preview(payload: InviteTokenRequest) -> JSONResponse:
+        tenancy = await invite_tenancy()
+        preview = await asyncio.to_thread(tenancy.invite_preview, payload.token)
+        return JSONResponse({**preview, "password_policy": password_policy()})
+
+    @app.post("/api/v1/auth/workspace-invite/register", include_in_schema=False,
+              response_model=None)
+    async def register_from_invite(payload: InviteSignupRequest, request: Request
+                                   ) -> JSONResponse:
+        if payload.password != payload.password_confirmation:
+            return _error_payload(
+                "password_mismatch", "Passwords do not match", 422,
+                fields=[{"field": "password_confirmation", "reason_code": "mismatch"}],
+            )
+        tenancy = await invite_tenancy()
+        preview = await asyncio.to_thread(tenancy.check_invite_signup, payload.token)
+        mode = preview["signup"]
+        source_ip = request.client.host if request.client else None
+        created: list[int] = []
+        try:
+            identifier = await asyncio.to_thread(
+                functools.partial(
+                    auth_store.register_public_user, payload.display_name, preview["email"],
+                    payload.password, source_ip, correlation_id_context.get(),
+                    allowed=True, role="customer", enabled=mode == "open", created=created,
+                )
+            )
+        except ValueError as exc:
+            return _account_error(exc, "registration_rejected")
+        user_id = created[0]
+        joined: dict[str, Any] = {}
+        invite_error: str | None = None
+        try:
+            joined = await asyncio.to_thread(tenancy.accept_invite_as_new_user, user_id,
+                                             payload.token)
+        except TenancyError as exc:  # e.g. the team filled up meanwhile: keep the account
+            invite_error = exc.code
+        if mode == "approval":
+            await asyncio.to_thread(tenancy.record_signup, user_id)
+            return JSONResponse({"status": "pending_approval", "invite_error": invite_error,
+                                 **joined}, status_code=202)
+        await asyncio.to_thread(tenancy.ensure_personal, user_id)
+        result = await asyncio.to_thread(
+            auth_store.authenticate, identifier, payload.password, source_ip,
+            correlation_id_context.get(),
+        )
+        if result is None:
+            return _error_payload("registration_failed", "Registration failed", 500)
+        token, csrf, principal = result
+        response = JSONResponse(
+            {"user": principal_payload(principal), "csrf_token": csrf,
+             "invite_error": invite_error, **joined},
             status_code=201,
         )
         set_session_cookie(response, token)

@@ -14,6 +14,7 @@ import { Setup, type SetupValues } from "./Setup";
 import { DEFAULT_PASSWORD_POLICY, readAuthFailure, readPasswordPolicy, type AuthFailure, type PasswordPolicy } from "./AuthShell";
 import ChangePasswordPage from "./ChangePasswordPage";
 import InvitePage, { inviteTokenFromHash } from "./InvitePage";
+import JoinTeamPage, { joinTokenFromHash } from "./my/JoinTeamPage";
 import { resetHome } from "./homeSummary";
 import { resetServices } from "./services";
 import { translate, type Language } from "./i18n";
@@ -62,6 +63,9 @@ export function App() {
   const [sessionExpired, setSessionExpired] = useState(false);
   const [connectionError, setConnectionError] = useState(false);
   const [inviteToken, setInviteToken] = useState<string | null>(() => inviteTokenFromHash(window.location.hash));
+  // A team invite link (#/my/team?accept=<token>) opened while signed out (docs/43 §0.1).
+  const [joinToken, setJoinToken] = useState<string | null>(() => joinTokenFromHash(window.location.hash));
+  const [joinSkipped, setJoinSkipped] = useState(false);
 
   const setCsrf = useCallback((token: string) => setCsrfToken(token), []);
 
@@ -87,7 +91,10 @@ export function App() {
 
   // The public invite link (#/invite/<token>) can be opened at any time, signed in or not.
   useEffect(() => {
-    const onHash = () => setInviteToken(inviteTokenFromHash(window.location.hash));
+    const onHash = () => {
+      setInviteToken(inviteTokenFromHash(window.location.hash));
+      setJoinToken(joinTokenFromHash(window.location.hash));
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -353,6 +360,21 @@ export function App() {
     );
   } else if (setupRequired) {
     content = <Setup language={language} onSetup={setup} onLanguageChange={toggleLanguage} passwordPolicy={passwordPolicy} />;
+  } else if (!user && joinToken && !joinSkipped) {
+    content = (
+      <JoinTeamPage
+        language={language}
+        token={joinToken}
+        onLanguageChange={toggleLanguage}
+        onJoined={(joinedUser, csrf) => {
+          // Already a member: open the team page without the used link.
+          window.history.replaceState(null, "", "#/my/team");
+          setJoinToken(null);
+          adoptSession({ user: { ...joinedUser, must_change_password: false }, csrf_token: csrf });
+        }}
+        onSignIn={() => setJoinSkipped(true)}
+      />
+    );
   } else if (!user && authView === "register" && registrationEnabled) {
     content = (
       <Setup

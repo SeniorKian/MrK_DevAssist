@@ -73,7 +73,9 @@ if [ ! -f "$server_dir/.nodeinfo" ]; then
     rm -f "$init_sentinel"
 fi
 
-set -- devpi-server \
+# mrk-devpi-server = devpi-server with the «My space» pre-upload quota check always
+# loaded (mrk_control_plane.devpi_quota, docs/43 §0.1).
+set -- mrk-devpi-server \
     --serverdir "$server_dir" \
     --host "${MRK_PYPI_LISTEN_HOST:-0.0.0.0}" \
     --port "${MRK_PYPI_PORT:-3141}" \

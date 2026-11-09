@@ -143,14 +143,17 @@ export const rejectSignup = (id: string) => mutateJson(`${BASE}/signups/${enc(id
 
 // ── settings (docs/43 §0.1 `GET/PUT /admin/tenancy/settings`; the same keys live in the registry) ──
 
-export type TenancySettings = { enabled: boolean; signup: "off" | "approval" | "open"; default_plan_id: string | null; verify_domains: boolean; admin_area_local_only: boolean };
+export type InviteSignupMode = "follow" | "off" | "approval" | "open";
+export type TenancySettings = { enabled: boolean; signup: "off" | "approval" | "open"; invite_signup: InviteSignupMode; default_plan_id: string | null; verify_domains: boolean; admin_area_local_only: boolean };
 
 function normalizeSettings(raw: unknown): TenancySettings {
   const body = asObject(raw);
   const signup = text(body.signup);
+  const invite = text(body.invite_signup);
   return {
     enabled: body.enabled === true,
     signup: signup === "approval" || signup === "open" ? signup : "off",
+    invite_signup: invite === "off" || invite === "approval" || invite === "open" ? invite : "follow",
     default_plan_id: text(body.default_plan_id) || null,
     verify_domains: body.verify_domains !== false,
     admin_area_local_only: body.admin_area_local_only === true
