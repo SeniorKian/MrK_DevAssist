@@ -1,12 +1,12 @@
 import { useId } from "react";
+import { Box } from "@mui/material";
 
 /**
- * Pishkar mark: a key shaped like the letter P, with the three dots of the
- * Persian «پ» below it — the steward who holds the keys of the house.
+ * DevAssist mark: a D with an A inside (DevAssist), in the panel's teal gradient.
  * Same drawing as public/favicon.svg.
  */
-export function PishkarMark({ size = 40, title }: { size?: number; title?: string }) {
-  const gradient = `pk-bg-${useId().replace(/:/g, "")}`;
+export function DevAssistMark({ size = 40, title }: { size?: number; title?: string }) {
+  const gradient = `da-bg-${useId().replace(/:/g, "")}`;
   return (
     <svg
       width={size}
@@ -25,16 +25,25 @@ export function PishkarMark({ size = 40, title }: { size?: number; title?: strin
         </linearGradient>
       </defs>
       <rect x="2" y="2" width="60" height="60" rx="16" fill={`url(#${gradient})`} />
-      <g fill="none" stroke="#042f2e" strokeWidth="5.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M24 49 V14 H33 a9.5 9.5 0 0 1 0 19 H24" />
-        <path d="M24 41.5 H30" />
-        <path d="M24 49 H29" />
-      </g>
-      <g fill="#042f2e">
-        <circle cx="38.5" cy="42.5" r="2.7" />
-        <circle cx="45.5" cy="42.5" r="2.7" />
-        <circle cx="42" cy="48.8" r="2.7" />
-      </g>
+      <path d="M17 14 H29 a18 18 0 0 1 0 36 H17 Z" fill="none" stroke="#042f2e" strokeWidth="5.5" strokeLinejoin="round" />
+      <path d="M25 41 L32 24 L39 41" fill="none" stroke="#042f2e" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M27.8 35 H36.2" stroke="#042f2e" strokeWidth="4" strokeLinecap="round" />
     </svg>
+  );
+}
+
+/** Maker signature shown before the product name: exactly "MrK". */
+export const MAKER = "MrK";
+
+/** "MrK DevAssist": the maker signature (small, muted) before the product name, always left-to-right. */
+export function ProductName({ name }: { name: string }) {
+  return (
+    <Box component="span" dir="ltr" sx={{ unicodeBidi: "isolate", whiteSpace: "nowrap" }}>
+      <Box component="span" sx={{ fontSize: "0.72em", fontWeight: 650, color: "text.secondary", letterSpacing: "0.02em" }}>
+        {MAKER}
+      </Box>
+      {" "}
+      {name}
+    </Box>
   );
 }

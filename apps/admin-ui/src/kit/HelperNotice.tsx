@@ -29,7 +29,7 @@ const GENERIC_CODES = new Set(["", "http_error", "not_found"]);
 const COPY = {
   not_paired: { fa: "دستیار سرور هنوز وصل نشده.", en: "The server helper isn't connected yet." },
   helper_down: { fa: "دستیار سرور جواب نمی‌دهد. مطمئن شوید روی سرور روشن است.", en: "The server helper isn't answering. Make sure it's running on the server." },
-  module_missing: { fa: "این بخش روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "This isn't on your server's current version. Update Pishkar." },
+  module_missing: { fa: "این بخش روی نسخه فعلی سرور نیست. DevAssist را به‌روز کنید.", en: "This isn't on your server's current version. Update DevAssist." },
   pair: { fa: "وصل کردن دستیار سرور", en: "Connect the server helper" },
   refresh: { fa: "تازه کردن", en: "Refresh" }
 } satisfies Record<string, Bi>;

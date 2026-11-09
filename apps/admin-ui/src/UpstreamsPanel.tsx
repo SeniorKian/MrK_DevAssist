@@ -58,7 +58,7 @@ const FOREVER = 2147483647;
 const ECOSYSTEM_NAME: Record<Ecosystem, string> = { npm: "npm", pypi: "PyPI" };
 
 const COPY = {
-  intro: { fa: "پیشکار بسته‌ها را از این منابع می‌گیرد؛ اگر اولی جواب نداد، سراغ بعدی می‌رود.", en: "Pishkar fetches packages from these sources; if the first doesn't answer, it tries the next." },
+  intro: { fa: "DevAssist بسته‌ها را از این منابع می‌گیرد؛ اگر اولی جواب نداد، سراغ بعدی می‌رود.", en: "DevAssist fetches packages from these sources; if the first doesn't answer, it tries the next." },
   add: { fa: "افزودن منبع", en: "Add a source" },
   refresh: { fa: "تازه کردن", en: "Refresh" },
   // ecosystem card
@@ -70,11 +70,11 @@ const COPY = {
   offline: { fa: "بدون اینترنت", en: "Offline" },
   testAll: { fa: "امتحان اتصال", en: "Test connection" },
   offlineLabel: { fa: "حالت بدون اینترنت", en: "Offline mode" },
-  offlineHint: { fa: "فقط بسته‌هایی که قبلاً ذخیره شده‌اند داده می‌شوند و پیشکار به اینترنت نمی‌رود.", en: "Only packages already stored are served, and Pishkar doesn't go to the internet." },
+  offlineHint: { fa: "فقط بسته‌هایی که قبلاً ذخیره شده‌اند داده می‌شوند و DevAssist به اینترنت نمی‌رود.", en: "Only packages already stored are served, and DevAssist doesn't go to the internet." },
   offlineOnTitle: { fa: "{eco} بدون اینترنت شود؟", en: "Switch {eco} to offline mode?" },
   offlineOnBody: { fa: "تا وقتی خاموشش نکنید، بسته‌ای که روی سرور نیست نصب نمی‌شود.", en: "Until you turn it off, packages that aren't stored here won't install." },
   offlineOffTitle: { fa: "{eco} دوباره به اینترنت وصل شود؟", en: "Reconnect {eco} to the internet?" },
-  offlineOffBody: { fa: "پیشکار دوباره از منابع دریافت بسته می‌گیرد.", en: "Pishkar fetches from the package sources again." },
+  offlineOffBody: { fa: "DevAssist دوباره از منابع دریافت بسته می‌گیرد.", en: "DevAssist fetches from the package sources again." },
   npmRestart: { fa: "npm چند ثانیه قطع و دوباره وصل می‌شود.", en: "npm pauses for a few seconds and comes back." },
   turnOn: { fa: "بله، روشن کن", en: "Yes, turn on" },
   turnOff: { fa: "بله، وصل کن", en: "Yes, reconnect" },
@@ -100,7 +100,7 @@ const COPY = {
   blockedUntil: { fa: "مسدود تا {time}", en: "Blocked until {time}" },
   blockedForever: { fa: "مسدود تا وقتی آزادش کنید", en: "Blocked until you unblock it" },
   empty: { fa: "هنوز منبعی ندارید.", en: "You don't have a source yet." },
-  emptyBody: { fa: "بدون منبع، پیشکار نمی‌تواند بسته تازه بگیرد. یک منبع مثل سایت اصلی npm اضافه کنید.", en: "Without a source, Pishkar can't fetch new packages. Add one, such as the official npm site." },
+  emptyBody: { fa: "بدون منبع، DevAssist نمی‌تواند بسته تازه بگیرد. یک منبع مثل سایت اصلی npm اضافه کنید.", en: "Without a source, DevAssist can't fetch new packages. Add one, such as the official npm site." },
   readOnly: { fa: "نقش شما فقط اجازه دیدن منابع را دارد.", en: "Your role can only view sources." },
   // actions
   test: { fa: "امتحان اتصال", en: "Test connection" },
@@ -127,7 +127,7 @@ const COPY = {
   needName: { fa: "نام دست‌کم ۲ نویسه باشد؛ مثلاً «آینه دانشگاه».", en: "The name needs at least 2 characters, like “University mirror”." },
   sourceName: { fa: "نام", en: "Name" },
   stepTest: { fa: "امتحان", en: "Test" },
-  stepTestHint: { fa: "پیش از ذخیره، ببینیم پیشکار به این منبع می‌رسد یا نه.", en: "Before saving, let's check that Pishkar can reach this source." },
+  stepTestHint: { fa: "پیش از ذخیره، ببینیم DevAssist به این منبع می‌رسد یا نه.", en: "Before saving, let's check that DevAssist can reach this source." },
   runTest: { fa: "امتحان اتصال", en: "Test connection" },
   testOptional: { fa: "اگر الان وصل نشد هم می‌توانید ذخیره کنید؛ بعداً دوباره امتحان می‌شود.", en: "You can save even if it doesn't connect now; it will be retried later." },
   stepMore: { fa: "جزئیات", en: "Details" },
@@ -160,7 +160,7 @@ const COPY = {
   cancel: { fa: "انصراف", en: "Cancel" },
   // block
   blockTitle: { fa: "«{name}» موقتاً مسدود شود؟", en: "Block “{name}” for a while?" },
-  blockBody: { fa: "تا پایان این مدت، پیشکار سراغ این منبع نمی‌رود و از منبع بعدی می‌گیرد.", en: "Until then, Pishkar skips this source and uses the next one." },
+  blockBody: { fa: "تا پایان این مدت، DevAssist سراغ این منبع نمی‌رود و از منبع بعدی می‌گیرد.", en: "Until then, DevAssist skips this source and uses the next one." },
   duration: { fa: "تا کی؟", en: "For how long?" },
   oneHour: { fa: "۱ ساعت", en: "1 hour" },
   oneDay: { fa: "۲۴ ساعت", en: "24 hours" },

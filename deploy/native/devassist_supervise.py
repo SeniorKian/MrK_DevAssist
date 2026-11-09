@@ -1,4 +1,4 @@
-"""Run supervisord for the native (systemd) install of Pishkar.
+"""Run supervisord for the native (systemd) install of DevAssist.
 
 ``deploy/appliance/supervisord.conf`` is shared with the container unchanged. It
 sends every program's output to ``/dev/fd/1`` and ``/dev/fd/2``. In a container
@@ -70,7 +70,7 @@ def main() -> int:
     relay.join(DRAIN_SECONDS)
     if FATAL_MARKER.exists():
         reason = FATAL_MARKER.read_text(encoding="utf-8", errors="replace").strip()
-        print(f"pishkar: stopped because a service went FATAL: {reason}", file=sys.stderr)
+        print(f"devassist: stopped because a service went FATAL: {reason}", file=sys.stderr)
         return 1
     return code
 

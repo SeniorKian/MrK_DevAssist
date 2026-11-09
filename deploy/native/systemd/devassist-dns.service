@@ -1,26 +1,26 @@
-# Pishkar DNS engine (native install) — the `mrk-dns` Compose service (profile dns).
+# DevAssist DNS engine (native install) — the `mrk-dns` Compose service (profile dns).
 #
 # Container: starts as uid 0 with NET_BIND_SERVICE+SETUID+SETGID and drops to
 # MRK_DNS_RUN_AS. Native: systemd starts it directly as the unprivileged
-# `pishkar` user with only CAP_NET_BIND_SERVICE (ambient), so the engine's
+# `devassist` user with only CAP_NET_BIND_SERVICE (ambient), so the engine's
 # own drop is a no-op (it only drops when started as root). The result is the
-# same as in the container: uid pishkar, CapEff = NET_BIND_SERVICE only.
+# same as in the container: uid devassist, CapEff = NET_BIND_SERVICE only.
 #
 # Host network namespace (like network_mode: host). The admin socket and token
 # live in /run/mrk-dns, which the panel (same user) reads.
 
 [Unit]
-Description=Pishkar DNS engine (mrk-dns)
+Description=DevAssist DNS engine (mrk-dns)
 Documentation=https://github.com/SeniorKian/MrK_DevAssist/blob/main/docs/install-native.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=pishkar
-Group=pishkar
+User=devassist
+Group=devassist
 UMask=0027
-EnvironmentFile=/etc/pishkar/dns.env
+EnvironmentFile=/etc/devassist/dns.env
 ExecStart=/opt/mrk/bin/mrk-dns serve
 Restart=always
 RestartSec=3

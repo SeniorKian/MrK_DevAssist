@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Pishkar are listed here. The format follows
+All notable changes to DevAssist are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (0.x: anything may still change).
 No version has been tagged yet; everything below is in the first release, 0.1.0.
@@ -10,7 +10,7 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 ### Added
 - Open-source release files: new README (English and Persian), CONTRIBUTING, Code of Conduct,
   Security policy, issue and pull request templates, funding placeholder, this changelog.
-- Product name **Pishkar** (پیشکار). Code, image and container identifiers keep the `mrk` prefix.
+- Product name **DevAssist** (DevAssist). Code, image and container identifiers keep the `mrk` prefix.
 - Native install without Docker for Debian 12/13 and Ubuntu 22.04/24.04:
   `scripts/install-native.sh` (install, upgrade, status, uninstall, `--dry-run`) and systemd units
   in `deploy/native/systemd/` that mirror the containers' processes, environment and hardening.

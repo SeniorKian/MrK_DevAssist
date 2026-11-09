@@ -97,21 +97,21 @@ const KIND_INFO: Record<ChannelKind, { description: Bi; howTo: Bi[] }> = {
   webhook: {
     description: { fa: "فرستادن خودکار رویداد به نشانی یک سرویس دیگر", en: "Send events automatically to another service's address" },
     howTo: [
-      { fa: "پیشکار هر رویداد را به نشانی‌ای که می‌دهید می‌فرستد؛ مثلاً به ابزار گفتگوی تیم یا سامانه پیگیری.", en: "Pishkar sends each event to the address you give, such as your team chat tool or a ticketing system." },
-      { fa: "اگر کلید امضا بگذارید، هر پیام امضا می‌شود تا سرویس مقصد مطمئن شود از پیشکار آمده.", en: "With a signing key, each message is signed so the receiver knows it came from Pishkar." }
+      { fa: "DevAssist هر رویداد را به نشانی‌ای که می‌دهید می‌فرستد؛ مثلاً به ابزار گفتگوی تیم یا سامانه پیگیری.", en: "DevAssist sends each event to the address you give, such as your team chat tool or a ticketing system." },
+      { fa: "اگر کلید امضا بگذارید، هر پیام امضا می‌شود تا سرویس مقصد مطمئن شود از DevAssist آمده.", en: "With a signing key, each message is signed so the receiver knows it came from DevAssist." }
     ]
   }
 };
 
 const T = {
   title: { fa: "کانال‌های اعلان", en: "Alert channels" },
-  hint: { fa: "جاهایی که پیشکار وقتی اتفاق مهمی افتاد به شما خبر می‌دهد.", en: "Where Pishkar tells you when something important happens." },
+  hint: { fa: "جاهایی که DevAssist وقتی اتفاق مهمی افتاد به شما خبر می‌دهد.", en: "Where DevAssist tells you when something important happens." },
   add: { fa: "افزودن کانال", en: "Add a channel" },
   addTelegram: { fa: "افزودن تلگرام", en: "Add Telegram" },
   addOther: { fa: "کانال دیگر", en: "Another channel" },
   emptyTitle: { fa: "هنوز کانال اعلانی ندارید", en: "You don't have an alert channel yet" },
   emptyBody: { fa: "با افزودن تلگرام یا بله، اگر سرور مشکلی پیدا کند فوراً خبردار می‌شوید.", en: "Add Telegram or Bale and you'll hear right away if the server has a problem." },
-  unavailable: { fa: "بخش اعلان‌ها روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "Alerts aren't available on this server version. Update Pishkar." },
+  unavailable: { fa: "بخش اعلان‌ها روی نسخه فعلی سرور نیست. DevAssist را به‌روز کنید.", en: "Alerts aren't available on this server version. Update DevAssist." },
   on: { fa: "روشن", en: "On" },
   off: { fa: "خاموش", en: "Off" },
   switchLabel: { fa: "روشن یا خاموش کردن «{name}»", en: "Turn “{name}” on or off" },

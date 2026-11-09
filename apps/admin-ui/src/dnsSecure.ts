@@ -1,5 +1,5 @@
 /**
- * Pishkar DNS phase D4 (contract docs/40): finding names from the root, DNSSEC and encrypted DNS.
+ * DevAssist DNS phase D4 (contract docs/40): finding names from the root, DNSSEC and encrypted DNS.
  * Types, API calls and the plain words used by the settings cards, the «اتصال رمزدار» tab,
  * the test tab (DNSSEC badge + full path) and the log/monitor additions.
  *
@@ -170,8 +170,8 @@ export function anchorSentence(language: Language, view: DnssecView | null): { t
     return {
       tone: "warn",
       text: fa
-        ? "کلید اعتماد ریشه سالم است، ولی آخرین به‌روزرسانی خودکار انجام نشد. پیشکار همان کلید قبلی را نگه داشته و بعداً دوباره امتحان می‌کند."
-        : "The root trust key is fine, but the last automatic update didn't work. Pishkar keeps the current key and will try again later."
+        ? "کلید اعتماد ریشه سالم است، ولی آخرین به‌روزرسانی خودکار انجام نشد. DevAssist همان کلید قبلی را نگه داشته و بعداً دوباره امتحان می‌کند."
+        : "The root trust key is fine, but the last automatic update didn't work. DevAssist keeps the current key and will try again later."
     };
   }
   return {
@@ -217,12 +217,12 @@ export const DNSSEC_STATUS_WORDS: Record<string, { tone: Tone; label: Bi; body: 
   bogus: {
     tone: "error",
     label: { fa: "امضا خراب است", en: "Signature is broken" },
-    body: { fa: "امضای این جواب درست نبود؛ ممکن است جعلی یا دست‌کاری‌شده باشد. پیشکار برای امنیت جواب را نداد.", en: "This answer's signature didn't check out; it may be fake or tampered with. Pishkar held it back to keep you safe." }
+    body: { fa: "امضای این جواب درست نبود؛ ممکن است جعلی یا دست‌کاری‌شده باشد. DevAssist برای امنیت جواب را نداد.", en: "This answer's signature didn't check out; it may be fake or tampered with. DevAssist held it back to keep you safe." }
   },
   indeterminate: {
     tone: "off",
     label: { fa: "بررسی نشد", en: "Couldn't check" },
-    body: { fa: "پیشکار نتوانست امضا را بررسی کند (مثلاً DNS بیرونی امضاها را حذف می‌کند). جواب مثل «بدون امضا» داده شد.", en: "Pishkar couldn't check the signature (for example, the outside DNS strips signatures). The answer was given as “not signed”." }
+    body: { fa: "DevAssist نتوانست امضا را بررسی کند (مثلاً DNS بیرونی امضاها را حذف می‌کند). جواب مثل «بدون امضا» داده شد.", en: "DevAssist couldn't check the signature (for example, the outside DNS strips signatures). The answer was given as “not signed”." }
   }
 };
 
@@ -239,8 +239,8 @@ const DNSSEC_REASON_WORDS: Record<string, Bi> = {
   dnskey_missing: { fa: "کلید امضای دامنه پیدا نشد.", en: "The domain's signing key couldn't be found." },
   ds_mismatch: { fa: "کلید دامنه با چیزی که دامنه بالاتر ثبت کرده جور نیست؛ معمولاً اشتباه صاحب دامنه است.", en: "The domain's key doesn't match what the parent domain has on record; usually the owner's mistake." },
   denial_proof_failed: { fa: "سرور گفت «این نام نیست» ولی نتوانست آن را با امضا ثابت کند.", en: "The server said “no such name” but couldn't prove it with a signature." },
-  unsupported_algorithm: { fa: "این دامنه از روش امضایی استفاده می‌کند که پیشکار نمی‌شناسد؛ مثل «بدون امضا» با آن رفتار شد.", en: "This domain uses a signing method Pishkar doesn't know; it was treated as not signed." },
-  unsupported_digest: { fa: "این دامنه از روش امضایی استفاده می‌کند که پیشکار نمی‌شناسد؛ مثل «بدون امضا» با آن رفتار شد.", en: "This domain uses a signing method Pishkar doesn't know; it was treated as not signed." },
+  unsupported_algorithm: { fa: "این دامنه از روش امضایی استفاده می‌کند که DevAssist نمی‌شناسد؛ مثل «بدون امضا» با آن رفتار شد.", en: "This domain uses a signing method DevAssist doesn't know; it was treated as not signed." },
+  unsupported_digest: { fa: "این دامنه از روش امضایی استفاده می‌کند که DevAssist نمی‌شناسد؛ مثل «بدون امضا» با آن رفتار شد.", en: "This domain uses a signing method DevAssist doesn't know; it was treated as not signed." },
   nsec3_iterations: { fa: "امضای این دامنه بیش از حد سنگین است؛ برای ایمنی سرور مثل «بدون امضا» با آن رفتار شد.", en: "This domain's signature is too heavy to check; to protect the server it was treated as not signed." },
   nsec3_opt_out: { fa: "این بخش از دامنه عمداً بدون امضا مانده است.", en: "This part of the domain is deliberately left unsigned." },
   no_reachable_authority: { fa: "سرورهای این دامنه جواب ندادند، پس امضا بررسی نشد.", en: "The domain's servers didn't answer, so the signature couldn't be checked." },
@@ -417,7 +417,7 @@ export const GUIDE_STEPS: Record<GuideId, Bi[]> = {
   ios: [
     { fa: "روی همین گوشی دکمه «دریافت پروفایل» را بزنید.", en: "On this phone, tap “Get the profile”." },
     { fa: "تنظیمات را باز کنید؛ بالای صفحه «پروفایل دانلود شد» را بزنید و «نصب» کنید.", en: "Open Settings; tap “Profile Downloaded” at the top and Install it." },
-    { fa: "در «عمومی › VPN و مدیریت دستگاه › DNS» مطمئن شوید پیشکار انتخاب شده است.", en: "Under “General › VPN & Device Management › DNS”, make sure Pishkar is selected." }
+    { fa: "در «عمومی › VPN و مدیریت دستگاه › DNS» مطمئن شوید DevAssist انتخاب شده است.", en: "Under “General › VPN & Device Management › DNS”, make sure DevAssist is selected." }
   ],
   macos: [
     { fa: "دکمه «دریافت پروفایل» را بزنید و فایل را باز کنید.", en: "Press “Get the profile” and open the file." },

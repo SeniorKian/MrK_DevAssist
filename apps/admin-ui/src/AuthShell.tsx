@@ -7,7 +7,7 @@ import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import type { Language } from "./i18n";
 import { translate } from "./i18n";
 import { errorEntry } from "./copy/errors";
-import { PishkarMark } from "./brand";
+import { DevAssistMark, ProductName } from "./brand";
 import { fill, type Bi } from "./copy/text";
 
 // ── Password policy (server-driven, docs/34 §2: GET /api/v1/auth/setup-status) ─────────────────
@@ -182,7 +182,7 @@ type AuthShellProps = {
 };
 
 function Logo({ size }: { size: number }) {
-  return <PishkarMark size={size} />;
+  return <DevAssistMark size={size} />;
 }
 
 /** Centered, minimal frame for sign-in, first-run setup, invite and forced password change. */
@@ -244,7 +244,7 @@ export function AuthShell({ language, onLanguageChange, children }: AuthShellPro
             <Logo size={52} />
             <Box>
               <Typography variant="h6" component="p" sx={{ fontWeight: 800, lineHeight: 1.3 }}>
-                {t("product")}
+                <ProductName name={t("product")} />
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 {t("subtitle")}
@@ -267,7 +267,7 @@ export function AuthShell({ language, onLanguageChange, children }: AuthShellPro
           </Box>
 
           <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 3, textAlign: "center" }}>
-            {t("product")} · {t("singleNodeAppliance")}
+            <ProductName name={t("product")} /> · {t("singleNodeAppliance")}
           </Typography>
         </Box>
       </Box>

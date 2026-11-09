@@ -313,7 +313,7 @@ export async function fetchMyIdentities(signal?: AbortSignal): Promise<MyIdentit
   }).filter((item) => item.id);
 }
 
-/** Pishkar builds the policy from `access` (docs/43 §3); a policy document is never sent. The secret comes back once. */
+/** DevAssist builds the policy from `access` (docs/43 §3); a policy document is never sent. The secret comes back once. */
 export async function createMyKey(name: string, template: KeyTemplate, buckets: string[]): Promise<NewS3Key | null> {
   const created = asObject(await mutateJson(`${MY_S3_BASE}/keys`, { method: "POST", body: { name, access: template, buckets } }));
   if (typeof created.secret_access_key === "string" && typeof created.access_key_id === "string") {

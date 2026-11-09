@@ -617,7 +617,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             LOGGER.info("control plane stopped")
 
     app = FastAPI(
-        title="Pishkar",
+        title="DevAssist",
         version=__version__,
         docs_url=None,
         redoc_url=None,

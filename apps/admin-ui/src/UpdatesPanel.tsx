@@ -100,11 +100,11 @@ type UpdateSettings = {
 const BASE = "/api/v1/updates";
 
 const T = {
-  unavailable: { fa: "این بخش روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "This section isn't on this server version. Update Pishkar." },
+  unavailable: { fa: "این بخش روی نسخه فعلی سرور نیست. DevAssist را به‌روز کنید.", en: "This section isn't on this server version. Update DevAssist." },
   notPaired: { fa: "برای دیدن نسخه‌های تازه، اول دستیار سرور را وصل کنید.", en: "Connect the server helper first to see new versions." },
   pairAgent: { fa: "وصل کردن دستیار سرور", en: "Connect the server helper" },
   title: { fa: "نسخه‌های تازه برنامه‌ها", en: "New app versions" },
-  hint: { fa: "پیشکار فقط خبر می‌دهد؛ خودش چیزی را به‌روز نمی‌کند.", en: "Pishkar only tells you; it never updates anything itself." },
+  hint: { fa: "DevAssist فقط خبر می‌دهد؛ خودش چیزی را به‌روز نمی‌کند.", en: "DevAssist only tells you; it never updates anything itself." },
   check: { fa: "بررسی همین حالا", en: "Check now" },
   checking: { fa: "در حال بررسی…", en: "Checking…" },
   checkStarted: { fa: "بررسی شروع شد؛ نتیجه چند لحظه بعد این‌جا می‌آید.", en: "The check started; results will appear here shortly." },

@@ -1,4 +1,4 @@
-# Install Pishkar with Docker
+# Install DevAssist with Docker
 
 **English** · [فارسی](install-docker.fa.md)
 
@@ -24,8 +24,8 @@ All data of the main container lives in one mount at `/data`. Ports: `8080` pane
 ## 2. Quick start (build from source)
 
 ```bash
-git clone https://github.com/SeniorKian/MrK_DevAssist.git pishkar
-cd pishkar
+git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist
+cd devassist
 cp .env.example .env        # optional: ports, memory, build mirrors
 docker compose up -d --build
 docker compose ps           # wait until mrk-mirror is "healthy" (first start: a few minutes)
@@ -49,8 +49,8 @@ To use a host folder instead of the named volume, create it owned by `10001:1000
 `MRK_HOST_DATA_PATH`:
 
 ```bash
-sudo install -d -o 10001 -g 10001 -m 0750 /srv/pishkar-data
-echo 'MRK_HOST_DATA_PATH=/srv/pishkar-data' >> .env
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/devassist-data
+echo 'MRK_HOST_DATA_PATH=/srv/devassist-data' >> .env
 ```
 
 ## 3. Production (published image)
@@ -153,7 +153,7 @@ The panel's **DNS → Setup** page checks each step and shows the exact commands
    systemd-resolved's stub on `127.0.0.53` does **not** conflict with `127.0.0.1:53`. Another
    server (dnsmasq, bind9, ...) on `0.0.0.0:53` does; stop it only if nothing needs it:
    `sudo systemctl disable --now <unit>`.
-3. **Host resolver uses Pishkar** (systemd-resolved hosts), with a public DNS as backup:
+3. **Host resolver uses DevAssist** (systemd-resolved hosts), with a public DNS as backup:
    ```bash
    sudo mkdir -p /etc/systemd/resolved.conf.d
    sudo tee /etc/systemd/resolved.conf.d/mrk.conf >/dev/null <<'EOF'
@@ -169,7 +169,7 @@ The panel's **DNS → Setup** page checks each step and shows the exact commands
    Start the engine before this step. Undo: remove `mrk.conf`, move `/etc/resolv.conf.mrk-backup`
    back and restart systemd-resolved. Hosts without systemd-resolved get a static
    `/etc/resolv.conf` with `nameserver 127.0.0.1` plus a backup (the panel shows it).
-4. **Containers use Pishkar**: add only the `dns` key to `/etc/docker/daemon.json`, keeping
+4. **Containers use DevAssist**: add only the `dns` key to `/etc/docker/daemon.json`, keeping
    every other key, for example `"dns": ["172.17.0.1", "1.1.1.1"]`, then
    `sudo systemctl restart docker`. **This restarts every container on the server**, including
    Dokploy and its apps; do it at a quiet time.

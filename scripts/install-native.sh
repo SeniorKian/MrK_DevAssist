@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-native.sh — install Pishkar without Docker (systemd), on
+# install-native.sh — install DevAssist without Docker (systemd), on
 # Debian 12/13 or Ubuntu 22.04/24.04, amd64 or arm64.
 #
 # It reproduces what deploy/appliance/Dockerfile builds and what the containers
@@ -33,13 +33,13 @@ readonly SCRIPT_DIR REPO_ROOT LOCK_FILE
 readonly PREFIX="/opt/mrk"
 readonly RELEASES="$PREFIX/releases"
 readonly RUNTIMES="$PREFIX/runtimes"
-readonly MARKER="$PREFIX/.pishkar-native"
-readonly CONF_DIR="/etc/pishkar"
+readonly MARKER="$PREFIX/.devassist-native"
+readonly CONF_DIR="/etc/devassist"
 readonly INSTALL_CONF="$CONF_DIR/install.conf"
-readonly CACHE_DIR="/var/cache/pishkar"
+readonly CACHE_DIR="/var/cache/devassist"
 readonly UNIT_DIR="/etc/systemd/system"
-readonly EXEC_HELPER="/usr/local/sbin/pishkar-exec"
-readonly RUN_USER="pishkar"
+readonly EXEC_HELPER="/usr/local/sbin/devassist-exec"
+readonly RUN_USER="devassist"
 readonly PREFERRED_ID=10001
 # Fixed sub-directories of the data volume (deploy/appliance/entrypoint.py).
 readonly DATA_SUBDIRS=(database npm npm/config npm/storage pypi pypi/server pypi/auth control-plane router)
@@ -54,7 +54,7 @@ PURGE=0
 WITH_DNS=0
 WITH_FIREWALL=0
 WITH_AGENT=0
-DATA_DIR="/var/lib/pishkar"
+DATA_DIR="/var/lib/devassist"
 SKIP_PORT_CHECK=0
 SKIP_OS_CHECK=0
 MIN_FREE_GB=5
@@ -68,9 +68,9 @@ NO_START=0
 REBUILD=0
 LANG_MODE="both"
 
-NODE_DIST="${PISHKAR_NODE_DIST:-https://nodejs.org/dist}"
-GO_DIST="${PISHKAR_GO_DIST:-https://dl.google.com/go}"
-UV_DIST="${PISHKAR_UV_DIST:-https://github.com/astral-sh/uv/releases/download}"
+NODE_DIST="${DEVASSIST_NODE_DIST:-https://nodejs.org/dist}"
+GO_DIST="${DEVASSIST_GO_DIST:-https://dl.google.com/go}"
+UV_DIST="${DEVASSIST_UV_DIST:-https://github.com/astral-sh/uv/releases/download}"
 
 usage() {
     cat <<'EOF'
@@ -80,13 +80,13 @@ Commands:
   install     install or repair (default; safe to run again)
   upgrade     build the current checkout, then switch with a short restart
   status      show units, release and health
-  uninstall   remove programs and units (data and /etc/pishkar are kept)
+  uninstall   remove programs and units (data and /etc/devassist are kept)
 
 Options:
-  --with-dns            also install the DNS engine (pishkar-dns, port 53)
-  --with-firewall       also install the nftables firewall helper (pishkar-firewall)
-  --with-agent          also install the Host Agent (pishkar-agent, needs Docker)
-  --data-dir DIR        data directory on the host (default /var/lib/pishkar)
+  --with-dns            also install the DNS engine (devassist-dns, port 53)
+  --with-firewall       also install the nftables firewall helper (devassist-firewall)
+  --with-agent          also install the Host Agent (devassist-agent, needs Docker)
+  --data-dir DIR        data directory on the host (default /var/lib/devassist)
   --dns-binary PATH     use this prebuilt mrk-dns instead of building it with Go
   --dnsbench-binary PATH  prebuilt mrk-dnsbench (optional, with --dns-binary)
   --python PATH         use an existing Python 3.13 instead of the pinned build
@@ -104,8 +104,8 @@ Options:
   --lang fa|en|both     message language (default both)
   -h, --help            this help
 
-Download mirrors (environment): PISHKAR_NODE_DIST, PISHKAR_GO_DIST,
-PISHKAR_UV_DIST, and uv's own UV_PYTHON_INSTALL_MIRROR for Python builds.
+Download mirrors (environment): DEVASSIST_NODE_DIST, DEVASSIST_GO_DIST,
+DEVASSIST_UV_DIST, and uv's own UV_PYTHON_INSTALL_MIRROR for Python builds.
 EOF
 }
 
@@ -158,10 +158,10 @@ fi
 
 # say LEVEL "persian" "english"
 say() {
-    local level="$1" fa="$2" en="$3" color="$C_INFO" tag="pishkar"
+    local level="$1" fa="$2" en="$3" color="$C_INFO" tag="devassist"
     case "$level" in
-        warn) color="$C_WARN"; tag="pishkar: warning" ;;
-        error) color="$C_ERR"; tag="pishkar: error" ;;
+        warn) color="$C_WARN"; tag="devassist: warning" ;;
+        error) color="$C_ERR"; tag="devassist: error" ;;
         ok) color="$C_OK" ;;
     esac
     case "$LANG_MODE" in
@@ -335,7 +335,7 @@ check_ports() {
     [[ $SKIP_PORT_CHECK -eq 1 ]] && return 0
     have ss || { warn "ss نیست؛ بررسی پورت‌ها انجام نشد" "ss not found; ports not checked"; return 0; }
     local port used failed=0
-    if ! unit_active pishkar.service; then
+    if ! unit_active devassist.service; then
         for port in "${MAIN_PORTS[@]}"; do
             used="$(port_users "$port")"
             if [[ -n "$used" ]]; then
@@ -344,7 +344,7 @@ check_ports() {
             fi
         done
     fi
-    if [[ $WITH_DNS -eq 1 ]] && ! unit_active pishkar-dns.service; then
+    if [[ $WITH_DNS -eq 1 ]] && ! unit_active devassist-dns.service; then
         # systemd-resolved's stub on 127.0.0.53/127.0.0.54 does not clash with 127.0.0.1:53.
         used="$(port_users 53 | awk '$2 !~ /^127\.0\.0\.5[34]:/')"
         if [[ -n "$used" ]]; then
@@ -354,7 +354,7 @@ check_ports() {
             failed=1
         fi
     fi
-    if [[ $WITH_AGENT -eq 1 ]] && ! unit_active pishkar-agent.service && [[ -n "$(port_users 7070)" ]]; then
+    if [[ $WITH_AGENT -eq 1 ]] && ! unit_active devassist-agent.service && [[ -n "$(port_users 7070)" ]]; then
         warn "پورت 7070 (Host Agent) گرفته شده است" "port 7070 (Host Agent) is in use"
         failed=1
     fi
@@ -369,8 +369,8 @@ check_docker_install() {
     local names
     names="$(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null || true)"
     if grep -Eq 'mrk-mirror|mrk-package-mirror|mrk/package-mirror' <<<"$names"; then
-        die "نسخه Docker پیشکار در حال اجراست؛ هر دو با هم روی یک سرور اجرا نشوند (پورت‌ها و داده یکی است)" \
-            "the Docker install of Pishkar is running; do not run both on one server (same ports)"
+        die "نسخه Docker DevAssist در حال اجراست؛ هر دو با هم روی یک سرور اجرا نشوند (پورت‌ها و داده یکی است)" \
+            "the Docker install of DevAssist is running; do not run both on one server (same ports)"
     fi
 }
 
@@ -610,7 +610,7 @@ build_dns() {
     run rm -rf "$build"
 }
 
-# The command directory mounted at /usr/local/bin inside pishkar.service: the
+# The command directory mounted at /usr/local/bin inside devassist.service: the
 # absolute paths supervisord.conf and the control plane use.
 build_bin_dir() {
     local bin="$RELEASE_DIR/bin" venv_bin="$RELEASE_DIR/venv/bin" entry name
@@ -642,7 +642,7 @@ copy_appliance_files() {
     done
     # Same CRLF guard as the Dockerfile.
     run sed -i 's/\r$//' "$RELEASE_DIR/devpi-start.sh" "$RELEASE_DIR/devpi-configure.sh" "$RELEASE_DIR/supervisord.conf"
-    run install -m 0644 "$REPO_ROOT/deploy/native/pishkar_supervise.py" "$RELEASE_DIR/pishkar_supervise.py"
+    run install -m 0644 "$REPO_ROOT/deploy/native/devassist_supervise.py" "$RELEASE_DIR/devassist_supervise.py"
     run install -m 0644 "$REPO_ROOT/LICENSE" "$RELEASE_DIR/LICENSE"
     printf 'commit=%s\nbuild_date=%s\npython=%s\nnode=%s\ngo=%s\n' \
         "$COMMIT" "$BUILD_DATE" "$PY_VERSION" "$NODE_VERSION" "$GO_VERSION" \
@@ -731,7 +731,7 @@ ensure_user() {
         id_args=(--gid "$RUN_USER")
     fi
     run useradd --system "${id_args[@]}" --no-create-home --home-dir /nonexistent \
-        --shell /usr/sbin/nologin --comment "Pishkar" "$RUN_USER"
+        --shell /usr/sbin/nologin --comment "DevAssist" "$RUN_USER"
 }
 
 # mount_point PATH: an empty directory that systemd mounts over inside a unit.
@@ -750,14 +750,14 @@ ensure_layout() {
     CREATED_MOUNT_POINTS=()
     if [[ -r "$INSTALL_CONF" ]]; then
         local previous
-        previous="$(sed -n 's/^PISHKAR_CREATED_MOUNT_POINTS=//p' "$INSTALL_CONF" | head -n 1)"
+        previous="$(sed -n 's/^DEVASSIST_CREATED_MOUNT_POINTS=//p' "$INSTALL_CONF" | head -n 1)"
         read -r -a CREATED_MOUNT_POINTS <<<"$previous"
     fi
     run install -d -m 0755 -o root -g root "$PREFIX" "$RELEASES" "$RUNTIMES" "$CACHE_DIR"
-    [[ -e "$MARKER" ]] || printf 'Pishkar native install; managed by scripts/install-native.sh\n' \
+    [[ -e "$MARKER" ]] || printf 'DevAssist native install; managed by scripts/install-native.sh\n' \
         | put_file 0644 root root "$MARKER"
     run install -d -m 0750 -o root -g "$RUN_USER" "$CONF_DIR"
-    # Data directory with the fixed layout of deploy/appliance/entrypoint.py (0750, pishkar).
+    # Data directory with the fixed layout of deploy/appliance/entrypoint.py (0750, devassist).
     run install -d -m 0750 -o "$RUN_USER" -g "$RUN_USER" "$DATA_DIR"
     local sub
     for sub in "${DATA_SUBDIRS[@]}"; do
@@ -778,36 +778,36 @@ install_env_file() {
         info "$dest از قبل هست و دست‌نخورده می‌ماند" "$dest exists and is kept unchanged"
         return 0
     fi
-    sed -e "s|@PISHKAR_COMMIT@|$COMMIT|g" -e "s|@PISHKAR_BUILD_DATE@|$BUILD_DATE|g" "$template" \
+    sed -e "s|@DEVASSIST_COMMIT@|$COMMIT|g" -e "s|@DEVASSIST_BUILD_DATE@|$BUILD_DATE|g" "$template" \
         | put_file 0640 root "$RUN_USER" "$dest"
 }
 
 install_config() {
     step "Configuration / تنظیمات"
-    install_env_file "$REPO_ROOT/deploy/native/pishkar.env.example" "$CONF_DIR/pishkar.env"
+    install_env_file "$REPO_ROOT/deploy/native/devassist.env.example" "$CONF_DIR/devassist.env"
     # Build metadata always follows the active release.
     run sed -i -e "s|^MRK_BUILD_COMMIT=.*|MRK_BUILD_COMMIT=$COMMIT|" \
-        -e "s|^MRK_BUILD_DATE=.*|MRK_BUILD_DATE=$BUILD_DATE|" "$CONF_DIR/pishkar.env"
+        -e "s|^MRK_BUILD_DATE=.*|MRK_BUILD_DATE=$BUILD_DATE|" "$CONF_DIR/devassist.env"
     [[ $WITH_DNS -eq 1 ]] && install_env_file "$REPO_ROOT/deploy/native/dns.env.example" "$CONF_DIR/dns.env"
     [[ $WITH_FIREWALL -eq 1 ]] && install_env_file "$REPO_ROOT/deploy/native/firewall.env.example" "$CONF_DIR/firewall.env"
     [[ $WITH_AGENT -eq 1 ]] && install_env_file "$REPO_ROOT/deploy/native/agent.env.example" "$CONF_DIR/agent.env"
     {
         printf '# Written by scripts/install-native.sh. Do not edit by hand.\n'
-        printf 'PISHKAR_DATA_DIR=%s\n' "$DATA_DIR"
-        printf 'PISHKAR_REPO=%s\n' "$REPO_ROOT"
-        printf 'PISHKAR_WITH_DNS=%s\n' "$WITH_DNS"
-        printf 'PISHKAR_WITH_FIREWALL=%s\n' "$WITH_FIREWALL"
-        printf 'PISHKAR_WITH_AGENT=%s\n' "$WITH_AGENT"
-        printf 'PISHKAR_CREATED_MOUNT_POINTS=%s\n' "${CREATED_MOUNT_POINTS[*]}"
+        printf 'DEVASSIST_DATA_DIR=%s\n' "$DATA_DIR"
+        printf 'DEVASSIST_REPO=%s\n' "$REPO_ROOT"
+        printf 'DEVASSIST_WITH_DNS=%s\n' "$WITH_DNS"
+        printf 'DEVASSIST_WITH_FIREWALL=%s\n' "$WITH_FIREWALL"
+        printf 'DEVASSIST_WITH_AGENT=%s\n' "$WITH_AGENT"
+        printf 'DEVASSIST_CREATED_MOUNT_POINTS=%s\n' "${CREATED_MOUNT_POINTS[*]}"
     } | put_file 0644 root root "$INSTALL_CONF"
-    run install -m 0755 -o root -g root "$REPO_ROOT/deploy/native/pishkar-exec.sh" "$EXEC_HELPER"
+    run install -m 0755 -o root -g root "$REPO_ROOT/deploy/native/devassist-exec.sh" "$EXEC_HELPER"
 }
 
 selected_units() {
-    printf '%s\n' pishkar.service
-    [[ $WITH_DNS -eq 1 ]] && printf '%s\n' pishkar-dns.service
-    [[ $WITH_FIREWALL -eq 1 ]] && printf '%s\n' pishkar-firewall.service
-    [[ $WITH_AGENT -eq 1 ]] && printf '%s\n' pishkar-agent.service
+    printf '%s\n' devassist.service
+    [[ $WITH_DNS -eq 1 ]] && printf '%s\n' devassist-dns.service
+    [[ $WITH_FIREWALL -eq 1 ]] && printf '%s\n' devassist-firewall.service
+    [[ $WITH_AGENT -eq 1 ]] && printf '%s\n' devassist-agent.service
     return 0
 }
 
@@ -815,7 +815,7 @@ install_units() {
     step "systemd units"
     local unit
     while read -r unit; do
-        sed -e "s|@PISHKAR_DATA_DIR@|$DATA_DIR|g" "$REPO_ROOT/deploy/native/systemd/$unit" \
+        sed -e "s|@DEVASSIST_DATA_DIR@|$DATA_DIR|g" "$REPO_ROOT/deploy/native/systemd/$unit" \
             | put_file 0644 root root "$UNIT_DIR/$unit"
     done < <(selected_units)
     run systemctl daemon-reload
@@ -825,11 +825,11 @@ install_units() {
 load_install_conf() {
     [[ -r "$INSTALL_CONF" ]] || return 0
     local value
-    value="$(sed -n 's/^PISHKAR_DATA_DIR=//p' "$INSTALL_CONF" | head -n 1)"
+    value="$(sed -n 's/^DEVASSIST_DATA_DIR=//p' "$INSTALL_CONF" | head -n 1)"
     [[ -n "$value" ]] && DATA_DIR="$value"
-    [[ "$(sed -n 's/^PISHKAR_WITH_DNS=//p' "$INSTALL_CONF")" == 1 ]] && WITH_DNS=1
-    [[ "$(sed -n 's/^PISHKAR_WITH_FIREWALL=//p' "$INSTALL_CONF")" == 1 ]] && WITH_FIREWALL=1
-    [[ "$(sed -n 's/^PISHKAR_WITH_AGENT=//p' "$INSTALL_CONF")" == 1 ]] && WITH_AGENT=1
+    [[ "$(sed -n 's/^DEVASSIST_WITH_DNS=//p' "$INSTALL_CONF")" == 1 ]] && WITH_DNS=1
+    [[ "$(sed -n 's/^DEVASSIST_WITH_FIREWALL=//p' "$INSTALL_CONF")" == 1 ]] && WITH_FIREWALL=1
+    [[ "$(sed -n 's/^DEVASSIST_WITH_AGENT=//p' "$INSTALL_CONF")" == 1 ]] && WITH_AGENT=1
     return 0
 }
 
@@ -838,21 +838,21 @@ load_install_conf() {
 activate_release() {
     step "Activate / فعال‌سازی $RELEASE_ID"
     local was_active=0 unit link
-    unit_active pishkar.service && was_active=1
+    unit_active devassist.service && was_active=1
     if [[ $was_active -eq 1 && $NO_START -eq 0 ]]; then
         info "توقف سرویس (تا 3 دقیقه؛ PGlite آخر از همه بسته می‌شود)" \
             "stopping the service (up to 3 minutes; PGlite stops last)"
-        run systemctl stop pishkar.service
+        run systemctl stop devassist.service
     fi
     run ln -sfn "releases/$RELEASE_ID" "$PREFIX/current"
     for link in venv admin-ui verdaccio pglite bin supervisord.conf devpi-start.sh devpi-configure.sh \
-        pishkar_supervise.py LICENSE; do
+        devassist_supervise.py LICENSE; do
         run ln -sfn "current/$link" "$PREFIX/$link"
     done
     [[ $NO_START -eq 1 ]] && return 0
     while read -r unit; do
         run systemctl enable "$unit"
-        if [[ "$unit" == pishkar.service ]]; then
+        if [[ "$unit" == devassist.service ]]; then
             run systemctl start "$unit"
         else
             run systemctl restart "$unit"
@@ -866,13 +866,13 @@ wait_ready() {
         "waiting for the panel to be ready (the first start takes a few minutes)"
     local waited=0
     until "$EXEC_HELPER" python -m mrk_control_plane.healthcheck >/dev/null 2>&1; do
-        if ! unit_active pishkar.service; then
-            die "سرویس pishkar اجرا نمی‌شود؛ ببینید: journalctl -u pishkar -n 100" \
-                "pishkar.service is not running; see: journalctl -u pishkar -n 100"
+        if ! unit_active devassist.service; then
+            die "سرویس devassist اجرا نمی‌شود؛ ببینید: journalctl -u devassist -n 100" \
+                "devassist.service is not running; see: journalctl -u devassist -n 100"
         fi
         if [[ $waited -ge 600 ]]; then
-            warn "پنل بعد از 10 دقیقه آماده نشد؛ لاگ را ببینید: journalctl -u pishkar -f" \
-                "the panel was not ready after 10 minutes; check: journalctl -u pishkar -f"
+            warn "پنل بعد از 10 دقیقه آماده نشد؛ لاگ را ببینید: journalctl -u devassist -f" \
+                "the panel was not ready after 10 minutes; check: journalctl -u devassist -f"
             return 0
         fi
         sleep 5
@@ -883,9 +883,9 @@ wait_ready() {
 
 summary() {
     local port="" host=""
-    if [[ -r "$CONF_DIR/pishkar.env" ]]; then
-        port="$(sed -n 's/^MRK_PORT=//p' "$CONF_DIR/pishkar.env" | head -n 1)"
-        host="$(sed -n 's/^MRK_HOST=//p' "$CONF_DIR/pishkar.env" | head -n 1)"
+    if [[ -r "$CONF_DIR/devassist.env" ]]; then
+        port="$(sed -n 's/^MRK_PORT=//p' "$CONF_DIR/devassist.env" | head -n 1)"
+        host="$(sed -n 's/^MRK_HOST=//p' "$CONF_DIR/devassist.env" | head -n 1)"
     fi
     port="${port:-8080}"
     host="${host:-127.0.0.1}"
@@ -895,14 +895,14 @@ summary() {
 
   Panel / پنل:          http://$host:$port  (from your PC: ssh -L $port:127.0.0.1:$port <server>)
   First visit:          the panel shows "First Time Setup" to create the owner account
-  Logs / لاگ:           journalctl -u pishkar -f
-  Config / تنظیمات:     $CONF_DIR/pishkar.env  (then: systemctl restart pishkar)
+  Logs / لاگ:           journalctl -u devassist -f
+  Config / تنظیمات:     $CONF_DIR/devassist.env  (then: systemctl restart devassist)
   Data / داده:          $DATA_DIR
-  Maintenance:          sudo pishkar-exec supervisorctl -c /opt/mrk/supervisord.conf status
+  Maintenance:          sudo devassist-exec supervisorctl -c /opt/mrk/supervisord.conf status
   Upgrade / ارتقا:      git pull && sudo bash scripts/install-native.sh upgrade
   Uninstall / حذف:      sudo bash scripts/install-native.sh uninstall
 
-  Network: every service listens on 127.0.0.1 only (see /etc/pishkar/pishkar.env).
+  Network: every service listens on 127.0.0.1 only (see /etc/devassist/devassist.env).
   If you open one on a public address, firewall it, e.g.:  ufw deny 4873/tcp
   شبکه: همه سرویس‌ها فقط روی 127.0.0.1 هستند؛ اگر یکی را عمومی کردید با فایروال ببندید.
 EOF
@@ -911,15 +911,15 @@ EOF
 
   DNS: listening on 127.0.0.1:53 and 172.17.0.1:53 (first start). Test: dig @127.0.0.1 localhost
   Then follow Panel -> DNS -> Setup (resolver and Docker steps). The engine is
-  managed with `systemctl ... pishkar-dns`, not `docker compose`.
+  managed with `systemctl ... devassist-dns`, not `docker compose`.
 EOF
     fi
     if [[ $WITH_FIREWALL -eq 1 || $WITH_AGENT -eq 1 ]]; then
         cat <<'EOF'
 
   Pairing keys are logged once / کلید جفت‌سازی یک بار در لاگ می‌آید:
-    journalctl -u pishkar-agent | grep "pairing key"      (URL: http://127.0.0.1:7070)
-    journalctl -u pishkar-firewall | grep "pairing key"   (URL: unix:/run/mrk-firewall/firewall.sock)
+    journalctl -u devassist-agent | grep "pairing key"      (URL: http://127.0.0.1:7070)
+    journalctl -u devassist-firewall | grep "pairing key"   (URL: unix:/run/mrk-firewall/firewall.sock)
 EOF
     fi
 }
@@ -948,7 +948,7 @@ cmd_install() {
         # Re-running install keeps components chosen before and adds new ones.
         local requested_dir="$DATA_DIR"
         load_install_conf
-        if [[ "$requested_dir" != "/var/lib/pishkar" && "$requested_dir" != "$DATA_DIR" ]]; then
+        if [[ "$requested_dir" != "/var/lib/devassist" && "$requested_dir" != "$DATA_DIR" ]]; then
             die "مسیر داده قبلاً $DATA_DIR بوده؛ جابه‌جایی داده دستی است" \
                 "the data directory is already $DATA_DIR; moving data is a manual step"
         fi
@@ -977,7 +977,7 @@ cmd_install() {
 
 cmd_status() {
     local unit
-    for unit in pishkar pishkar-dns pishkar-firewall pishkar-agent; do
+    for unit in devassist devassist-dns devassist-firewall devassist-agent; do
         [[ -e "$UNIT_DIR/$unit.service" ]] || continue
         printf '%-18s %s\n' "$unit" "$(systemctl is-active "$unit" 2>/dev/null || true)"
     done
@@ -988,7 +988,7 @@ cmd_status() {
         info "نصب بومی پیدا نشد" "no native install found"
         return 0
     fi
-    if [[ $EUID -eq 0 ]] && unit_active pishkar.service; then
+    if [[ $EUID -eq 0 ]] && unit_active devassist.service; then
         if "$EXEC_HELPER" python -m mrk_control_plane.healthcheck >/dev/null 2>&1; then
             ok "پنل آماده است" "panel ready"
         else
@@ -1010,7 +1010,7 @@ cmd_uninstall() {
             "Programs and units are removed; data and $CONF_DIR are kept." "UNINSTALL"
     fi
     local unit
-    for unit in pishkar-agent pishkar-firewall pishkar-dns pishkar; do
+    for unit in devassist-agent devassist-firewall devassist-dns devassist; do
         if [[ -e "$UNIT_DIR/$unit.service" ]]; then
             run systemctl disable --now "$unit.service" || true
             run rm -f "$UNIT_DIR/$unit.service"
@@ -1028,7 +1028,7 @@ cmd_uninstall() {
     local path
     local -a created=()
     if [[ -r "$INSTALL_CONF" ]]; then
-        read -r -a created <<<"$(sed -n 's/^PISHKAR_CREATED_MOUNT_POINTS=//p' "$INSTALL_CONF" | head -n 1)"
+        read -r -a created <<<"$(sed -n 's/^DEVASSIST_CREATED_MOUNT_POINTS=//p' "$INSTALL_CONF" | head -n 1)"
     fi
     for path in "${created[@]}"; do
         [[ -d "$path" ]] && run rmdir --ignore-fail-on-non-empty "$path"
@@ -1037,11 +1037,11 @@ cmd_uninstall() {
         run rm -rf "$DATA_DIR" /var/lib/mrk-dns /var/lib/mrk-firewall /var/lib/mrk-agent "$CONF_DIR"
         if getent passwd "$RUN_USER" >/dev/null; then run userdel "$RUN_USER"; fi
         if getent group "$RUN_USER" >/dev/null; then run groupdel "$RUN_USER"; fi
-        ok "پیشکار و همه داده‌هایش حذف شد" "Pishkar and all its data were removed"
+        ok "DevAssist و همه داده‌هایش حذف شد" "DevAssist and all its data were removed"
     else
         run rm -f "$INSTALL_CONF"
-        ok "پیشکار حذف شد؛ داده در $DATA_DIR و تنظیمات در $CONF_DIR ماند" \
-            "Pishkar was removed; data stays in $DATA_DIR and config in $CONF_DIR"
+        ok "DevAssist حذف شد؛ داده در $DATA_DIR و تنظیمات در $CONF_DIR ماند" \
+            "DevAssist was removed; data stays in $DATA_DIR and config in $CONF_DIR"
     fi
 }
 

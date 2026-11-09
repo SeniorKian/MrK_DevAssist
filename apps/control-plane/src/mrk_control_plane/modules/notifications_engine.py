@@ -1101,7 +1101,7 @@ class NotificationCenter:
         message = senders.OutboundMessage(
             event_type="notification.test",
             severity="info",
-            title="پیشکار test notification · پیام آزمایشی پیشکار",
+            title="DevAssist test notification · پیام آزمایشی DevAssist",
             message=(
                 "If you can read this, the channel works. / "
                 "اگر این پیام را می‌بینید، کانال کار می‌کند."

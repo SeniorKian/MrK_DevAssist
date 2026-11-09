@@ -1,6 +1,6 @@
 /**
  * About (docs/33 §1.1 utilities): the "engineer's glance" moved off Home.
- * Version and build, how long Pishkar has been running, the state of each part, and the built-in protections.
+ * Version and build, how long DevAssist has been running, the state of each part, and the built-in protections.
  */
 import { useCallback, useEffect, useState } from "react";
 import { Box, Button, Skeleton, Stack, Typography } from "@mui/material";
@@ -30,13 +30,13 @@ type SystemStatus = {
 
 const COPY = {
   title: { fa: "درباره سامانه", en: "About" },
-  subtitle: { fa: "نسخه، بخش‌های پیشکار و محافظت‌هایی که همیشه روشن‌اند.", en: "Version, the parts of Pishkar, and the protections that are always on." },
+  subtitle: { fa: "نسخه، بخش‌های DevAssist و محافظت‌هایی که همیشه روشن‌اند.", en: "Version, the parts of DevAssist, and the protections that are always on." },
   versionCard: { fa: "نسخه و ساخت", en: "Version and build" },
   serverVersion: { fa: "نسخه سرور", en: "Server version" },
   panelVersion: { fa: "نسخه این پنل", en: "This panel's version" },
   runningFor: { fa: "مدت روشن بودن", en: "Running for" },
   builtAt: { fa: "زمان ساخت", en: "Built at" },
-  partsCard: { fa: "بخش‌های پیشکار", en: "Parts of Pishkar" },
+  partsCard: { fa: "بخش‌های DevAssist", en: "Parts of DevAssist" },
   partsHint: { fa: "آخرین وضعیتی که هر بخش گزارش داده است.", en: "The latest status each part reported." },
   protectionsCard: { fa: "محافظت‌های داخلی", en: "Built-in protections" },
   refresh: { fa: "تازه کردن", en: "Refresh" },

@@ -30,7 +30,7 @@ export const CONFIRM_WORDS = {
   unblockAll: { word: { fa: "همه را آزاد کن", en: "UNBLOCK ALL" }, token: "UNBLOCK ALL" },
   /** Unpair the firewall helper. */
   unpair: { word: { fa: "جدا کن", en: "UNPAIR" }, token: "UNPAIR" },
-  /** Offline restore: the operator confirms Pishkar is stopped. */
+  /** Offline restore: the operator confirms DevAssist is stopped. */
   stoppedMrk: { word: { fa: "سرویس را خاموش کردم", en: "I_HAVE_STOPPED_MRK" }, token: "I_HAVE_STOPPED_MRK" },
   /** DNS: delete the question log (all of it, or everything before a time). */
   deleteLogs: { word: { fa: "پاک کن", en: "DELETE LOGS" }, token: "DELETE LOGS" },

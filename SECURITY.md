@@ -28,7 +28,7 @@ us reasonable time to release a fix before you publish details. You may write in
 
 ## Supported versions
 
-Pishkar is in its 0.x series. Only the latest release and the current `main` branch receive
+DevAssist is in its 0.x series. Only the latest release and the current `main` branch receive
 security fixes; there are no backports to older 0.x releases.
 
 | Version | Supported |
@@ -52,7 +52,7 @@ In scope:
 Out of scope:
 
 - vulnerabilities in upstream projects we use unmodified (Verdaccio, devpi, PGlite, Python, Node,
-  Go, libraries): report them upstream; tell us if Pishkar's use makes them exploitable;
+  Go, libraries): report them upstream; tell us if DevAssist's use makes them exploitable;
 - issues that need an already compromised host, root access or the owner account;
 - missing hardening on deployments that changed the documented defaults (for example a panel
   published without TLS or with `MRK_AUTH_COOKIE_SECURE=false`);

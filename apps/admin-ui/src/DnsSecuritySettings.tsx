@@ -31,16 +31,16 @@ import {
 const COPY = {
   // resolution
   resTitle: { fa: "روش پیدا کردن نشانی‌ها", en: "How addresses are found" },
-  resHint: { fa: "وقتی کسی نام سایتی را می‌پرسد، پیشکار نشانی آن را از کجا بیاورد.", en: "When someone asks for a site's name, where Pishkar gets its address from." },
+  resHint: { fa: "وقتی کسی نام سایتی را می‌پرسد، DevAssist نشانی آن را از کجا بیاورد.", en: "When someone asks for a site's name, where DevAssist gets its address from." },
   forwardTitle: { fa: "از سرورهای مطمئن بپرس", en: "Ask trusted servers" },
   forwardBody: {
-    fa: "پیشکار از DNS‌های بیرونی فهرست بالا می‌پرسد. ساده و سریع است؛ فقط باید به آن سرورها اعتماد کنید.",
-    en: "Pishkar asks the outside DNS servers listed above. Simple and fast; you just have to trust those servers."
+    fa: "DevAssist از DNS‌های بیرونی فهرست بالا می‌پرسد. ساده و سریع است؛ فقط باید به آن سرورها اعتماد کنید.",
+    en: "DevAssist asks the outside DNS servers listed above. Simple and fast; you just have to trust those servers."
   },
   recursiveTitle: { fa: "خودش مستقیم پیدا کند", en: "Find it directly" },
   recursiveBody: {
-    fa: "پیشکار از سرورهای ریشه اینترنت شروع می‌کند و خودش جواب را پیدا می‌کند؛ به هیچ واسطه‌ای وابسته نیست. پرسش اولِ هر نام کمی کندتر است.",
-    en: "Pishkar starts at the internet's root servers and finds the answer itself, with no middleman. The first question for each name is a bit slower."
+    fa: "DevAssist از سرورهای ریشه اینترنت شروع می‌کند و خودش جواب را پیدا می‌کند؛ به هیچ واسطه‌ای وابسته نیست. پرسش اولِ هر نام کمی کندتر است.",
+    en: "DevAssist starts at the internet's root servers and finds the answer itself, with no middleman. The first question for each name is a bit slower."
   },
   bothTitle: { fa: "اول بپرس، اگر نشد خودش", en: "Ask first, find it myself if that fails" },
   bothBody: {
@@ -49,8 +49,8 @@ const COPY = {
   },
   suggested: { fa: "پیشنهادی", en: "Suggested" },
   primingOk: { fa: "سرورهای ریشه در دسترس‌اند ({count} از ۱۳ جواب دادند).", en: "The root servers are reachable ({count} of 13 answered)." },
-  primingBad: { fa: "پیشکار به سرورهای ریشه نرسید. شاید پورت ۵۳ خروجی سرور بسته است.", en: "Pishkar couldn't reach the root servers. Outgoing port 53 may be blocked." },
-  primingWaiting: { fa: "پیشکار هنوز سرورهای ریشه را بررسی نکرده است؛ چند لحظه بعد ذخیره و دوباره نگاه کنید.", en: "Pishkar hasn't checked the root servers yet; save and look again in a moment." },
+  primingBad: { fa: "DevAssist به سرورهای ریشه نرسید. شاید پورت ۵۳ خروجی سرور بسته است.", en: "DevAssist couldn't reach the root servers. Outgoing port 53 may be blocked." },
+  primingWaiting: { fa: "DevAssist هنوز سرورهای ریشه را بررسی نکرده است؛ چند لحظه بعد ذخیره و دوباره نگاه کنید.", en: "DevAssist hasn't checked the root servers yet; save and look again in a moment." },
   noUpstreamsForward: { fa: "برای این روش دست‌کم یک DNS بیرونی روشن لازم است.", en: "This way needs at least one outside DNS server turned on." },
   resAdvanced: { fa: "جزئیات حل از ریشه", en: "Finding from the root" },
   qmin: { fa: "کمتر گفتن نام کامل به سرورهای بین راه", en: "Tell servers along the way less of the name" },
@@ -65,7 +65,7 @@ const COPY = {
   caseRandom: { fa: "حروف بزرگ و کوچک تصادفی در پرسش", en: "Random upper and lower case in questions" },
   caseRandomHint: { fa: "جعل جواب را سخت‌تر می‌کند؛ با سرورهای ناسازگار خودکار خاموش می‌شود.", en: "Makes fake answers harder; turns itself off for servers that can't handle it." },
   privateNs: { fa: "اجازه پرسیدن از سرورهای شبکه داخلی", en: "Allow asking servers on internal networks" },
-  privateNsHint: { fa: "خطرناک: فقط برای شبکه آزمایشگاهی. وگرنه یک سایت بیرونی می‌تواند پیشکار را به شبکه داخلی شما بفرستد.", en: "Risky: lab networks only. Otherwise an outside site could point Pishkar into your internal network." },
+  privateNsHint: { fa: "خطرناک: فقط برای شبکه آزمایشگاهی. وگرنه یک سایت بیرونی می‌تواند DevAssist را به شبکه داخلی شما بفرستد.", en: "Risky: lab networks only. Otherwise an outside site could point DevAssist into your internal network." },
   maxReferrals: { fa: "بیشترین ارجاع در یک حل", en: "Most referrals in one lookup" },
   maxQueries: { fa: "بیشترین پرسش در یک حل", en: "Most questions in one lookup" },
   maxQueriesHint: { fa: "شامل پیدا کردن نشانی سرورها و کلیدهای امضا.", en: "Includes finding servers' addresses and signing keys." },
@@ -92,12 +92,12 @@ const COPY = {
   // dnssec
   secTitle: { fa: "امضای امنیتی (DNSSEC)", en: "Security signatures (DNSSEC)" },
   secHint: {
-    fa: "بسیاری از دامنه‌ها جوابشان را امضا می‌کنند. پیشکار امضا را بررسی می‌کند تا کسی نتواند جواب جعلی به دستگاه‌های شما بدهد.",
-    en: "Many domains sign their answers. Pishkar checks the signature so nobody can hand your devices a fake answer."
+    fa: "بسیاری از دامنه‌ها جوابشان را امضا می‌کنند. DevAssist امضا را بررسی می‌کند تا کسی نتواند جواب جعلی به دستگاه‌های شما بدهد.",
+    en: "Many domains sign their answers. DevAssist checks the signature so nobody can hand your devices a fake answer."
   },
   secOn: { fa: "امضای جواب‌ها بررسی شود", en: "Check answers' signatures" },
   secOnHint: { fa: "نام‌های شبکه داخلی و دامنه‌های خودتان خودکار بیرون از این بررسی می‌مانند.", en: "Your internal network names and your own domains are left out automatically." },
-  secOffWarn: { fa: "خاموش است: پیشکار جواب جعلی را تشخیص نمی‌دهد.", en: "Off: Pishkar won't notice fake answers." },
+  secOffWarn: { fa: "خاموش است: DevAssist جواب جعلی را تشخیص نمی‌دهد.", en: "Off: DevAssist won't notice fake answers." },
   validateTitle: { fa: "جواب جعلی را نده", en: "Hold back fake answers" },
   validateBody: { fa: "پیشنهاد ما. اگر امضا خراب بود، دستگاه جواب «سرور نتوانست جواب بدهد» می‌گیرد و دلیلش در لاگ و «تست» دیده می‌شود.", en: "Our suggestion. If a signature is broken, the device gets “the server couldn't answer” and the reason shows in the log and Test." },
   logOnlyTitle: { fa: "فقط ثبت کن، جلویش را نگیر", en: "Just record it, don't block" },
@@ -105,7 +105,7 @@ const COPY = {
   anchorTitle: { fa: "کلید اعتماد ریشه", en: "Root trust key" },
   refresh: { fa: "به‌روزرسانی", en: "Update" },
   refreshed: { fa: "کلید اعتماد ریشه بررسی و به‌روز شد.", en: "The root trust key was checked and updated." },
-  refreshFailed: { fa: "به‌روزرسانی انجام نشد؛ پیشکار همان کلید قبلی را نگه داشت.", en: "The update didn't work; Pishkar kept the current key." },
+  refreshFailed: { fa: "به‌روزرسانی انجام نشد؛ DevAssist همان کلید قبلی را نگه داشت.", en: "The update didn't work; DevAssist kept the current key." },
   anchorLoadFailed: { fa: "وضعیت کلید اعتماد خوانده نشد.", en: "The trust key status didn't load." },
   updatedAt: { fa: "آخرین به‌روزرسانی", en: "Last updated" },
   counters: { fa: "بررسی‌ها از روشن شدن", en: "Checks since start" },

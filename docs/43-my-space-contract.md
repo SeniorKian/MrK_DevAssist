@@ -90,7 +90,7 @@
   variables}], default_id}`؛ `POST /my/dns/zones {name, template_id?, variables?}` → 201 Zone + `{template}` (فقط primary؛
   `template_id` فقط با `dns_templates`، وگرنه قالب پیش‌فرض)؛ زون تداخلی → 409 `zone_unavailable`؛ `GET /my/dns/zones/{z}`؛
   `DELETE /my/dns/zones/{z} {confirmation:<z>}`؛ `GET …/{z}/verification` → `{methods:[{kind:"txt",
-  name:"_pishkar-verify.<z>", value:"pishkar-verify=<token>"}, {kind:"ns", targets:[…]}], verified, status}`؛
+  name:"_devassist-verify.<z>", value:"devassist-verify=<token>"}, {kind:"ns", targets:[…]}], verified, status}`؛
   `POST …/{z}/verify` → `{verified, method:"txt"|"ns"|null, status}`؛ رکوردها: `GET …/{z}/records` → `{items}`،
   `POST …/{z}/records` (بدنه همان رکورد مدیریت بدون `view`؛ نوع باید در `dns_record_types` باشد → وگرنه 422
   `dns_record_type_not_allowed`؛ سهمیه `dns_records_per_zone`)، `PUT/DELETE …/{z}/records/{id}`؛
@@ -106,7 +106,7 @@
 - کلیدهای S3: `GET /my/s3/keys` → `{items:[{id, name, access, buckets, enabled, access_key_id, created_at}]}`؛
   `POST /my/s3/keys {name, access:"read_only"|"read_write"|"admin", buckets:[…]}` → 201 همان + `{secret_access_key}`
   (یک‌بار؛ باکت غیرخودی → 404)؛ `PATCH /my/s3/keys/{id} {enabled?, access?, buckets?}`؛ `DELETE /my/s3/keys/{id}`.
-  سیاست را پیشکار می‌سازد (بدون `PutBucketPolicy`/`DeleteBucket`/`CreateBucket`)؛ فیلد `policy` پذیرفته نمی‌شود (422).
+  سیاست را DevAssist می‌سازد (بدون `PutBucketPolicy`/`DeleteBucket`/`CreateBucket`)؛ فیلد `policy` پذیرفته نمی‌شود (422).
 - دامنه باکت (`s3_bucket_domains`): `GET /my/s3/buckets/{b}/domains` → `{items:[{host, verified, verification:{name,
   value}, route:{state, error_code}}]}`؛ `POST … {host}` → 201 همان شکل (زیر زون تأییدشده خود فضا ⇒ همان لحظه
   `verified:true` و مسیر ساخته می‌شود؛ host که برنامه‌ای در Dokploy دارد → 409 `domain_unavailable`)؛
@@ -138,14 +138,14 @@
   bucket}` و روی باکت فضای تعلیق‌شده `frozen:true` (موتور هر نوشتن را `AccessDenied` می‌دهد).
 - دامنه باکت در موتور S3 سرو می‌شود (Host → باکت). **مسیر عمومی** آن (`modules/bucket_routes.py`) دقیقاً مثل دامنه سرویس
   S3 ساخته می‌شود: همان روش اتصال (`domains.routing_mode`: Dokploy API / فایل Traefik / دستی)، همان مقصد (درگاه 9000 موتور
-  S3 در همین کانتینر) و TLS با certResolver در Traefik. پیشکار هرگز 80/443 را نمی‌گیرد.
+  S3 در همین کانتینر) و TLS با certResolver در Traefik. DevAssist هرگز 80/443 را نمی‌گیرد.
   - فقط دامنه **تأییدشده** مسیر می‌گیرد (افزودن زیر زون تأییدشده، `…/verify` موفق، یا «دوباره امتحان»). حذف دامنه، حذف باکت،
     حذف فضا (cleanup `bucket_domain`) مسیر را برمی‌دارد؛ انتقال مالکیت و تغییر فضا (`after_quota_change`) یک reconcile پس‌زمینه
     می‌زند و حلقه بررسی دامنه‌ها (هر ۵ دقیقه) هم reconcile می‌کند تا مسیر بی‌صاحب نماند.
   - وضعیت مسیر جدا از ردیف مالکیت در `system_settings["services.bucket_routes"]` (کلید = host) نگه داشته می‌شود تا پس از رفتن
     ردیف مالکیت هم برداشتنش ممکن باشد: `{bucket, workspace_id, mode, state, https, error_code, upstream_code,
     dokploy_domain_id, redeploy_required, conflict, updated_at}`. وضعیت‌ها: `ok`، `pending` (Dokploy Compose دامنه را دارد
-    ولی تا Deploy بعدی مدیر فعال نیست؛ پیشکار خودش Deploy نمی‌کند — «دوباره امتحان» مدیر پس از Deploy آن را `ok` می‌کند)،
+    ولی تا Deploy بعدی مدیر فعال نیست؛ DevAssist خودش Deploy نمی‌کند — «دوباره امتحان» مدیر پس از Deploy آن را `ok` می‌کند)،
     `manual` (مراحل دستی فقط برای مدیر)، `failed` (برگشت داده شد)، `conflict` (هیچ تغییری داده نشد)، `stale` (برداشتن نیمه‌کاره)،
     `off`.
   - برگشت در خطا: Dokploy → اگر ثبت وضعیت بعد از `domain.create` شکست بخورد همان دامنه `domain.delete` می‌شود؛ فایل Traefik →
@@ -328,12 +328,12 @@
   `GET/POST/PATCH/DELETE /my/workspaces/{id}/members`، دعوت‌ها.
 - **DNS:** `GET/POST /my/dns/zones` (ساخت: نام + قالب + متغیرها؛ اگر `verify_domains` روشن است زون در حالت
   `pending_verification` ساخته می‌شود و فقط پس از اثبات فعال/پاسخ‌دهنده)، `GET /my/dns/zones/{z}/verification` →
-  `{methods:[{kind:"txt", name:"_pishkar-verify.<z>", value:"pishkar-verify=<token>"}, {kind:"ns", targets:[…]}],
+  `{methods:[{kind:"txt", name:"_devassist-verify.<z>", value:"devassist-verify=<token>"}, {kind:"ns", targets:[…]}],
   verified}`، `POST …/verify`، رکوردها CRUD، اعمال قالب، امضای DNSSEC (اگر `dns_dnssec`)، `DELETE` زون. بررسی تداخل: زونی که
-  زیر/بالای زون فضای دیگر یا نام‌های خود پیشکار است → `zone_unavailable` 409. انواع رکورد طبق `dns_record_types`.
+  زیر/بالای زون فضای دیگر یا نام‌های خود DevAssist است → `zone_unavailable` 409. انواع رکورد طبق `dns_record_types`.
   تنظیمات سراسری موتور (forwarder، فیلترینگ، …) در «فضای من» نیست.
 - **فضای فایل:** باکت‌ها CRUD (نام سراسری یکتا؛ پیشنهاد پیشوند slug)، فایل‌ها (فهرست/آپلود/دانلود/حذف/پوشه، لینک موقت امضاشده)،
-  کلیدها (identity + access key) با **سیاستی که پیشکار می‌سازد** از قالب‌های `read_only|read_write|admin` محدود به باکت‌های
+  کلیدها (identity + access key) با **سیاستی که DevAssist می‌سازد** از قالب‌های `read_only|read_write|admin` محدود به باکت‌های
   همان فضا (JSON سیاست از کاربر پذیرفته نمی‌شود)، دامنه باکت (با اثبات مالکیت همان سازوکار DNS یا زون‌های خود فضا)، لینک عمومی
   (اگر `s3_public_links`). سهمیه حجم/تعداد فایل در **موتور S3 هنگام نوشتن** اعمال می‌شود (`QuotaExceeded`).
 - **بسته‌ها:** هر فضا یک scope npm (`@<slug>`) و یک index devpi (`<slug>/dev` با پایه mirror) اگر `npm`/`pypi` در بسته باشد؛

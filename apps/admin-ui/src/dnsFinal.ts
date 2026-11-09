@@ -67,7 +67,7 @@ export type DnsTemplate = {
 };
 export type TemplateInput = Omit<DnsTemplate, "id" | "builtin" | "is_default" | "default" | "updated_at" | "name_fa" | "name_en" | "description_fa" | "description_en">;
 
-/** The variables Pishkar fills by itself (§5): never asked in Simple mode. */
+/** The variables DevAssist fills by itself (§5): never asked in Simple mode. */
 export const AUTO_VARIABLES = ["domain", "domain_dashed", "server_ipv4", "server_ipv6"] as const;
 export const isAutoVariable = (key: string) => (AUTO_VARIABLES as readonly string[]).includes(key);
 
@@ -75,8 +75,8 @@ export const isAutoVariable = (key: string) => (AUTO_VARIABLES as readonly strin
 export const VARIABLE_WORDS: Record<string, { label: Bi; hint?: Bi }> = {
   domain: { label: { fa: "نام دامنه", en: "Domain name" } },
   domain_dashed: { label: { fa: "نام دامنه با خط تیره", en: "Domain name with dashes" } },
-  server_ipv4: { label: { fa: "نشانی IPv4 سرور", en: "Server IPv4 address" }, hint: { fa: "خالی بگذارید تا پیشکار خودش پیدا کند.", en: "Leave empty and Pishkar finds it." } },
-  server_ipv6: { label: { fa: "نشانی IPv6 سرور", en: "Server IPv6 address" }, hint: { fa: "خالی بگذارید تا پیشکار خودش پیدا کند.", en: "Leave empty and Pishkar finds it." } },
+  server_ipv4: { label: { fa: "نشانی IPv4 سرور", en: "Server IPv4 address" }, hint: { fa: "خالی بگذارید تا DevAssist خودش پیدا کند.", en: "Leave empty and DevAssist finds it." } },
+  server_ipv6: { label: { fa: "نشانی IPv6 سرور", en: "Server IPv6 address" }, hint: { fa: "خالی بگذارید تا DevAssist خودش پیدا کند.", en: "Leave empty and DevAssist finds it." } },
   mail_host: { label: { fa: "سرور ایمیل", en: "Mail server" }, hint: { fa: "نام سروری که ایمیل‌ها را می‌گیرد، مثل mail.example.com", en: "The server that receives email, like mail.example.com" } },
   dkim_value: { label: { fa: "کلید امضای ایمیل", en: "Email signing key" }, hint: { fa: "متنی که سرویس ایمیل شما داده است؛ با v=DKIM1 شروع می‌شود.", en: "The text your email service gave you; it starts with v=DKIM1." } }
 };
@@ -220,7 +220,7 @@ export function missingVariables(template: DnsTemplate | null, values: Record<st
   return askedVariables(template).filter((item) => item.required && !(values[item.key] ?? "").trim()).map((item) => item.key);
 }
 
-/** Only the filled values travel; Pishkar fills the automatic ones. */
+/** Only the filled values travel; DevAssist fills the automatic ones. */
 export function cleanVariables(values: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.trim()]).filter(([, value]) => value));
 }
@@ -314,7 +314,7 @@ export function templateRecordSentence(language: Language, record: TemplateRecor
   }
 }
 
-/** Whether a value still holds `{name}` (the variable wasn't filled; Pishkar fills the automatic ones). */
+/** Whether a value still holds `{name}` (the variable wasn't filled; DevAssist fills the automatic ones). */
 export const hasPlaceholder = (text: string) => /\{[a-z0-9_]+\}/i.test(text);
 
 // ── zones (§2) ───────────────────────────────────────────────────────────────

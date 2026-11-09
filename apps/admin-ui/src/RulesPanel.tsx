@@ -40,7 +40,7 @@ const EVENT_PHRASES: Record<string, Bi> = {
   "dns.unreachable": { fa: "DNS سرور جواب ندهد", en: "the server's DNS stops answering" },
   "dns.pressure": { fa: "DNS سرور زیر فشار برود یا از فشار بیرون بیاید", en: "the server's DNS comes under load or recovers" },
   "dns.attack_detected": { fa: "حمله‌ای به DNS سرور دیده شود", en: "an attack on the server's DNS is seen" },
-  "dns.mitigation_auto": { fa: "پیشکار خودکار دستگاه یا نامی را در DNS کند یا مسدود کند", en: "Pishkar automatically slows down or blocks a device or name in DNS" },
+  "dns.mitigation_auto": { fa: "DevAssist خودکار دستگاه یا نامی را در DNS کند یا مسدود کند", en: "DevAssist automatically slows down or blocks a device or name in DNS" },
   "dns.logs_degraded": { fa: "لاگ کامل پرسش‌های DNS موقتاً نوشته نشود", en: "the full DNS question log is paused" },
   "dns.logs_recovered": { fa: "نوشتن لاگ پرسش‌های DNS به حالت عادی برگردد", en: "the DNS question log is back to normal" },
   "dns.dnssec_trust_anchor_failed": { fa: "به‌روزرسانی کلید اعتماد ریشه در DNS انجام نشود", en: "updating DNS's root trust key fails" },

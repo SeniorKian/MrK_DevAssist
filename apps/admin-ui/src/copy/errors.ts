@@ -50,8 +50,8 @@ export const ERROR_ACTION_LABEL: Record<ErrorAction, Bi> = {
 /** Fallbacks by HTTP status / failure kind, used when a code is unknown. */
 export const FALLBACK_ERRORS = {
   network: {
-    fa: "سرور پیشکار جواب نمی‌دهد. اتصال اینترنت خودتان را بررسی کنید و چند لحظه بعد دوباره امتحان کنید.",
-    en: "Pishkar isn't responding. Check your internet connection and try again in a moment.",
+    fa: "سرور DevAssist جواب نمی‌دهد. اتصال اینترنت خودتان را بررسی کنید و چند لحظه بعد دوباره امتحان کنید.",
+    en: "DevAssist isn't responding. Check your internet connection and try again in a moment.",
     action: "retry"
   },
   unauthorized: { fa: "زمان ورودتان تمام شده. لطفاً دوباره وارد شوید.", en: "Your sign-in has expired. Please sign in again.", action: "signIn" },
@@ -244,7 +244,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
 
   // ── Dokploy ───────────────────────────────────────────────────────────────
   dokploy_not_configured: { fa: "هنوز Dokploy را وصل نکرده‌اید.", en: "Dokploy isn't connected yet.", action: "connectDokploy" },
-  dokploy_unreachable: { fa: "پیشکار نتوانست به Dokploy وصل شود. نشانی آن و روشن بودنش را بررسی کنید.", en: "Pishkar couldn't reach Dokploy. Check its address and that it's running.", action: "retry" },
+  dokploy_unreachable: { fa: "DevAssist نتوانست به Dokploy وصل شود. نشانی آن و روشن بودنش را بررسی کنید.", en: "DevAssist couldn't reach Dokploy. Check its address and that it's running.", action: "retry" },
   dokploy_unavailable: { fa: "Dokploy الان جواب نمی‌دهد. چند لحظه بعد دوباره امتحان کنید.", en: "Dokploy isn't answering right now. Try again in a moment.", action: "retry" },
   dokploy_timeout: { fa: "Dokploy دیر جواب داد. چند لحظه بعد دوباره امتحان کنید.", en: "Dokploy answered too slowly. Try again in a moment.", action: "retry" },
   dokploy_auth_failed: { fa: "Dokploy این کلید را قبول نکرد. در Dokploy یک کلید تازه بسازید و این‌جا بگذارید.", en: "Dokploy didn't accept this key. Create a new key in Dokploy and paste it here.", action: "connectDokploy" },
@@ -281,8 +281,8 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   backup_rejected: { fa: "این پشتیبان پذیرفته نشد. فایل را بررسی کنید.", en: "This backup wasn't accepted. Check the file." },
   backup_unavailable: { fa: "پشتیبان‌گیری از پنل الان ممکن نیست. فضای دیسک و رمز پشتیبان را بررسی کنید.", en: "A panel backup isn't possible right now. Check disk space and the backup password." },
   unknown_profile: { fa: "نوع پشتیبان شناخته نشد. یکی از گزینه‌ها را انتخاب کنید.", en: "Unknown backup type. Pick one of the options." },
-  unknown_format: { fa: "این فایل، پشتیبان پیشکار نیست.", en: "This file isn't an Pishkar backup." },
-  unsupported_kdf: { fa: "این پشتیبان با روشی ساخته شده که این نسخه پیشکار آن را نمی‌شناسد.", en: "This backup was made in a way this Pishkar version doesn't recognise." },
+  unknown_format: { fa: "این فایل، پشتیبان DevAssist نیست.", en: "This file isn't an DevAssist backup." },
+  unsupported_kdf: { fa: "این پشتیبان با روشی ساخته شده که این نسخه DevAssist آن را نمی‌شناسد.", en: "This backup was made in a way this DevAssist version doesn't recognise." },
   corrupt: { fa: "فایل پشتیبان آسیب دیده است. فایل دیگری انتخاب کنید.", en: "The backup file is damaged. Pick another file." },
   invalid_archive: { fa: "فایل پشتیبان آسیب دیده یا ناقص است.", en: "The backup file is damaged or incomplete." },
   insufficient_space: { fa: "فضای دیسک کافی نیست. اول کمی فضا آزاد کنید.", en: "There isn't enough disk space. Free some space first." },
@@ -305,7 +305,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   "my:quota_exceeded": { fa: "به سقف بسته‌تان رسیده‌اید. اول چیزی پاک کنید یا بسته بزرگ‌تری بخواهید.", en: "You've reached your plan's limit. Remove something first, or ask for a bigger plan." },
   feature_disabled: { fa: "این امکان در بسته شما نیست. برای داشتنش با مدیر سامانه صحبت کنید.", en: "This isn't in your plan. Talk to the system admin to get it." },
   workspace_suspended: { fa: "این فضا موقتاً بسته شده و فقط می‌شود دید. برای باز شدنش با مدیر سامانه صحبت کنید.", en: "This space is paused, so you can only look. Talk to the system admin to reopen it." },
-  zone_unavailable: { fa: "این دامنه را نمی‌شود این‌جا آورد؛ یا مال فضای دیگری است یا بخشی از خود پیشکار است.", en: "This domain can't be added here: it belongs to another space or to Pishkar itself.", field: "name" },
+  zone_unavailable: { fa: "این دامنه را نمی‌شود این‌جا آورد؛ یا مال فضای دیگری است یا بخشی از خود DevAssist است.", en: "This domain can't be added here: it belongs to another space or to DevAssist itself.", field: "name" },
   zone_not_verified: { fa: "مالکیت این دامنه هنوز ثابت نشده. رکورد را بگذارید و چند دقیقه بعد «بررسی کن» را بزنید.", en: "This domain isn't proven yet. Add the record and press “Check now” in a few minutes." },
   verification_failed: { fa: "رکورد اثبات هنوز پیدا نشد. اگر همین الان گذاشته‌اید، چند دقیقه بعد دوباره امتحان کنید.", en: "The proof record isn't visible yet. If you just added it, try again in a few minutes.", action: "retry" },
   plan_in_use: { fa: "این بسته هنوز به چند فضا داده شده. اول بسته آن‌ها را عوض کنید.", en: "Some workspaces still use this plan. Change their plan first." },
@@ -364,7 +364,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   key_not_found: { fa: "این کلید پیدا نشد. فهرست را تازه کنید.", en: "This key wasn't found. Refresh the list.", action: "refreshList" },
   key_limit_reached: { fa: "این کاربر به سقف تعداد کلید رسیده. اول یک کلید قدیمی را پاک کنید.", en: "This user has the maximum number of keys. Remove an old one first." },
   link_path_in_use: { fa: "این پوشه سرور قبلاً به پوشه اصلی دیگری وصل شده است.", en: "This server folder is already linked to another bucket.", field: "link_path" },
-  link_path_invalid: { fa: "فقط پوشه‌هایی که در فایل Compose به پیشکار داده شده‌اند قابل اتصال‌اند.", en: "Only folders given to Pishkar in the Compose file can be linked.", field: "link_path" },
+  link_path_invalid: { fa: "فقط پوشه‌هایی که در فایل Compose به DevAssist داده شده‌اند قابل اتصال‌اند.", en: "Only folders given to DevAssist in the Compose file can be linked.", field: "link_path" },
   linked_requires_owner: { fa: "فقط «مالک» می‌تواند پوشه‌های سرور را وصل کند.", en: "Only the owner can link server folders." },
   object_not_found: { fa: "این فایل پیدا نشد. فهرست را تازه کنید.", en: "This file wasn't found. Refresh the list.", action: "refreshList" },
   object_too_large: { fa: "این فایل از سقف حجم مجاز بزرگ‌تر است.", en: "This file is larger than the allowed size." },
@@ -393,8 +393,8 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   destination_not_found: { fa: "این مقصد پیدا نشد. فهرست را تازه کنید.", en: "This destination wasn't found. Refresh the list.", action: "refreshList" },
   invalid_destination: { fa: "مقصد پشتیبان ذخیره نشد. نشانی و کلیدها را بررسی کنید.", en: "The backup destination wasn't saved. Check the address and keys.", action: "fixFields" },
   destination_forbidden: { fa: "این مقصد برای امنیت مجاز نیست؛ مقصد دیگری انتخاب کنید.", en: "This destination isn't allowed for safety; pick another." },
-  path_forbidden: { fa: "این پوشه مال خود پیشکار است؛ پوشه دیگری انتخاب کنید.", en: "This folder belongs to Pishkar itself; pick another folder.", field: "path" },
-  path_not_writable: { fa: "پیشکار نمی‌تواند در این پوشه بنویسد. دسترسی پوشه را بررسی کنید.", en: "Pishkar can't write to this folder. Check its permissions.", field: "path" },
+  path_forbidden: { fa: "این پوشه مال خود DevAssist است؛ پوشه دیگری انتخاب کنید.", en: "This folder belongs to DevAssist itself; pick another folder.", field: "path" },
+  path_not_writable: { fa: "DevAssist نمی‌تواند در این پوشه بنویسد. دسترسی پوشه را بررسی کنید.", en: "DevAssist can't write to this folder. Check its permissions.", field: "path" },
   invalid_path: { fa: "مسیر پوشه درست نیست.", en: "The folder path isn't valid.", field: "path" },
   invalid_schedule: { fa: "زمان‌بندی را نفهمیدیم. یکی از گزینه‌های آماده را انتخاب کنید.", en: "We couldn't understand the schedule. Pick one of the ready-made options.", field: "schedule" },
   invalid_retention: { fa: "تعداد یا مدت نگه‌داری باید عددی مثبت باشد.", en: "How many or how long to keep must be a positive number.", field: "retention" },
@@ -402,7 +402,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   invalid_source_path: { fa: "مسیر منبع پشتیبان درست نیست.", en: "The backup source path isn't valid.", field: "path" },
   invalid_kind: { fa: "نوع را از گزینه‌ها انتخاب کنید.", en: "Pick a type from the options.", field: "kind" },
   invalid_timezone: { fa: "منطقه زمانی را از فهرست انتخاب کنید.", en: "Pick a time zone from the list.", field: "timezone" },
-  source_failed: { fa: "پیشکار نتوانست از منبع پشتیبان بخواند. روشن بودن برنامه را بررسی کنید.", en: "Pishkar couldn't read from the backup source. Check that the app is running." },
+  source_failed: { fa: "DevAssist نتوانست از منبع پشتیبان بخواند. روشن بودن برنامه را بررسی کنید.", en: "DevAssist couldn't read from the backup source. Check that the app is running." },
   dump_failed: { fa: "گرفتن خروجی از پایگاه داده انجام نشد. نام کاربری و رمز پایگاه داده را بررسی کنید.", en: "Exporting the database didn't work. Check the database username and password." },
   archive_failed: { fa: "بسته‌بندی فایل‌های پشتیبان انجام نشد. فضای دیسک را بررسی کنید.", en: "Packing the backup files didn't work. Check disk space." },
   credentials_unavailable: { fa: "نام کاربری و رمز پایگاه داده پیدا نشد. آن‌ها را در تنظیم پشتیبان بنویسید.", en: "The database username and password weren't found. Add them to the backup setup." },
@@ -561,8 +561,8 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   domain_exists: { fa: "این دامنه قبلاً اضافه شده است.", en: "This domain was already added.", field: "host" },
   domain_not_found: { fa: "این دامنه دیگر وجود ندارد. صفحه را تازه کنید.", en: "This domain no longer exists. Refresh the page.", action: "refreshList" },
   routing_unavailable: {
-    fa: "الان پیشکار نمی‌تواند دامنه را خودش وصل کند. روش «دستی» را انتخاب کنید یا اتصال Dokploy را بررسی کنید.",
-    en: "Pishkar can't attach the domain by itself right now. Pick the manual way, or check the Dokploy connection."
+    fa: "الان DevAssist نمی‌تواند دامنه را خودش وصل کند. روش «دستی» را انتخاب کنید یا اتصال Dokploy را بررسی کنید.",
+    en: "DevAssist can't attach the domain by itself right now. Pick the manual way, or check the Dokploy connection."
   },
   invalid_routing_mode: { fa: "این روش اتصال روی این سرور در دسترس نیست. یکی دیگر را انتخاب کنید.", en: "This routing method isn't available on this server. Pick another one." },
   "domains:invalid_mode": { fa: "این روش اتصال روی این سرور در دسترس نیست. یکی دیگر را انتخاب کنید.", en: "This routing method isn't available on this server. Pick another one." },
@@ -575,7 +575,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   "domains:confirmation_mismatch": { fa: "نام دامنه درست نوشته نشد. دوباره بنویسید.", en: "The domain name wasn't typed correctly. Type it again.", field: "confirm" },
   "domains:confirmation_required": { fa: "برای اطمینان، نام دامنه را بنویسید.", en: "To be sure, type the domain name.", field: "confirm" },
 
-  // ── Pishkar DNS (docs/37 §4) ──────────────────────────────────────────────────
+  // ── DevAssist DNS (docs/37 §4) ──────────────────────────────────────────────────
   dns_not_installed: { fa: "DNS هنوز روی این سرور راه نیفتاده است. از «راه‌اندازی» شروع کنید.", en: "DNS isn't set up on this server yet. Start from Set up." },
   dns_unreachable: { fa: "برنامه DNS جواب نمی‌دهد. مطمئن شوید روی سرور روشن است و دوباره امتحان کنید.", en: "The DNS program isn't answering. Make sure it's running on the server and try again.", action: "retry" },
   dns_config_conflict: {
@@ -633,7 +633,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   "dns:invalid_settings": { fa: "این تنظیم ذخیره نشد؛ مقدار خانه قرمز را بررسی کنید.", en: "This setting wasn't saved; check the field in red.", action: "fixFields" },
   dns_version_not_found: { fa: "این نسخه دیگر در تاریخچه نیست. تاریخچه را تازه کنید.", en: "This version is no longer in the history. Refresh it.", action: "refreshList" },
 
-  // ── Pishkar DNS D2: logs, monitoring, limits (docs/38 §4) ──────────────────────
+  // ── DevAssist DNS D2: logs, monitoring, limits (docs/38 §4) ──────────────────────
   dns_limit_reached: { fa: "به بیشترین تعداد مجاز رسیده‌اید. اول چند مورد قدیمی را بردارید.", en: "You've reached the most allowed. Remove a few old ones first." },
   dns_not_found: { fa: "این مورد دیگر وجود ندارد. فهرست را تازه کنید.", en: "This item no longer exists. Refresh the list.", action: "refreshList" },
   dns_mitigation_not_found: { fa: "این محدودیت دیگر وجود ندارد؛ شاید وقتش تمام شده. فهرست را تازه کنید.", en: "This limit no longer exists; its time may be up. Refresh the list.", action: "refreshList" },
@@ -642,7 +642,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   dns_querylog_disabled: { fa: "ثبت لاگ پرسش‌ها خاموش است. از «لاگ» در حالت پیشرفته روشنش کنید.", en: "The question log is off. Turn it on under Log in Advanced mode." },
   dns_query_invalid: { fa: "فیلترهای جست‌وجو درست نیست؛ زمان، نشانی یا نام را بررسی کنید.", en: "The search filters aren't right; check the time, address or name.", action: "fixFields" },
   dns_stream_limit: { fa: "الان نمایش‌های زنده زیادی باز است. یکی را ببندید و دوباره امتحان کنید.", en: "Too many live views are open. Close one and try again.", action: "retry" },
-  // ── Pishkar DNS D4: root, DNSSEC, encrypted DNS (docs/40 §3, §5) ─────────────
+  // ── DevAssist DNS D4: root, DNSSEC, encrypted DNS (docs/40 §3, §5) ─────────────
   dns_settings_invalid: { fa: "تنظیمات DNS ذخیره نشد؛ خانه‌های قرمز را بررسی کنید.", en: "The DNS settings weren't saved; check the fields in red.", action: "fixFields" },
   certificate_required: { fa: "این اتصال رمزدار گواهی لازم دارد. اول در کارت «گواهی» یکی بسازید یا بارگذاری کنید.", en: "This encrypted connection needs a certificate. Make or upload one in the Certificate card first." },
   dns_certificate_required: { fa: "این اتصال رمزدار گواهی لازم دارد. اول در کارت «گواهی» یکی بسازید یا بارگذاری کنید.", en: "This encrypted connection needs a certificate. Make or upload one in the Certificate card first." },

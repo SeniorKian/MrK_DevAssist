@@ -1,5 +1,5 @@
 /**
- * Pishkar shared component kit (docs/33 §6). Read ./README.md before building a page.
+ * DevAssist shared component kit (docs/33 §6). Read ./README.md before building a page.
  * Import from "./kit" (or "../kit") only; do not deep-import kit files.
  */
 export { useKit } from "./useKit";

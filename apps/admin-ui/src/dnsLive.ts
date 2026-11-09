@@ -1,5 +1,5 @@
 /**
- * Pishkar DNS phase D2 (contract docs/38 §4–§5): live monitoring, query log, mitigations.
+ * DevAssist DNS phase D2 (contract docs/38 §4–§5): live monitoring, query log, mitigations.
  * Types, API calls and the plain words used by the «پایش» and «لاگ» tabs.
  *
  * Like dns.ts, every backend field is optional so an older server (no D2 endpoints, a bare 404)
@@ -119,7 +119,7 @@ export function pressureSentence(language: Language, pressure: DnsPressure | nul
     case "critical":
       return fa ? `فشار روی DNS زیاد است${because}.` : `DNS is under heavy load${because}.`;
     case "emergency":
-      return fa ? `DNS زیر فشار خیلی زیاد است${because}. پیشکار فقط کارهای ضروری را انجام می‌دهد.` : `DNS is overloaded${because}. Pishkar is doing only what's essential.`;
+      return fa ? `DNS زیر فشار خیلی زیاد است${because}. DevAssist فقط کارهای ضروری را انجام می‌دهد.` : `DNS is overloaded${because}. DevAssist is doing only what's essential.`;
     default:
       return fa ? "DNS آرام است و پرسش‌ها به‌موقع جواب می‌گیرند." : "DNS is calm and questions are answered on time.";
   }
@@ -285,7 +285,7 @@ export function eventText(language: Language, event: DnsEvent): string {
     case "mitigation.auto": {
       const match = text("match");
       const action = MITIGATION_ACTION_WORDS[text("action")]?.[language] ?? (fa ? "محدود" : "limited");
-      return fa ? `پیشکار خودکار «${match || "یک مورد"}» را ${action} کرد.` : `Pishkar automatically ${action.toLowerCase()} “${match || "an item"}”.`;
+      return fa ? `DevAssist خودکار «${match || "یک مورد"}» را ${action} کرد.` : `DevAssist automatically ${action.toLowerCase()} “${match || "an item"}”.`;
     }
     case "mitigation.expired": {
       const match = text("match");
@@ -313,7 +313,7 @@ export function eventText(language: Language, event: DnsEvent): string {
     case "tls.certificate_expired":
       return fa ? "گواهی اتصال رمزدار تمام شد؛ دستگاه‌ها رمزدار وصل نمی‌شوند." : "The encrypted connection's certificate expired; devices can't connect encrypted.";
     case "resolution.priming_failed":
-      return fa ? "پیشکار به سرورهای ریشه اینترنت نرسید." : "Pishkar couldn't reach the internet's root servers.";
+      return fa ? "DevAssist به سرورهای ریشه اینترنت نرسید." : "DevAssist couldn't reach the internet's root servers.";
     case "listener.failed": {
       const address = text("address");
       return fa ? `DNS نتوانست روی ${address || "یک نشانی"} گوش بدهد.` : `DNS couldn't listen on ${address || "an address"}.`;

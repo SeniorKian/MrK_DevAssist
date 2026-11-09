@@ -229,7 +229,7 @@ def build_router(ctx: ModuleContext, center: NotificationCenter) -> APIRouter:
         event = Event(
             type="notification.test",
             severity=severity,
-            title="پیشکار test event · رویداد آزمایشی پیشکار",
+            title="DevAssist test event · رویداد آزمایشی DevAssist",
             message=f"Test event requested from the panel ({severity}).",
             module="notifications",
             # Each test is distinct so dedupe never swallows it.

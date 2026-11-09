@@ -54,7 +54,7 @@ const T = {
   name: { fa: "نام و نام خانوادگی", en: "Full name" },
   nameRule: { fa: "نام را بنویسید (دست‌کم ۲ نویسه).", en: "Write a name (at least 2 characters)." },
   username: { fa: "نام کاربری برای ورود", en: "Username for signing in" },
-  usernameHint: { fa: "خالی بگذارید تا پیشکار خودش یکی بسازد.", en: "Leave empty and Pishkar will make one." },
+  usernameHint: { fa: "خالی بگذارید تا DevAssist خودش یکی بسازد.", en: "Leave empty and DevAssist will make one." },
   usernameRule: { fa: "نام کاربری فقط حروف کوچک انگلیسی، عدد، نقطه، خط تیره و زیرخط دارد (۳ تا ۶۴ نویسه).", en: "A username uses lowercase letters, digits, dots, dashes and underscores (3–64 characters)." },
   email: { fa: "ایمیل (اختیاری)", en: "Email (optional)" },
   emailRule: { fa: "ایمیل را مثل name@example.com بنویسید.", en: "Write the email like name@example.com." },
@@ -80,8 +80,8 @@ const T = {
   issuedLink: { fa: "لینک دعوت", en: "Invite link" },
   issuedMessage: { fa: "پیام دعوت آماده (کپی و بفرستید)", en: "Ready invite message (copy and send)" },
   messageText: {
-    fa: "سلام {name}! برایتان در پنل پیشکار حساب ساخته شد.\nنشانی پنل: {url}\nنام کاربری: {username}\nرمز موقت: {password}\nدر اولین ورود رمز را عوض کنید.",
-    en: "Hi {name}! You now have an account on the Pishkar panel.\nPanel address: {url}\nUsername: {username}\nTemporary password: {password}\nPlease change the password when you first sign in."
+    fa: "سلام {name}! برایتان در پنل DevAssist حساب ساخته شد.\nنشانی پنل: {url}\nنام کاربری: {username}\nرمز موقت: {password}\nدر اولین ورود رمز را عوض کنید.",
+    en: "Hi {name}! You now have an account on the DevAssist panel.\nPanel address: {url}\nUsername: {username}\nTemporary password: {password}\nPlease change the password when you first sign in."
   },
   messageLink: {
     fa: "\nیا با این لینک وارد شوید و رمز دلخواهتان را بگذارید:\n{link}",
@@ -113,8 +113,8 @@ const T = {
   resetIssuedBody: { fa: "این اطلاعات را برای «{name}» بفرستید. در ورود بعدی باید رمز را عوض کند.", en: "Send these to “{name}”. They'll change the password at next sign-in." },
   resetIssuedLink: { fa: "لینک گذاشتن رمز", en: "Set-password link" },
   resetMessageText: {
-    fa: "سلام {name}! رمز شما در پنل پیشکار عوض شد.\nنشانی پنل: {url}\nنام کاربری: {username}\nرمز موقت: {password}\nدر ورود بعدی رمز را عوض کنید.",
-    en: "Hi {name}! Your Pishkar panel password was reset.\nPanel address: {url}\nUsername: {username}\nTemporary password: {password}\nPlease change the password when you next sign in."
+    fa: "سلام {name}! رمز شما در پنل DevAssist عوض شد.\nنشانی پنل: {url}\nنام کاربری: {username}\nرمز موقت: {password}\nدر ورود بعدی رمز را عوض کنید.",
+    en: "Hi {name}! Your DevAssist panel password was reset.\nPanel address: {url}\nUsername: {username}\nTemporary password: {password}\nPlease change the password when you next sign in."
   },
   resetToast: { fa: "برای «{name}» رمز موقت تازه ساخته شد.", en: "“{name}” has a new temporary password." },
   // sign out everywhere

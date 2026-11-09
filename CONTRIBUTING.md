@@ -1,4 +1,4 @@
-# Contributing to Pishkar
+# Contributing to DevAssist
 
 Thank you for helping! Bug reports, fixes, documentation, translations and new modules are all
 welcome. You can write issues and pull requests in **Persian or English**.
@@ -188,5 +188,5 @@ Small fixes do not need a design doc.
 
 Use the issue templates. For bugs include the install type (Docker or native), the version or
 commit, the OS, what you expected, what happened and the relevant logs
-(`docker compose logs mrk-mirror` or `journalctl -u pishkar`). Remove secrets, tokens and
+(`docker compose logs mrk-mirror` or `journalctl -u devassist`). Remove secrets, tokens and
 domain names you do not want to share before posting.

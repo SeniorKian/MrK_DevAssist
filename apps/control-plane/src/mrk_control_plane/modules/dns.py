@@ -372,14 +372,14 @@ class DnsService:
         if before.get("reachable") and not after["reachable"]:
             self.ctx.events.publish(Event(
                 type="dns.unreachable", severity="error",
-                title="Pishkar DNS is not answering",
+                title="DevAssist DNS is not answering",
                 message=str(after.get("reason") or after.get("error_code")),
                 module=MODULE_NAME, dedupe_key="dns.reachability",
                 details={"error_code": after.get("error_code"), "reason": after.get("reason")},
             ))
         elif not before.get("reachable") and after["reachable"] and before.get("installed"):
             self.ctx.events.publish(Event(
-                type="dns.recovered", severity="info", title="Pishkar DNS answers again",
+                type="dns.recovered", severity="info", title="DevAssist DNS answers again",
                 module=MODULE_NAME, dedupe_key="dns.reachability",
             ))
 

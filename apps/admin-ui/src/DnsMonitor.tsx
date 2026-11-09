@@ -1,7 +1,7 @@
 /**
  * «DNS › پایش» (#/dns/monitor, dns:read; contract docs/38 §4–§5).
  *
- * - One big sentence in the pressure level's colour with the reasons in plain words, plus what Pishkar
+ * - One big sentence in the pressure level's colour with the reasons in plain words, plus what DevAssist
  *   is doing about it right now (`GET pressure`, every 5 s).
  * - Live charts (questions per second, slow answers, answered from memory, errors) over a range.
  * - Busiest names / devices / "not found" names with «کند کن / مسدود کن» (names need dns:logs).
@@ -41,10 +41,10 @@ const COPY = {
   // pressure
   pressureTitle: { fa: "حال DNS همین الان", en: "How DNS is doing right now" },
   since: { fa: "از {when}", en: "Since {when}" },
-  doing: { fa: "کاری که پیشکار الان برای سبک ماندن DNS می‌کند:", en: "What Pishkar is doing right now to keep DNS light:" },
+  doing: { fa: "کاری که DevAssist الان برای سبک ماندن DNS می‌کند:", en: "What DevAssist is doing right now to keep DNS light:" },
   nothingToDo: { fa: "نیازی به کار خاصی نیست.", en: "Nothing special is needed." },
   pressureFailed: { fa: "حال DNS خوانده نشد.", en: "DNS load didn't load." },
-  notSupported: { fa: "برنامه DNS روی سرور هنوز پایش را ندارد. پیشکار و برنامه DNS را به‌روز کنید.", en: "The DNS program on the server doesn't have monitoring yet. Update Pishkar and the DNS program." },
+  notSupported: { fa: "برنامه DNS روی سرور هنوز پایش را ندارد. DevAssist و برنامه DNS را به‌روز کنید.", en: "The DNS program on the server doesn't have monitoring yet. Update DevAssist and the DNS program." },
   hotHidden: { fa: "{domains} نام و {clients} دستگاه الان خیلی پرسش می‌فرستند. برای دیدن نام‌ها و نشانی‌ها، اجازه «دیدن پرسش‌های DNS» لازم است.", en: "{domains} names and {clients} devices are very busy right now. Seeing which ones needs the “See DNS questions” permission." },
   technical: { fa: "عددهای فنی", en: "Technical numbers" },
   mCpu: { fa: "پردازنده برنامه DNS", en: "DNS program CPU" },
@@ -107,7 +107,7 @@ const COPY = {
   how: { fa: "چه شده", en: "How" },
   bySource: { fa: "توسط", en: "By" },
   byUser: { fa: "شما", en: "You" },
-  byAuto: { fa: "پیشکار خودکار", en: "Pishkar, automatically" },
+  byAuto: { fa: "DevAssist خودکار", en: "DevAssist, automatically" },
   until: { fa: "تا", en: "Until" },
   hits: { fa: "جلوگیری‌شده", en: "Stopped" },
   perSecond: { fa: "{qps} در ثانیه", en: "{qps} per second" },
@@ -130,7 +130,7 @@ const COPY = {
   eventsEmpty: { fa: "هنوز رخدادی ثبت نشده است.", en: "No events yet." },
   // settings
   settingsTitle: { fa: "سطح‌های فشار و کارهای خودکار", en: "Load levels and automatic steps" },
-  settingsHint: { fa: "پیشکار از روی این عددها می‌فهمد DNS کی شلوغ است و چه کاری خودکار انجام دهد.", en: "Pishkar uses these numbers to tell when DNS is busy and what to do automatically." },
+  settingsHint: { fa: "DevAssist از روی این عددها می‌فهمد DNS کی شلوغ است و چه کاری خودکار انجام دهد.", en: "DevAssist uses these numbers to tell when DNS is busy and what to do automatically." },
   enabled: { fa: "پایش فشار روشن باشد", en: "Watch the load" },
   capacity: { fa: "ظرفیت این سرور (پرسش در ثانیه)", en: "This server's capacity (questions per second)" },
   capacityHint: { fa: "بیشترین پرسشی که این سرور راحت جواب می‌دهد؛ درصدهای پایین از روی همین حساب می‌شوند.", en: "The most questions this server answers comfortably; the percentages below are based on it." },
@@ -144,14 +144,14 @@ const COPY = {
   tHostCpu: { fa: "پردازنده سرور", en: "Server CPU" },
   tHostMemory: { fa: "حافظه سرور", en: "Server memory" },
   order: { fa: "عدد هر سطح باید از سطح قبلی بیشتر باشد.", en: "Each level's number must be higher than the one before." },
-  actionsTitle: { fa: "کارهایی که پیشکار زیر فشار خودکار انجام دهد", en: "Steps Pishkar may take automatically under load" },
+  actionsTitle: { fa: "کارهایی که DevAssist زیر فشار خودکار انجام دهد", en: "Steps DevAssist may take automatically under load" },
   attackTitle: { fa: "تشخیص حمله", en: "Attack detection" },
   modeOff: { fa: "خاموش", en: "Off" },
   modeOffBody: { fa: "حمله‌ها تشخیص داده نمی‌شوند.", en: "Attacks aren't detected." },
   modeSuggest: { fa: "فقط خبرم کن", en: "Just tell me" },
   modeSuggestBody: { fa: "پیشنهاد ما: خبر می‌دهد و شما با یک دکمه جلویش را می‌گیرید.", en: "Our suggestion: it tells you and you stop it with one button." },
   modeAuto: { fa: "خودکار جلویش را بگیر", en: "Stop it automatically" },
-  modeAutoBody: { fa: "پیشکار خودش برای مدتی جلوی حمله را می‌گیرد و خبرتان می‌کند.", en: "Pishkar stops it for a while by itself and tells you." },
+  modeAutoBody: { fa: "DevAssist خودش برای مدتی جلوی حمله را می‌گیرد و خبرتان می‌کند.", en: "DevAssist stops it for a while by itself and tells you." },
   nxPerMinute: { fa: "حمله یعنی بیش از این تعداد نام ساختگی تازه در دقیقه", en: "An attack means more than this many new made-up names a minute" },
   mitigationMinutes: { fa: "جلوگیری خودکار تا چه مدت", en: "Stop automatically for" }
 } satisfies Record<string, Bi>;

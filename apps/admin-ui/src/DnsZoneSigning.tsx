@@ -25,15 +25,15 @@ import { Loading, isMissingEndpoint, useLoader } from "./dnsUi";
 const COPY = {
   title: { fa: "امضای امنیتی دامنه", en: "Domain security signing" },
   hint: {
-    fa: "با امضای امنیتی (DNSSEC) هیچ‌کس نمی‌تواند به نام دامنه شما جواب جعلی بدهد؛ دستگاه‌ها امضا را بررسی می‌کنند. پیشکار کلیدها و تمدید امضاها را خودش انجام می‌دهد.",
-    en: "With security signing (DNSSEC) nobody can give fake answers in your domain's name; devices check the signature. Pishkar handles the keys and renews the signatures itself."
+    fa: "با امضای امنیتی (DNSSEC) هیچ‌کس نمی‌تواند به نام دامنه شما جواب جعلی بدهد؛ دستگاه‌ها امضا را بررسی می‌کنند. DevAssist کلیدها و تمدید امضاها را خودش انجام می‌دهد.",
+    en: "With security signing (DNSSEC) nobody can give fake answers in your domain's name; devices check the signature. DevAssist handles the keys and renews the signatures itself."
   },
   on: { fa: "امضا روشن است", en: "Signing is on" },
   off: { fa: "امضا خاموش است", en: "Signing is off" },
   turnOn: { fa: "امضا کن", en: "Sign this domain" },
   switchLabel: { fa: "این دامنه امضا شود", en: "Sign this domain" },
   onTitle: { fa: "دامنه «{zone}» امضا شود؟", en: "Sign the domain “{zone}”?" },
-  onBody: { fa: "پیشکار کلیدها را می‌سازد و همه رکوردها را امضا می‌کند. بعد یک قدم کوچک می‌ماند: گذاشتن «رکورد DS» در پنل جایی که دامنه را خریده‌اید.", en: "Pishkar makes the keys and signs every record. One small step is left after that: putting the DS record in the panel where you bought the domain." },
+  onBody: { fa: "DevAssist کلیدها را می‌سازد و همه رکوردها را امضا می‌کند. بعد یک قدم کوچک می‌ماند: گذاشتن «رکورد DS» در پنل جایی که دامنه را خریده‌اید.", en: "DevAssist makes the keys and signs every record. One small step is left after that: putting the DS record in the panel where you bought the domain." },
   onYes: { fa: "بله، امضا کن", en: "Yes, sign it" },
   turnedOn: { fa: "امضای «{zone}» روشن شد. حالا رکورد DS را در ثبت‌کننده دامنه بگذارید.", en: "Signing for “{zone}” is on. Now put the DS record at your domain registrar." },
   offTitle: { fa: "امضای «{zone}» خاموش شود؟", en: "Turn off signing for “{zone}”?" },

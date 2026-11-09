@@ -259,7 +259,7 @@ class DnsClient:
         ``raw`` returns the answer bytes untouched (``max_bytes`` caps them)."""
         socket_file = socket_path()
         if not os.path.exists(socket_file):
-            raise DnsError("dns_not_installed", 503, "The Pishkar DNS engine is not installed here")
+            raise DnsError("dns_not_installed", 503, "The DNS engine is not installed here")
         token = TOKENS.read(token_path())
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         actor = CURRENT_ACTOR.get()
@@ -343,7 +343,7 @@ class DnsClient:
         """
         socket_file = socket_path()
         if not os.path.exists(socket_file):
-            raise DnsError("dns_not_installed", 503, "The Pishkar DNS engine is not installed here")
+            raise DnsError("dns_not_installed", 503, "The DNS engine is not installed here")
         token = TOKENS.read(token_path())
         headers = {"Authorization": f"Bearer {token}", "Accept": "*/*"}
         content = b""

@@ -68,7 +68,7 @@ const COPY = {
     fa: "{files} فایل ({size}) پاک می‌شود. تا چند روز در سطل بازیافت می‌ماند و می‌توانید برش گردانید.",
     en: "{files} files ({size}) will be removed. They stay in the recycle bin for a few days, so you can bring them back."
   },
-  removeConsequence: { fa: "اگر پروژه‌ای دوباره این بسته را بخواهد، پیشکار آن را از منبع دریافت می‌کند.", en: "If a project asks for it again, Pishkar fetches it from the source." },
+  removeConsequence: { fa: "اگر پروژه‌ای دوباره این بسته را بخواهد، DevAssist آن را از منبع دریافت می‌کند.", en: "If a project asks for it again, DevAssist fetches it from the source." },
   removeBlocked: { fa: "این بسته نگه‌داشته‌شده است. اول «دیگر نگه ندار» را بزنید.", en: "This package is kept. Choose “Stop keeping” first." },
   removeStarted: { fa: "پاک کردن «{name}» شروع شد.", en: "Removing “{name}” has started." },
   quarantine: { fa: "قرنطینه…", en: "Quarantine…" },

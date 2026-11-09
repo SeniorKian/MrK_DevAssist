@@ -97,7 +97,7 @@ _SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$")
 _PLAN_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
 # Slugs become an npm scope, a devpi user/index and a bucket-name prefix.
 RESERVED_SLUGS: Final = frozenset({
-    "root", "admin", "administrator", "api", "www", "mrk", "pishkar", "system", "npm",
+    "root", "admin", "administrator", "api", "www", "mrk", "devassist", "system", "npm",
     "pypi", "s3", "dns", "panel", "my", "support", "help", "billing", "security", "types",
     "babel", "angular", "vue", "react", "nestjs", "aws-sdk", "google-cloud", "azure",
     "mail", "smtp", "ftp", "localhost", "internal", "public", "default", "dev", "test",

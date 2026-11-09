@@ -21,7 +21,7 @@ const COPY = {
   why: { fa: "چرا:", en: "Why:" },
   edeTitle: { fa: "یادداشت‌های سرور", en: "Server notes" },
   traceTitle: { fa: "مسیر کامل پیدا کردن جواب", en: "The full path to the answer" },
-  traceHint: { fa: "پیشکار از کجا شروع کرد و هر سرور به کجا فرستادش.", en: "Where Pishkar started and where each server sent it next." },
+  traceHint: { fa: "DevAssist از کجا شروع کرد و هر سرور به کجا فرستادش.", en: "Where DevAssist started and where each server sent it next." },
   traceEmpty: { fa: "مسیری برنگشت؛ احتمالاً جواب از نام‌های خودتان یا حافظه بود.", en: "No path came back; the answer probably came from your own names or memory." },
   stepAsked: { fa: "از {server} پرسید: {qname}", en: "Asked {server}: {qname}" },
   stepCheck: { fa: "کلید امضای {zone} را بررسی کرد", en: "Checked the signing key of {zone}" },

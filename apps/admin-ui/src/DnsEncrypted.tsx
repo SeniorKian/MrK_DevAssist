@@ -1,6 +1,6 @@
 /**
- * «DNS › اتصال رمزدار» (`#/dns/encrypted`, docs/40 §6): phones, laptops and browsers connect to Pishkar
- * over encrypted DNS (DoT, DoH, DoQ) without Pishkar becoming an open resolver.
+ * «DNS › اتصال رمزدار» (`#/dns/encrypted`, docs/40 §6): phones, laptops and browsers connect to DevAssist
+ * over encrypted DNS (DoT, DoH, DoQ) without DevAssist becoming an open resolver.
  *
  * Cards: the three switches (the `encrypted` settings section), the certificate (self-signed /
  * upload / «از دامنه با Traefik» via My services), access tokens for the internet (shown once, with
@@ -42,8 +42,8 @@ import {
 const COPY = {
   introTitle: { fa: "اتصال رمزدار به DNS", en: "Encrypted connection to DNS" },
   introBody: {
-    fa: "گوشی، لپ‌تاپ و مرورگر می‌توانند رمزدار از پیشکار بپرسند؛ این‌طوری کسی در مسیر (مثلاً Wi-Fi عمومی یا شرکت اینترنت) نمی‌بیند چه سایت‌هایی را باز می‌کنید و نمی‌تواند جواب را عوض کند.",
-    en: "Phones, laptops and browsers can ask Pishkar over an encrypted connection, so nobody along the way (like public Wi-Fi or your internet company) sees which sites you open or can change the answers."
+    fa: "گوشی، لپ‌تاپ و مرورگر می‌توانند رمزدار از DevAssist بپرسند؛ این‌طوری کسی در مسیر (مثلاً Wi-Fi عمومی یا شرکت اینترنت) نمی‌بیند چه سایت‌هایی را باز می‌کنید و نمی‌تواند جواب را عوض کند.",
+    en: "Phones, laptops and browsers can ask DevAssist over an encrypted connection, so nobody along the way (like public Wi-Fi or your internet company) sees which sites you open or can change the answers."
   },
   connections: { fa: "اتصال‌های باز الان: {dot} با TLS، {doh} با HTTPS، {doq} سریع", en: "Open connections now: {dot} over TLS, {doh} over HTTPS, {doq} fast" },
   // switches
@@ -56,7 +56,7 @@ const COPY = {
   doq: { fa: "رمزدار و سریع روی UDP (DoQ)", en: "Encrypted and fast over UDP (DoQ)" },
   doqHint: { fa: "تازه‌ترین روش؛ روی اینترنت موبایل سریع‌تر است. فقط برخی برنامه‌ها پشتیبانی می‌کنند.", en: "The newest way; faster on mobile internet. Only some apps support it." },
   dohHow: { fa: "گواهی HTTPS از کجا بیاید؟", en: "Where does the HTTPS certificate come from?" },
-  dohSelf: { fa: "خود پیشکار (پورت ۴۴۳)", en: "Pishkar itself (port 443)" },
+  dohSelf: { fa: "خود DevAssist (پورت ۴۴۳)", en: "DevAssist itself (port 443)" },
   dohSelfBody: { fa: "از گواهی کارت پایین استفاده می‌شود. اگر پورت ۴۴۳ دست Traefik است، گزینه بعدی را بزنید.", en: "Uses the certificate in the card below. If Traefik holds port 443, pick the next option." },
   dohProxy: { fa: "پشت Traefik، با یک دامنه", en: "Behind Traefik, with a domain" },
   dohProxyBody: { fa: "پیشنهاد ما برای سرورهایی که Dokploy دارند: Traefik گواهی معتبر می‌گیرد و همه دستگاه‌ها بی‌دردسر وصل می‌شوند.", en: "Our suggestion for servers with Dokploy: Traefik gets a trusted certificate and every device connects easily." },
@@ -89,7 +89,7 @@ const COPY = {
   ms: { fa: "میلی‌ثانیه", en: "ms" },
   // certificate
   certTitle: { fa: "گواهی", en: "Certificate" },
-  certHint: { fa: "دستگاه با گواهی مطمئن می‌شود واقعاً به پیشکار شما وصل شده، نه به کس دیگری.", en: "With the certificate a device makes sure it really reached your Pishkar and not someone else." },
+  certHint: { fa: "دستگاه با گواهی مطمئن می‌شود واقعاً به DevAssist شما وصل شده، نه به کس دیگری.", en: "With the certificate a device makes sure it really reached your DevAssist and not someone else." },
   certLoadFailed: { fa: "وضعیت گواهی خوانده نشد.", en: "The certificate status didn't load." },
   certNone: { fa: "هنوز گواهی ندارید. یکی از سه راه زیر را انتخاب کنید.", en: "No certificate yet. Pick one of the three ways below." },
   certOk: { fa: "گواهی معتبر است تا {date} ({days} روز دیگر).", en: "The certificate is valid until {date} ({days} more days)." },
@@ -97,7 +97,7 @@ const COPY = {
   certExpired: { fa: "تاریخ گواهی گذشته است؛ دستگاه‌ها وصل نمی‌شوند.", en: "The certificate has expired; devices won't connect." },
   selfSignedBadge: { fa: "خودامضا", en: "Self-signed" },
   uploadedBadge: { fa: "بارگذاری‌شده", en: "Uploaded" },
-  selfSignedNote: { fa: "خیلی از گوشی‌ها و مرورگرها به گواهی خودامضا اعتماد نمی‌کنند (مثلاً «DNS خصوصی» Android). برای آن‌ها راه «از دامنه با Traefik» بهتر است. پیشکار این گواهی را ۳۰ روز پیش از پایان خودکار تمدید می‌کند.", en: "Many phones and browsers don't trust a self-signed certificate (for example Android's Private DNS). For them, “Via a domain with Traefik” is better. Pishkar renews this certificate 30 days before it ends." },
+  selfSignedNote: { fa: "خیلی از گوشی‌ها و مرورگرها به گواهی خودامضا اعتماد نمی‌کنند (مثلاً «DNS خصوصی» Android). برای آن‌ها راه «از دامنه با Traefik» بهتر است. DevAssist این گواهی را ۳۰ روز پیش از پایان خودکار تمدید می‌کند.", en: "Many phones and browsers don't trust a self-signed certificate (for example Android's Private DNS). For them, “Via a domain with Traefik” is better. DevAssist renews this certificate 30 days before it ends." },
   names: { fa: "نام‌ها", en: "Names" },
   issuer: { fa: "صادرکننده", en: "Issuer" },
   notBefore: { fa: "معتبر از", en: "Valid from" },
@@ -723,7 +723,7 @@ function GuidesCard({ clients, error, onRetry }: { clients: EncryptedClients | n
   const profile = async () => {
     setBusy(true);
     try {
-      await downloadAppleProfile({ ...(clients.doh_url ? { doh_url: clients.doh_url } : {}), ...(clients.dot_name ? { dot_name: clients.dot_name } : {}), name: "Pishkar DNS" });
+      await downloadAppleProfile({ ...(clients.doh_url ? { doh_url: clients.doh_url } : {}), ...(clients.dot_name ? { dot_name: clients.dot_name } : {}), name: "DevAssist DNS" });
     } catch (caught) {
       notify({ message: `${pick(language, COPY.profileFailed)} ${errorSentence(language, caught, "dns")}`, tone: "error" });
     } finally {

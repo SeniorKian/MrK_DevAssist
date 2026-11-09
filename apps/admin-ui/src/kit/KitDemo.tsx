@@ -94,7 +94,7 @@ export default function KitDemo({ permissions = ["*"] }: { permissions?: readonl
 
         <SectionCard
           title={fa ? "منابع دریافت npm" : "npm sources"}
-          hint={fa ? "پیشکار بسته‌ها را به این ترتیب از منابع می‌گیرد." : "Pishkar fetches packages from these, in order."}
+          hint={fa ? "DevAssist بسته‌ها را به این ترتیب از منابع می‌گیرد." : "DevAssist fetches packages from these, in order."}
           status={<StatusPill status="ready" />}
           action={<HelpTip term="upstream" />}
         >

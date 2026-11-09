@@ -161,7 +161,7 @@ class TokenBucket:
             raise DokployError(
                 "dokploy_rate_limited",
                 429,
-                "Too many Dokploy requests; Pishkar is protecting the Dokploy panel. "
+                "Too many Dokploy requests; DevAssist is protecting the Dokploy panel. "
                 "Retry shortly.",
             )
         await self._sleep(wait)

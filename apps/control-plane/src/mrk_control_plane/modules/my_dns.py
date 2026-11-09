@@ -28,8 +28,8 @@ from .dns_validate import DnsInputError, canonical_zone, entity_id, record_body,
 if TYPE_CHECKING:
     from .tenancy import MySpace
 
-VERIFY_LABEL = "_pishkar-verify"
-VERIFY_PREFIX = "pishkar-verify="
+VERIFY_LABEL = "_devassist-verify"
+VERIFY_PREFIX = "devassist-verify="
 
 
 def _lookup(name: str, rtype: str) -> list[str]:

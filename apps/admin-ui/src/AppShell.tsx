@@ -30,7 +30,7 @@ import DarkModeRoundedIcon from "@mui/icons-material/DarkModeRounded";
 import NotificationsNoneRoundedIcon from "@mui/icons-material/NotificationsNoneRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
-import { PishkarMark } from "./brand";
+import { DevAssistMark, ProductName } from "./brand";
 import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
 import TranslateRoundedIcon from "@mui/icons-material/TranslateRounded";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
@@ -151,10 +151,10 @@ class PageErrorBoundary extends Component<{ language: Language; resetKey: string
 function Brand({ language, compact = false }: { language: Language; compact?: boolean }) {
   return (
     <Stack direction="row" alignItems="center" spacing={1.5} sx={{ minWidth: 0 }}>
-      <PishkarMark size={compact ? 32 : 38} />
+      <DevAssistMark size={compact ? 32 : 38} />
       {!compact && (
         <Box sx={{ minWidth: 0 }}>
-          <Typography fontWeight={780} lineHeight={1.35} noWrap>{translate(language, "product")}</Typography>
+          <Typography fontWeight={780} lineHeight={1.35} noWrap><ProductName name={translate(language, "product")} /></Typography>
           <Typography variant="caption" color="text.secondary" display="block" noWrap>{translate(language, "subtitle")}</Typography>
         </Box>
       )}

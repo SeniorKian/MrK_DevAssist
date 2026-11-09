@@ -1,5 +1,5 @@
 /**
- * «مسیریابی دامنه» (docs/35 §2): how domains reach Pishkar's services through Dokploy/Traefik.
+ * «مسیریابی دامنه» (docs/35 §2): how domains reach DevAssist's services through Dokploy/Traefik.
  * Advanced only. Shows what was detected on this server, the current mode, lets an admin change it,
  * and lists the copyable guidance snippets from `GET /api/v1/domains/routing`.
  */
@@ -16,16 +16,16 @@ import {
 const COPY = {
   title: { fa: "مسیریابی دامنه", en: "Domain routing" },
   hint: {
-    fa: "دامنه‌ها از راه Dokploy به سرویس‌ها می‌رسند. این‌جا می‌بینید پیشکار روی این سرور چه چیزی پیدا کرده و از چه روشی استفاده می‌کند.",
-    en: "Domains reach your services through Dokploy. Here you see what Pishkar found on this server and which way it uses."
+    fa: "دامنه‌ها از راه Dokploy به سرویس‌ها می‌رسند. این‌جا می‌بینید DevAssist روی این سرور چه چیزی پیدا کرده و از چه روشی استفاده می‌کند.",
+    en: "Domains reach your services through Dokploy. Here you see what DevAssist found on this server and which way it uses."
   },
   detectedTitle: { fa: "چیزهایی که روی این سرور پیدا شد", en: "What was found on this server" },
-  insideDokploy: { fa: "پیشکار داخل Dokploy نصب است", en: "Pishkar runs inside Dokploy" },
+  insideDokploy: { fa: "DevAssist داخل Dokploy نصب است", en: "DevAssist runs inside Dokploy" },
   dokployConnected: { fa: "اتصال Dokploy برقرار است", en: "Dokploy is connected" },
-  dokployProject: { fa: "پروژه پیشکار در Dokploy", en: "Pishkar's Dokploy project" },
-  dokployService: { fa: "سرویس پیشکار در Dokploy", en: "Pishkar's Dokploy service" },
+  dokployProject: { fa: "پروژه DevAssist در Dokploy", en: "DevAssist's Dokploy project" },
+  dokployService: { fa: "سرویس DevAssist در Dokploy", en: "DevAssist's Dokploy service" },
   traefikDir: { fa: "پوشه تنظیمات Traefik در دسترس است", en: "The Traefik settings folder is reachable" },
-  onNetwork: { fa: "پیشکار عضو شبکه «dokploy-network» است", en: "Pishkar is on the \"dokploy-network\" network" },
+  onNetwork: { fa: "DevAssist عضو شبکه «dokploy-network» است", en: "DevAssist is on the \"dokploy-network\" network" },
   serverIps: { fa: "نشانی‌های این سرور", en: "This server's addresses" },
   yes: { fa: "بله", en: "Yes" },
   no: { fa: "نه", en: "No" },
@@ -51,9 +51,9 @@ const SNIPPET_TITLES: Record<string, Bi> = {
   traefik_mount: { fa: "دسترسی دستیار سرور به پوشه Traefik", en: "Give the server helper the Traefik folder" },
   mount: { fa: "دسترسی دستیار سرور به پوشه Traefik", en: "Give the server helper the Traefik folder" },
   traefik_dir: { fa: "دسترسی دستیار سرور به پوشه Traefik", en: "Give the server helper the Traefik folder" },
-  compose_template: { fa: "نصب پیشکار به‌صورت Compose داخل Dokploy", en: "Install Pishkar as a Compose project in Dokploy" },
-  dokploy_compose: { fa: "نصب پیشکار به‌صورت Compose داخل Dokploy", en: "Install Pishkar as a Compose project in Dokploy" },
-  install: { fa: "نصب پیشکار به‌صورت Compose داخل Dokploy", en: "Install Pishkar as a Compose project in Dokploy" }
+  compose_template: { fa: "نصب DevAssist به‌صورت Compose داخل Dokploy", en: "Install DevAssist as a Compose project in Dokploy" },
+  dokploy_compose: { fa: "نصب DevAssist به‌صورت Compose داخل Dokploy", en: "Install DevAssist as a Compose project in Dokploy" },
+  install: { fa: "نصب DevAssist به‌صورت Compose داخل Dokploy", en: "Install DevAssist as a Compose project in Dokploy" }
 };
 
 const MODES: RoutingChoice[] = ["auto", "dokploy_api", "traefik_file", "manual"];

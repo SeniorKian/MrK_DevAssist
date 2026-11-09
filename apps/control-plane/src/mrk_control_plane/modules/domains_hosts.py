@@ -39,7 +39,7 @@ def canonical_host(raw: object) -> str:
     if text.startswith("[") or _is_ip(text):
         raise HostError("ip_not_allowed", "use a domain name, not an IP address")
     if ":" in text:
-        raise HostError("port_not_allowed", "do not add a port; Pishkar picks the service port")
+        raise HostError("port_not_allowed", "do not add a port; DevAssist picks the service port")
     text = text.rstrip(".").lower()
     labels = text.split(".")
     if len(labels) < 2 or any(not label for label in labels):

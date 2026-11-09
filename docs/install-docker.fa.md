@@ -1,6 +1,6 @@
 <div dir="rtl">
 
-# نصب پیشکار با Docker
+# نصب DevAssist با Docker
 
 [English](install-docker.md) · **فارسی**
 
@@ -27,8 +27,8 @@
 <div dir="ltr">
 
 ```bash
-git clone https://github.com/SeniorKian/MrK_DevAssist.git pishkar
-cd pishkar
+git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist
+cd devassist
 cp .env.example .env        # optional: ports, memory, build mirrors
 docker compose up -d --build
 docker compose ps           # wait for "healthy" (first start: a few minutes)
@@ -60,8 +60,8 @@ ssh -L 8080:127.0.0.1:8080 you@your-server   # then open http://localhost:8080
 <div dir="ltr">
 
 ```bash
-sudo install -d -o 10001 -g 10001 -m 0750 /srv/pishkar-data
-echo 'MRK_HOST_DATA_PATH=/srv/pishkar-data' >> .env
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/devassist-data
+echo 'MRK_HOST_DATA_PATH=/srv/devassist-data' >> .env
 ```
 
 </div>
@@ -186,7 +186,7 @@ docker compose --profile dns logs --tail=50 mrk-dns
    stub سرویس systemd-resolved روی `127.0.0.53` با `127.0.0.1:53` تداخل **ندارد**. سرور DNS
    دیگری (dnsmasq، bind9 و...) روی `0.0.0.0:53` تداخل دارد؛ فقط اگر دیگر لازمش ندارید خاموشش
    کنید: `sudo systemctl disable --now <unit>`.
-3. **DNS خود سرور به پیشکار اشاره کند** (سرورهایی که systemd-resolved دارند)، با یک DNS عمومی پشتیبان:
+3. **DNS خود سرور به DevAssist اشاره کند** (سرورهایی که systemd-resolved دارند)، با یک DNS عمومی پشتیبان:
    <div dir="ltr">
 
    ```bash
@@ -208,7 +208,7 @@ docker compose --profile dns logs --tail=50 mrk-dns
    `/etc/resolv.conf.mrk-backup` را برگردانید و systemd-resolved را ری‌استارت کنید. سرورهای بدون
    systemd-resolved یک `/etc/resolv.conf` ثابت با `nameserver 127.0.0.1` و یک DNS پشتیبان می‌گیرند
    (پنل دستورش را نشان می‌دهد).
-4. **کانتینرها از پیشکار استفاده کنند**: در `/etc/docker/daemon.json` فقط کلید `dns` را اضافه کنید
+4. **کانتینرها از DevAssist استفاده کنند**: در `/etc/docker/daemon.json` فقط کلید `dns` را اضافه کنید
    و بقیه کلیدها را نگه دارید، مثلاً `"dns": ["172.17.0.1", "1.1.1.1"]`، بعد
    `sudo systemctl restart docker`. **این کار همه کانتینرهای سرور را ری‌استارت می‌کند**، از جمله
    Dokploy و برنامه‌هایش؛ در زمان کم‌کار انجامش دهید.

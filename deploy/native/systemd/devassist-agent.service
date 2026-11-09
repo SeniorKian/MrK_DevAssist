@@ -1,4 +1,4 @@
-# Pishkar Host Agent (native install) — the `mrk-agent` Compose service.
+# DevAssist Host Agent (native install) — the `mrk-agent` Compose service.
 #
 # Like the container: root with only CAP_DAC_READ_SEARCH and CAP_DAC_OVERRIDE
 # (server backups read Docker volumes), host mounts read-only, Docker socket
@@ -11,7 +11,7 @@
 # host /proc at a path other than /proc, so /proc is mounted there too.
 
 [Unit]
-Description=Pishkar Host Agent (mrk-agent)
+Description=DevAssist Host Agent (mrk-agent)
 Documentation=https://github.com/SeniorKian/MrK_DevAssist/blob/main/docs/install-native.md
 After=network-online.target docker.service
 Wants=network-online.target
@@ -21,7 +21,7 @@ Type=simple
 User=root
 Group=root
 UMask=0077
-EnvironmentFile=/etc/pishkar/agent.env
+EnvironmentFile=/etc/devassist/agent.env
 Environment=PATH=/opt/mrk/venv/bin:/usr/bin:/bin
 ExecStart=/opt/mrk/venv/bin/mrk-agent
 Restart=always
@@ -38,7 +38,7 @@ BindReadOnlyPaths=-/var/lib/docker/volumes:/opt/mrk/agent-host/volumes
 # Delete this line to hide the host filesystem from the agent.
 BindReadOnlyPaths=/:/opt/mrk/agent-host/root:norbind
 # Opt-in (docs/35, domains mode traefik_file): set MRK_AGENT_TRAEFIK_DYNAMIC_DIR
-# in /etc/pishkar/agent.env and allow writes with `systemctl edit pishkar-agent`:
+# in /etc/devassist/agent.env and allow writes with `systemctl edit devassist-agent`:
 #   [Service]
 #   ReadWritePaths=/etc/dokploy/traefik/dynamic
 

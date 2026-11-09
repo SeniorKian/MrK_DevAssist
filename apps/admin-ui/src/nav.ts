@@ -134,7 +134,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ]
   },
   {
-    // docs/36–41: Pishkar's own DNS server (zones, templates, blocking, monitoring, logs, encrypted DNS).
+    // docs/36–41: DevAssist's own DNS server (zones, templates, blocking, monitoring, logs, encrypted DNS).
     key: "dns",
     label: { fa: "DNS", en: "DNS" },
     icon: TravelExploreRoundedIcon,
@@ -251,7 +251,7 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         key: "sources",
         label: { fa: "منابع دریافت", en: "Package sources" },
-        hint: { fa: "پیشکار بسته‌ها را از کجا و به چه ترتیبی بگیرد.", en: "Where Pishkar fetches packages from, and in what order." },
+        hint: { fa: "DevAssist بسته‌ها را از کجا و به چه ترتیبی بگیرد.", en: "Where DevAssist fetches packages from, and in what order." },
         anyOf: ["upstream:read"],
         panel: "UpstreamsPanel",
         keywords: ["upstream", "آپستریم", "mirror", "offline", "بدون اینترنت"]
@@ -396,7 +396,7 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         key: "dns",
         label: { fa: "DNS و شبکه داخلی", en: "DNS & internal network" },
-        hint: { fa: "پیشکار آدرس سایت‌ها را چطور پیدا کند و آیا به منابع داخل شبکه وصل شود.", en: "How Pishkar looks up addresses, and whether it may use internal sources." },
+        hint: { fa: "DevAssist آدرس سایت‌ها را چطور پیدا کند و آیا به منابع داخل شبکه وصل شود.", en: "How DevAssist looks up addresses, and whether it may use internal sources." },
         anyOf: ["upstream:read"],
         advancedOnly: true,
         panel: "NetworkPanel",

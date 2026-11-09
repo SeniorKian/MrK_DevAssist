@@ -644,7 +644,7 @@ class S3Api:
             if exists and self.allowed(principal, request, "s3:ListBucket", name):
                 raise S3Error("BucketAlreadyOwnedByYou", BucketName=name)
             raise S3Error(
-                "AccessDenied", "Buckets are created in the Pishkar panel, not through the S3 API."
+                "AccessDenied", "Buckets are created in the DevAssist panel, not via the S3 API."
             )
         if method == "DELETE" and not any(
             item in query for item in ("tagging", "lifecycle", "policy", "cors", "website")
@@ -652,7 +652,7 @@ class S3Api:
             if not exists:
                 raise S3Error("NoSuchBucket", BucketName=name)
             raise S3Error(
-                "AccessDenied", "Buckets are deleted in the Pishkar panel, not through the S3 API."
+                "AccessDenied", "Buckets are deleted in the DevAssist panel, not via the S3 API."
             )
         bucket = self.bucket_for(name)
         if method == "HEAD":

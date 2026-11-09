@@ -1046,11 +1046,11 @@ Evidence: test/report/ADR reference
 به‌عنوان Owner می‌خواهم برای هر سرویس چند دامنه اضافه کنم بی‌آنکه با ترافیک Dokploy تداخل کند.
 
 پذیرش (پیاده‌شده):
-- اصل: پیشکار هرگز پورت 80/443 را نمی‌گیرد؛ ورودی مال Traefik خود Dokploy است و پیشکار فقط مسیر «دامنه → سرویس:پورت» را
-  درخواست می‌کند. پیشکار هرگز خودش redeploy نمی‌کند؛ فقط `suggested_action` برمی‌گرداند.
+- اصل: DevAssist هرگز پورت 80/443 را نمی‌گیرد؛ ورودی مال Traefik خود Dokploy است و DevAssist فقط مسیر «دامنه → سرویس:پورت» را
+  درخواست می‌کند. DevAssist هرگز خودش redeploy نمی‌کند؛ فقط `suggested_action` برمی‌گرداند.
 - چند دامنه بی‌سقف برای هر سرویس (پنل، npm، PyPI، S3)، دقیقاً یکی «اصلی» (اولی خودکار؛ با حذف اصلی، قدیمی‌ترینِ بعدی).
   نام canonical (IDNA، حروف کوچک، بدون نقطه آخر)، یکتا در کل؛ wildcard، IP، پورت، scheme و مسیر رد می‌شوند.
-- بررسی تداخل پیش از افزودن: با دامنه‌های خود پیشکار (`domain_exists`) و Dokploy (`domain_in_use` با مالک)؛ اگر Dokploy در
+- بررسی تداخل پیش از افزودن: با دامنه‌های خود DevAssist (`domain_exists`) و Dokploy (`domain_in_use` با مالک)؛ اگر Dokploy در
   دسترس نباشد فقط هشدار (`conflict_check:"skipped"`)، با بودجه و cache تا Dokploy زیر بار نرود.
 - سه روش با تشخیص خودکار (`auto` به همین ترتیب): `dokploy_api` (کانتینر خود از label compose از راه Host Agent پیدا و دامنه با
   API Dokploy v0.31.0 ساخته می‌شود؛ برای Compose `redeploy_required`)، `traefik_file` (اختیاری؛ Agent فقط فایل
@@ -1063,7 +1063,7 @@ Evidence: test/report/ADR reference
 - مجوزها: `domains:read` (همه)، `domains:write` (owner/admin، verify هم)؛ حذف با تایپ host؛ audit `domain.*` و
   `domains.routing.update`؛ جدول `service_domains` (migration `20261108_0012`) در بکاپ منطقی هست.
 - محدودیت‌ها: IP عمومی سرور خودکار کشف نمی‌شود؛ `dokploy_api` به Host Agent جفت‌شده نیاز دارد؛ دامنه موجود Dokploy روی خود
-  پیشکار adopt نمی‌شود؛ مسیریابی خودکار برای کانتینر `mrk-mirror` نوشته شده (نصب بومی: بررسی یا حالت دستی).
+  DevAssist adopt نمی‌شود؛ مسیریابی خودکار برای کانتینر `mrk-mirror` نوشته شده (نصب بومی: بررسی یا حالت دستی).
 
 وضعیت: انجام‌شده — commit `1a568bf`؛ جایگزین docs/35. تست: `test_services_domains.py`.
 
@@ -1187,7 +1187,7 @@ Evidence: test/report/ADR reference
 ## Epic E18 — DNS Management
 
 > تصمیم پایه (docs/36، جایگزین بخش runtime/بودجه docs/23 و §10 docs/25): به‌جای Technitium یا موتور Python، موتور DNS
-> **بومی Go** خود پیشکار (US-191). فازها: D1 پایه و D2 لاگ/پایش (commit `1a568bf`)، D4 حل از ریشه/DNSSEC/رمزدار (commit
+> **بومی Go** خود DevAssist (US-191). فازها: D1 پایه و D2 لاگ/پایش (commit `1a568bf`)، D4 حل از ریشه/DNSSEC/رمزدار (commit
 > `9df9787`)، D5+D6 و قالب دامنه (در درخت کاری، پیش از commit). فاز D3 (docs/39) لغو شد و ساخته نشد. بیرون از محدوده
 > (کار DNS بسته است): DHCP، DNS Apps، cluster چندنودی، catalog zones، DNS cookies، ACME داخل موتور، DoH3.
 
@@ -1202,7 +1202,7 @@ Evidence: test/report/ADR reference
 
 وضعیت: انجام‌شده — commit `1a568bf` (D1)؛ جایگزین docs/37. تب «راه‌اندازی» شش گام دارد (`engine_running`، `port_53_free`،
 `host_resolver`، `docker_daemon`، `verify_from_host`، `verify_from_container`) که از حقایق فقط‌خواندنی Host Agent
-(`GET /v1/dns/facts`) تشخیص داده می‌شوند. پیشکار فایل سیستمی را تغییر نمی‌دهد و کانتینری اجرا نمی‌کند: دستور دقیق (آزاد کردن
+(`GET /v1/dns/facts`) تشخیص داده می‌شوند. DevAssist فایل سیستمی را تغییر نمی‌دهد و کانتینری اجرا نمی‌کند: دستور دقیق (آزاد کردن
 53 از `systemd-resolved`، resolv.conf، `daemon.json` با gateway `172.17.0.1` نه 127.0.0.1) همراه DNS پشتیبان
 (`dns.fallback_servers`) و دستور برگرداندن می‌دهد و بعد بررسی می‌کند؛ restart داکر با برچسب خطر. بدون Agent گام‌ها `unknown`
 با دستورهای کامل‌اند.
@@ -1436,7 +1436,7 @@ docs/41. ACL ترتیبی با `!` و «اولین تطابق برنده»؛ `0.
 نرسد.
 
 پذیرش (پیاده‌شده):
-- موتور Go در `apps/dns-engine` (کتابخانه پروتکل `miekg/dns`؛ منطق سرور، cache، سیاست، لاگ و API کد خود پیشکار) با باینری‌های
+- موتور Go در `apps/dns-engine` (کتابخانه پروتکل `miekg/dns`؛ منطق سرور، cache، سیاست، لاگ و API کد خود DevAssist) با باینری‌های
   `mrk-dns` (`serve|health|version`) و `mrk-dnsbench`، داخل همان ایمیج؛ ایمیج جدا ندارد.
 - container جدای `mrk-dns` از همان ایمیج (Compose profile `dns`، `network_mode: host` تا IP واقعی کلاینت و سرعت UDP بماند)،
   سقف `MRK_DNS_CPUS`=2، `MRK_DNS_MEMORY`=512m، `MRK_DNS_PIDS`=256، `GOMEMLIMIT` خودکار، `read_only`، `no-new-privileges`،
@@ -1500,7 +1500,7 @@ qps از cache روی 2 هسته (لاگ روشن یا خاموش). محدودی
 
 ### US-194 — DNS رمزدار برای گوشی، لپ‌تاپ و مرورگر — P0
 
-به‌عنوان کاربر می‌خواهم دستگاه‌هایم با DoT، DoH یا DoQ به پیشکار وصل شوند، بی‌آنکه پیشکار open resolver شود.
+به‌عنوان کاربر می‌خواهم دستگاه‌هایم با DoT، DoH یا DoQ به DevAssist وصل شوند، بی‌آنکه DevAssist open resolver شود.
 
 پذیرش (پیاده‌شده):
 - DoT (RFC 7858، 853/tcp)، DoH (RFC 8484، `/dns-query`، HTTP/2 با TLS یا HTTP ساده پشت Traefik)، DoQ (RFC 9250، 853/udp)؛ سقف

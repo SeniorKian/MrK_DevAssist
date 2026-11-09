@@ -1,37 +1,37 @@
 #!/usr/bin/env bash
-# pishkar-exec — run a command the way pishkar.service sees the system (native install).
+# devassist-exec — run a command the way devassist.service sees the system (native install).
 #
 # The main service runs in its own mount namespace (/data, /usr/local/bin,
 # /opt/verdaccio, /opt/pglite and a private /tmp with the supervisor socket).
 # Maintenance commands from docs/18-operations-runbooks.md need that view:
 #
-#   sudo pishkar-exec supervisorctl -c /opt/mrk/supervisord.conf status
-#   sudo pishkar-exec mrk-restore apply --plan ... (service stopped first)
+#   sudo devassist-exec supervisorctl -c /opt/mrk/supervisord.conf status
+#   sudo devassist-exec mrk-restore apply --plan ... (service stopped first)
 #
-# Service running: joins its mount namespace and environment as user pishkar.
+# Service running: joins its mount namespace and environment as user devassist.
 # Service stopped: starts a transient unit with the same mounts and env file.
 set -Eeuo pipefail
 
-UNIT="pishkar.service"
-RUN_USER="pishkar"
-INSTALL_CONF="/etc/pishkar/install.conf"
+UNIT="devassist.service"
+RUN_USER="devassist"
+INSTALL_CONF="/etc/devassist/install.conf"
 INNER_PATH="/opt/mrk/venv/bin:/usr/local/bin:/usr/bin:/bin"
 
 usage() {
-    echo "usage: sudo pishkar-exec <command> [args...]" >&2
-    echo "  e.g. sudo pishkar-exec supervisorctl -c /opt/mrk/supervisord.conf status" >&2
+    echo "usage: sudo devassist-exec <command> [args...]" >&2
+    echo "  e.g. sudo devassist-exec supervisorctl -c /opt/mrk/supervisord.conf status" >&2
     exit 2
 }
 
 [ "$#" -gt 0 ] || usage
 if [ "$(id -u)" -ne 0 ]; then
-    echo "pishkar-exec: run as root (sudo) / با sudo اجرا کنید" >&2
+    echo "devassist-exec: run as root (sudo) / با sudo اجرا کنید" >&2
     exit 1
 fi
 
-data_dir="/var/lib/pishkar"
+data_dir="/var/lib/devassist"
 if [ -r "$INSTALL_CONF" ]; then
-    configured="$(sed -n 's/^PISHKAR_DATA_DIR=//p' "$INSTALL_CONF" | head -n 1)"
+    configured="$(sed -n 's/^DEVASSIST_DATA_DIR=//p' "$INSTALL_CONF" | head -n 1)"
     if [ -n "$configured" ]; then
         data_dir="$configured"
     fi
@@ -54,7 +54,7 @@ fi
 exec systemd-run --quiet --wait "$io_mode" --collect --service-type=exec \
     --uid="$RUN_USER" --gid="$RUN_USER" \
     --property=UMask=0027 \
-    --property=EnvironmentFile=/etc/pishkar/pishkar.env \
+    --property=EnvironmentFile=/etc/devassist/devassist.env \
     --setenv=PATH="$INNER_PATH" --setenv=HOME=/tmp \
     --property=BindPaths="$data_dir:/data" \
     --property=BindReadOnlyPaths="/opt/mrk/bin:/usr/local/bin /opt/mrk/verdaccio:/opt/verdaccio /opt/mrk/pglite:/opt/pglite" \

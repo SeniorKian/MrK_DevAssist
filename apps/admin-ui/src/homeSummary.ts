@@ -122,16 +122,16 @@ const COMPONENT_WORDS: Record<string, Bi> = {
   pypi_registry: { fa: "مخزن PyPI", en: "The PyPI registry" },
   pypi_upstream_router: { fa: "مسیریاب PyPI", en: "The PyPI router" },
   database: { fa: "پایگاه داده پنل", en: "The panel's database" },
-  control_plane: { fa: "سرور پیشکار", en: "The Pishkar server" },
+  control_plane: { fa: "سرور DevAssist", en: "The DevAssist server" },
   s3_engine: { fa: "فضای فایل", en: "File space" },
   s3: { fa: "فضای فایل", en: "File space" },
   dns: { fa: "DNS سرور", en: "The server's DNS" },
   dns_engine: { fa: "DNS سرور", en: "The server's DNS" }
 };
 
-/** Plain name of a system component («مخزن npm»). Unknown → «یکی از بخش‌های Pishkar». */
+/** Plain name of a system component («مخزن npm»). Unknown → «یکی از بخش‌های DevAssist». */
 export function componentWord(language: Language, component: string): string {
-  return COMPONENT_WORDS[component]?.[language] ?? (language === "fa" ? "یکی از بخش‌های پیشکار" : "Part of Pishkar");
+  return COMPONENT_WORDS[component]?.[language] ?? (language === "fa" ? "یکی از بخش‌های DevAssist" : "Part of DevAssist");
 }
 
 function ecosystemWord(language: Language, value: unknown): string {
@@ -220,7 +220,7 @@ const RULES: Record<string, RuleCopy> = {
   },
   dns_under_pressure: {
     title: { fa: "DNS سرور زیر فشار است", en: "The server's DNS is under load" },
-    why: { fa: "پیشکار خودکار کارهای کم‌اهمیت را کم کرده تا پرسش‌ها جواب بگیرند. ببینید چه کسی بیشتر می‌پرسد.", en: "Pishkar has cut back less important work so questions still get answers. See who is asking the most." },
+    why: { fa: "DevAssist خودکار کارهای کم‌اهمیت را کم کرده تا پرسش‌ها جواب بگیرند. ببینید چه کسی بیشتر می‌پرسد.", en: "DevAssist has cut back less important work so questions still get answers. See who is asking the most." },
     button: { fa: "دیدن پایش", en: "See monitor" }
   },
   dns_attack_detected: {
@@ -240,7 +240,7 @@ const RULES: Record<string, RuleCopy> = {
   },
   dns_secondary_problem: {
     title: { fa: "نسخه دوم دامنه {zone} به‌روز نمی‌شود", en: "The copy of the domain {zone} isn't updating" },
-    why: { fa: "پیشکار نمی‌تواند رکوردها را از سرور اصلی بگیرد. اگر مدت زیادی بماند، این دامنه دیگر جواب نمی‌گیرد.", en: "Pishkar can't copy the records from the main server. If it lasts too long, this domain stops getting answers." },
+    why: { fa: "DevAssist نمی‌تواند رکوردها را از سرور اصلی بگیرد. اگر مدت زیادی بماند، این دامنه دیگر جواب نمی‌گیرد.", en: "DevAssist can't copy the records from the main server. If it lasts too long, this domain stops getting answers." },
     button: { fa: "بررسی دامنه", en: "Check the domain" }
   },
   dns_signing_problem: {
@@ -304,8 +304,8 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
   }
   if (item.rule === "dns_under_pressure" && params.level === "emergency") {
     why = language === "fa"
-      ? "فشار خیلی زیاد است و پیشکار فقط کارهای ضروری را انجام می‌دهد. ببینید چه کسی بیشتر می‌پرسد."
-      : "The load is very heavy and Pishkar is doing only what's essential. See who is asking the most.";
+      ? "فشار خیلی زیاد است و DevAssist فقط کارهای ضروری را انجام می‌دهد. ببینید چه کسی بیشتر می‌پرسد."
+      : "The load is very heavy and DevAssist is doing only what's essential. See who is asking the most.";
   }
   if (item.rule === "dns_attack_detected" && typeof params.parent === "string" && params.parent) {
     why = language === "fa"
@@ -320,8 +320,8 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
   }
   if (item.rule === "dns_secondary_problem" && params.expired === true) {
     why = language === "fa"
-      ? "نسخه دوم از اعتبار افتاده و پیشکار برای این دامنه جواب خطا می‌دهد. سرور اصلی را بررسی کنید."
-      : "The copy has run out and Pishkar answers this domain with an error. Check the main server.";
+      ? "نسخه دوم از اعتبار افتاده و DevAssist برای این دامنه جواب خطا می‌دهد. سرور اصلی را بررسی کنید."
+      : "The copy has run out and DevAssist answers this domain with an error. Check the main server.";
   }
   if (item.rule === "agent_unreachable" && typeof params.since === "number") {
     const when = formatRelative(params.since * 1000, language);

@@ -91,7 +91,7 @@ def test_service_documents_and_ignored_mapping(tmp_path: Path) -> None:
     assert name.startswith("mrk-sbom-server-") and name.endswith(".cdx.json")
     assert host["bomFormat"] == "CycloneDX" and host["specVersion"] == "1.5"
     assert host["serialNumber"].startswith("urn:uuid:") and host["version"] == 1
-    assert host["metadata"]["tools"]["components"][0]["name"] == "Pishkar"
+    assert host["metadata"]["tools"]["components"][0]["name"] == "DevAssist"
     assert host["metadata"]["timestamp"].endswith("Z")
     assert host["metadata"]["component"]["type"] == "device"
     images = {c["name"]: c for c in host["components"]}
@@ -137,7 +137,7 @@ def test_service_documents_and_ignored_mapping(tmp_path: Path) -> None:
     spdx, spdx_name = service.sbom_document(IMG_DEB, "spdx", True)
     assert spdx_name.endswith(".spdx.json")
     assert spdx["spdxVersion"] == "SPDX-2.3" and spdx["dataLicense"] == "CC0-1.0"
-    assert spdx["creationInfo"]["creators"][0].startswith("Tool: Pishkar")
+    assert spdx["creationInfo"]["creators"][0].startswith("Tool: DevAssist")
     ids = [p["SPDXID"] for p in spdx["packages"]]
     assert len(ids) == len(set(ids)) and all(i.startswith("SPDXRef-") for i in ids)
     locators = {r["referenceLocator"] for p in spdx["packages"] for r in p.get("externalRefs", [])}

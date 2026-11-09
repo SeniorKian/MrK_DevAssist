@@ -5,7 +5,7 @@ import { pick, say, type Bi } from "./copy";
 import { FriendlyError, HelpTip, ListInput, NoAccess, Notice, NumberInput, SectionCard, TestResult, useKit, useUndoSnackbar, type TestOutcome } from "./kit";
 import type { Language } from "./i18n";
 
-/** Security › DNS & internal network: which DNS Pishkar uses to find package sources (applies at once). */
+/** Security › DNS & internal network: which DNS DevAssist uses to find package sources (applies at once). */
 
 type DnsSettings = { mode: "system" | "custom"; servers: string[]; timeout_seconds: number; prefer_ipv4: boolean };
 type DnsTest = { ok: boolean; mode: string; addresses: string[]; latency_ms: number };
@@ -17,8 +17,8 @@ const SERVER = /^(\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?|\[[0-9A-Fa-f:]+\](:\d{1,5})?|
 const COPY = {
   title: { fa: "DNS برای منابع دریافت", en: "DNS for package sources" },
   hint: {
-    fa: "پیشکار آدرس منابع را با کدام DNS (دفترچه تلفن اینترنت) پیدا کند. تغییر فوراً اعمال می‌شود.",
-    en: "Which DNS (the internet's phone book) Pishkar uses to find package sources. Changes apply at once."
+    fa: "DevAssist آدرس منابع را با کدام DNS (دفترچه تلفن اینترنت) پیدا کند. تغییر فوراً اعمال می‌شود.",
+    en: "Which DNS (the internet's phone book) DevAssist uses to find package sources. Changes apply at once."
   },
   mode: { fa: "از کجا آدرس‌ها را پیدا کند؟", en: "Where should it look up addresses?" },
   system: { fa: "همان DNS سرور", en: "The server's own DNS" },

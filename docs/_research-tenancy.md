@@ -1,7 +1,7 @@
-# Research: Multi-tenancy & "customer area" models for Pishkar
+# Research: Multi-tenancy & "customer area" models for DevAssist
 
 Status: research note (no code changes). Date: 2026-11.
-Question: how do established products split *infrastructure admin* (DevOps) from *limited users/customers* who manage only their own domains, records, buckets, keys and files — and what fits Pishkar (single-server, self-hosted, MIT, next to Dokploy)?
+Question: how do established products split *infrastructure admin* (DevOps) from *limited users/customers* who manage only their own domains, records, buckets, keys and files — and what fits DevAssist (single-server, self-hosted, MIT, next to Dokploy)?
 
 > Confidence notes: facts marked *(verified)* were checked against docs/advisories during this research; others are from well-established product knowledge and the linked official docs. CVE identifiers from 2026 were seen only in aggregator feeds and should be re-checked before being cited externally.
 
@@ -106,7 +106,7 @@ Question: how do established products split *infrastructure admin* (DevOps) from
 ## 3. Object storage
 
 ### MinIO
-- **Panels:** One Console; admin vs non-admin users see what their **IAM policy** allows (Console just calls the S3/admin API with the user's creds). Note: in 2025 the community Console was stripped of most admin features (moved to commercial AIStor), and the community repo went into maintenance/source-only mode — relevant if Pishkar depends on it.
+- **Panels:** One Console; admin vs non-admin users see what their **IAM policy** allows (Console just calls the S3/admin API with the user's creds). Note: in 2025 the community Console was stripped of most admin features (moved to commercial AIStor), and the community repo went into maintenance/source-only mode — relevant if DevAssist depends on it.
 - **Tenancy:** Flat namespace; isolation purely by **IAM policies** (AWS-compatible JSON) attached to users/groups. Per-user buckets via policy variables: `arn:aws:s3:::${aws:username}/*`.
 - **Service accounts / access keys:** Children of a user, optionally with an **inline session policy** that further restricts them.
 - **Quotas:** Bucket quota (hard), no per-user quota.
@@ -220,10 +220,10 @@ Question: how do established products split *infrastructure admin* (DevOps) from
 
 ### Separate customer panel (cPanel/WHM, Usermin style)
 **Pros:** smallest attack surface for customers (admin routes simply not deployed/mounted on the customer listener); can be exposed publicly while the admin panel stays on VPN/localhost; clean, simple UX; easy mental model ("the customer port").
-**Cons:** two UIs to build/maintain/translate (Pishkar is RTL/Persian — double the copy work); feature duplication (record editor, bucket browser exist in both); diverging behaviour; admins need login-as to see what users see.
+**Cons:** two UIs to build/maintain/translate (DevAssist is RTL/Persian — double the copy work); feature duplication (record editor, bucket browser exist in both); diverging behaviour; admins need login-as to see what users see.
 
 ### Single app, scoped roles, simplified user view (Plesk, DirectAdmin, Dokploy, GitLab)
-**Pros:** one codebase and component kit; admin sees the same screens (easy support); RBAC already exists in Pishkar (`dns:read/write/admin`); the same API serves UI and tokens.
+**Pros:** one codebase and component kit; admin sees the same screens (easy support); RBAC already exists in DevAssist (`dns:read/write/admin`); the same API serves UI and tokens.
 **Cons:** every route must enforce *both* permission and ownership — one forgotten check = cross-tenant leak; admin-only pages are shipped to user browsers (must be server-enforced anyway); risk of "permission soup" UX if users see disabled admin items.
 
 ### Hybrid used by the most secure single-apps
@@ -232,17 +232,17 @@ Question: how do established products split *infrastructure admin* (DevOps) from
 
 ---
 
-## 8. Recommendation for Pishkar (single-server appliance)
+## 8. Recommendation for DevAssist (single-server appliance)
 
 **Single app, single login, two surfaces ("Server" admin area vs "My space" user area), backed by ownership-enforced API namespaces and plans.** Concretely:
 
 1. **Tenancy model:** add `owner_id` (user or *workspace*) to every tenant-ownable resource: DNS zones, records (inherit zone), buckets, S3 keys, bucket domains, registry packages/tokens, backups of own resources. Keep a light **Workspace** (= customer/org) so a customer can have sub-users later; skip a reseller tier.
 2. **Two API namespaces:** `/api/admin/*` (infrastructure: DNS server settings, recursion/DNSSEC globals, storage engine, firewall, upstreams, monitoring, Dokploy) guarded by admin permissions; `/api/my/*` where **every query is filtered by owner** in a shared repository/service layer (no per-handler checks), IDs taken only from the path and re-validated.
 3. **Plans (packages):** feature toggles (`dns.zones`, `dns.records.types` allowed, `s3.buckets`, `s3.keys`, `s3.public_buckets`, `s3.bucket_domains`, `registry.npm/pypi`) + quotas (max zones, max records/zone, max buckets, storage GB, max objects, max keys, max bucket domains). Assign to users/workspaces; allow per-user override but show "differs from plan".
-4. **Domain verification** before a user can add a zone or bind a domain to a bucket (TXT challenge or NS delegation check), and forbid zones overlapping another tenant's zone or Pishkar's own system names.
+4. **Domain verification** before a user can add a zone or bind a domain to a bucket (TXT challenge or NS delegation check), and forbid zones overlapping another tenant's zone or DevAssist's own system names.
 5. **Scoped tokens:** token = actions ∩ resources (zone/bucket IDs) ∩ expiry ∩ optional IP; enforce **child ⊆ parent** for both API tokens and S3 access keys (avoid MinIO's bugs); S3 keys created by users get policies generated server-side, never user-supplied JSON.
 6. **Impersonation:** admin "View as user" (read-only by default, write needs re-auth), banner in UI, audited, visible in the user's own activity log.
 7. **Audit:** existing audit log gets `actor`, `on_behalf_of`, `owner_id`; users see audit entries of their own resources.
 8. **Hardening:** role/invite endpoints admin-only and cannot grant ≥ own role; strict validation of record types/values before anything reaches the DNS engine or a privileged helper (HestiaCP lesson); escape all tenant data in admin views; optional setting to bind the admin surface to localhost/VPN while exposing "My space" publicly; cross-tenant tests (user A tries every `/api/my` route with user B's IDs) in CI.
 
-Why not a separate panel: Pishkar is one-person-maintainable, RTL/Persian-copy heavy, and already has RBAC and a component kit; a second app doubles UI and copy for little gain on a single server, while the hybrid (separate API namespaces + optional network binding) delivers most of the isolation benefit.
+Why not a separate panel: DevAssist is one-person-maintainable, RTL/Persian-copy heavy, and already has RBAC and a component kit; a second app doubles UI and copy for little gain on a single server, while the hybrid (separate API namespaces + optional network binding) delivers most of the isolation benefit.

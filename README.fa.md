@@ -1,11 +1,11 @@
 <div dir="rtl">
 
-# پیشکار
+# <sub>MrK</sub> DevAssist
 
 [English](README.md) · **فارسی**
 
-**پیشکار** دستیار خودمیزبان و رایگانی است که کنار [Dokploy](https://dokploy.com) روی سرور
-شما کار می‌کند؛ مثل پیشکاری که کارهای خانه را می‌گرداند. کارش این است که وقتی اینترنت
+**DevAssist** دستیار خودمیزبان و رایگانی است که کنار [Dokploy](https://dokploy.com) روی سرور
+شما کار می‌کند؛ یک دستیار سرور و DevOps. کارش این است که وقتی اینترنت
 قطع یا کند می‌شود، build و deploy شما نخوابد: مخزن npm و PyPI خصوصی با جابه‌جایی خودکار بین
 منبع‌ها، فضای ذخیره‌سازی S3، سرور DNS، پشتیبان‌گیری، پایش منابع، فایروال و ابزارهای Docker،
 همه در یک پنل فارسی.
@@ -56,7 +56,7 @@
 
 **نگهداری**
 - پشتیبان رمزنگاری‌شده (AES-256-GCM و scrypt) با بازگردانی آفلاین و قابل برگشت.
-- پشتیبان سرور و دیتابیس‌ها در پوشه، هر سرویس S3 یا S3 خود پیشکار، با زمان‌بندی و آزمایش بازگردانی.
+- پشتیبان سرور و دیتابیس‌ها در پوشه، هر سرویس S3 یا S3 خود DevAssist، با زمان‌بندی و آزمایش بازگردانی.
 - اعلان با تلگرام، بله، ایمیل و webhook امضاشده، با قانون و ساعت سکوت.
 - کاربرها، نقش‌های آماده و دلخواه، دعوت‌نامه، نشست‌ها و تاریخچه کارها با خروجی CSV.
 - پروکسی خروجی (HTTP و SOCKS5) جدا برای هر سرویس.
@@ -71,7 +71,7 @@ Dokploy هر دو هست)، 2 گیگابایت رم آزاد و فضای دیس�
 <div dir="ltr">
 
 ```bash
-git clone https://github.com/SeniorKian/MrK_DevAssist.git pishkar && cd pishkar && docker compose up -d --build
+git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist && cd devassist && docker compose up -d --build
 ```
 
 </div>
@@ -93,13 +93,13 @@ ssh -L 8080:127.0.0.1:8080 you@your-server
 
 ## نصب بدون Docker
 
-پیشکار روی Debian 12/13 و Ubuntu 22.04/24.04 مستقیم و به‌شکل سرویس systemd هم اجرا می‌شود؛
+DevAssist روی Debian 12/13 و Ubuntu 22.04/24.04 مستقیم و به‌شکل سرویس systemd هم اجرا می‌شود؛
 با همان برنامه‌ها، همان نسخه‌ها و همان محدودیت‌های امنیتی کانتینر:
 
 <div dir="ltr">
 
 ```bash
-git clone https://github.com/SeniorKian/MrK_DevAssist.git pishkar && cd pishkar
+git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist && cd devassist
 sudo bash scripts/install-native.sh install --dry-run   # first, see the plan
 sudo bash scripts/install-native.sh install            # optional: --with-dns --with-firewall --with-agent
 ```
@@ -128,7 +128,7 @@ sudo bash scripts/install-native.sh install            # optional: --with-dns --
   `apps/control-plane/src/mrk_control_plane/settings_registry_entries_*.py` است.
 - Docker: مقدارهایی که Compose می‌خواند در [`.env.example`](.env.example) است (آن را به `.env`
   کپی کنید)؛ تنظیمات کانتینر در `compose.yaml` و `deploy/appliance/compose.production.yaml`.
-- بدون Docker: فایل `/etc/pishkar/pishkar.env` (نمونه: [`deploy/native/pishkar.env.example`](deploy/native/pishkar.env.example)).
+- بدون Docker: فایل `/etc/devassist/devassist.env` (نمونه: [`deploy/native/devassist.env.example`](deploy/native/devassist.env.example)).
 - پیش از عمومی کردن، دست‌کم `MRK_TRUSTED_HOSTS`، `MRK_CORS_ORIGINS` و `MRK_PYPI_OUTSIDE_URL`
   (یا دامنه‌ها در پنل) را روی نام‌های HTTPS واقعی بگذارید.
 - دیتابیس پیش‌فرض PGlite داخلی است؛ برای نصب بزرگ‌تر `MRK_DATABASE_URL` را به یک PostgreSQL
@@ -167,7 +167,7 @@ sudo bash scripts/install-native.sh install            # optional: --with-dns --
 
 ## حمایت از پروژه
 
-پیشکار رایگان است و رایگان می‌ماند. اگر وقت یا هزینه‌تان را کم کرده، می‌توانید با کمک مالی
+DevAssist رایگان است و رایگان می‌ماند. اگر وقت یا هزینه‌تان را کم کرده، می‌توانید با کمک مالی
 از ادامه کار حمایت کنید. لینک‌های حمایت به‌محض آماده شدن همین‌جا و در دکمه *Sponsor* گیت‌هاب
 (`.github/FUNDING.yml`) قرار می‌گیرند. ستاره دادن به ریپو، گزارش باگ و معرفی پروژه به دیگران
 هم کمک بزرگی است.

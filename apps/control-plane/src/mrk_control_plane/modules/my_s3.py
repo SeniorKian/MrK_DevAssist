@@ -3,7 +3,7 @@
 Buckets live in the shared registry (``S3Store``) with an ownership row
 (``s3_bucket``); the engine enforces the workspace byte/object quota on every write
 (``quota_groups`` in the snapshot). Keys are an S3 identity + one access key whose
-policy Pishkar builds from ``read_only|read_write|admin`` limited to the workspace's own
+policy DevAssist builds from ``read_only|read_write|admin`` limited to the workspace's own
 buckets (``s3_policy.workspace_policy``); a policy document is never accepted.
 """
 

@@ -2,7 +2,7 @@
  * «فضای من › فضای فایل» (docs/43 §3, §4): folders (buckets) of this workspace, the file browser
  * (drag-and-drop upload, folders, download, temporary links — the shared `S3FileManager` against
  * `/api/v1/my/s3/buckets`), public folders when the plan allows, folder domains with proof of
- * ownership, and access keys whose policy Pishkar builds from a template (shown once).
+ * ownership, and access keys whose policy DevAssist builds from a template (shown once).
  */
 import { useCallback, useEffect, useState } from "react";
 import { Box, Button, Checkbox, CircularProgress, FormControlLabel, FormGroup, Stack, Tab, Tabs, TextField, Typography } from "@mui/material";

@@ -1,5 +1,5 @@
 /**
- * Pishkar DNS (docs/36, contract docs/37 §4): types, API calls and the plain words used by the «DNS» pages.
+ * DevAssist DNS (docs/36, contract docs/37 §4): types, API calls and the plain words used by the «DNS» pages.
  *
  * Every field from the backend is treated as optional so an older server (no DNS module) or a
  * partly filled answer never breaks a page. Panel API base: `/api/v1/dns`.
@@ -489,7 +489,7 @@ export const STRATEGY_WORDS: Record<UpstreamStrategy, { label: Bi; body: Bi }> =
 export const ZONE_TYPE_WORDS: Record<ZoneType, { label: Bi; body: Bi }> = {
   primary: {
     label: { fa: "دامنه با رکوردهای خودم", en: "My own records" },
-    body: { fa: "همه نام‌های این دامنه را خودتان اینجا می‌نویسید و پیشکار جواب می‌دهد.", en: "You write every name of this domain here and Pishkar answers." }
+    body: { fa: "همه نام‌های این دامنه را خودتان اینجا می‌نویسید و DevAssist جواب می‌دهد.", en: "You write every name of this domain here and DevAssist answers." }
   },
   forwarder: {
     label: { fa: "فرستادن به سرور دیگر", en: "Send to another server" },
@@ -497,7 +497,7 @@ export const ZONE_TYPE_WORDS: Record<ZoneType, { label: Bi; body: Bi }> = {
   },
   secondary: {
     label: { fa: "نسخه دوم از سرور دیگر", en: "Copy from another server" },
-    body: { fa: "رکوردها را سرور اصلی دیگری نگه می‌دارد و پیشکار خودکار یک نسخه از آن‌ها می‌گیرد و جواب می‌دهد.", en: "Another main server keeps the records; Pishkar copies them automatically and answers too." }
+    body: { fa: "رکوردها را سرور اصلی دیگری نگه می‌دارد و DevAssist خودکار یک نسخه از آن‌ها می‌گیرد و جواب می‌دهد.", en: "Another main server keeps the records; DevAssist copies them automatically and answers too." }
   }
 };
 
@@ -507,11 +507,11 @@ export function zoneTypeWord(language: Language, type: string): string {
 
 export const SOURCE_WORDS: Record<string, { label: Bi; body: Bi; tone: Tone }> = {
   override: { label: { fa: "از نام‌های شما", en: "From your names" }, body: { fa: "این جواب را خودتان در «نام‌ها» نوشته‌اید.", en: "You wrote this answer yourself under Names." }, tone: "ok" },
-  authoritative: { label: { fa: "از دامنه‌های شما", en: "From your domains" }, body: { fa: "این نام در یکی از دامنه‌هایی است که پیشکار خودش جواب می‌دهد.", en: "This name is in one of the domains Pishkar answers for itself." }, tone: "ok" },
-  cache: { label: { fa: "از جواب‌های ذخیره‌شده", en: "From stored answers" }, body: { fa: "پیشکار این را قبلاً پرسیده بود و جواب را نگه داشته بود؛ برای همین سریع بود.", en: "Pishkar asked this before and kept the answer, so it was quick." }, tone: "ok" },
-  upstream: { label: { fa: "از اینترنت", en: "From the internet" }, body: { fa: "پیشکار این را از یک DNS بیرونی پرسید.", en: "Pishkar asked an outside DNS server." }, tone: "info" },
-  blocked: { label: { fa: "مسدود شد", en: "Blocked" }, body: { fa: "این نام در فهرست مسدودسازی است و پیشکار جوابش را نداد. در «مسدودسازی» می‌بینید چرا.", en: "This name is on a block list, so Pishkar didn't answer it. See why under Blocking." }, tone: "warn" },
-  recursive: { label: { fa: "خودش از ریشه پیدا کرد", en: "Found from the root" }, body: { fa: "پیشکار بدون واسطه، از سرورهای ریشه اینترنت شروع کرد و خودش جواب را پیدا کرد.", en: "Pishkar started at the internet's root servers and found the answer itself, with no middleman." }, tone: "info" },
+  authoritative: { label: { fa: "از دامنه‌های شما", en: "From your domains" }, body: { fa: "این نام در یکی از دامنه‌هایی است که DevAssist خودش جواب می‌دهد.", en: "This name is in one of the domains DevAssist answers for itself." }, tone: "ok" },
+  cache: { label: { fa: "از جواب‌های ذخیره‌شده", en: "From stored answers" }, body: { fa: "DevAssist این را قبلاً پرسیده بود و جواب را نگه داشته بود؛ برای همین سریع بود.", en: "DevAssist asked this before and kept the answer, so it was quick." }, tone: "ok" },
+  upstream: { label: { fa: "از اینترنت", en: "From the internet" }, body: { fa: "DevAssist این را از یک DNS بیرونی پرسید.", en: "DevAssist asked an outside DNS server." }, tone: "info" },
+  blocked: { label: { fa: "مسدود شد", en: "Blocked" }, body: { fa: "این نام در فهرست مسدودسازی است و DevAssist جوابش را نداد. در «مسدودسازی» می‌بینید چرا.", en: "This name is on a block list, so DevAssist didn't answer it. See why under Blocking." }, tone: "warn" },
+  recursive: { label: { fa: "خودش از ریشه پیدا کرد", en: "Found from the root" }, body: { fa: "DevAssist بدون واسطه، از سرورهای ریشه اینترنت شروع کرد و خودش جواب را پیدا کرد.", en: "DevAssist started at the internet's root servers and found the answer itself, with no middleman." }, tone: "info" },
   refused: { label: { fa: "جواب داده نشد", en: "Refused" }, body: { fa: "این نشانی اجازه پرسیدن ندارد، یا پرسیدن از اینترنت خاموش است.", en: "This address isn't allowed to ask, or asking the internet is turned off." }, tone: "warn" }
 };
 
@@ -592,15 +592,15 @@ export const SETUP_STEP_WORDS: Record<string, { title: Bi; why: Bi }> = {
   },
   engine_running: {
     title: { fa: "روشن کردن برنامه DNS", en: "Start the DNS program" },
-    why: { fa: "DNS یک کانتینر جدا کنار پیشکار است تا اگر زیر فشار رفت، پنل و بقیه سرویس‌ها سالم بمانند.", en: "DNS runs in its own container next to Pishkar, so the panel and other services stay healthy under load." }
+    why: { fa: "DNS یک کانتینر جدا کنار DevAssist است تا اگر زیر فشار رفت، پنل و بقیه سرویس‌ها سالم بمانند.", en: "DNS runs in its own container next to DevAssist, so the panel and other services stay healthy under load." }
   },
   host_resolver: {
     title: { fa: "استفاده خود سرور از این DNS", en: "Make the server itself use it" },
-    why: { fa: "تا خود سرور هم نام‌ها را از پیشکار بپرسد. یک DNS پشتیبان هم کنارش می‌ماند تا اینترنت سرور قطع نشود.", en: "So the server itself asks Pishkar. A backup DNS stays next to it so the server never loses the internet." }
+    why: { fa: "تا خود سرور هم نام‌ها را از DevAssist بپرسد. یک DNS پشتیبان هم کنارش می‌ماند تا اینترنت سرور قطع نشود.", en: "So the server itself asks DevAssist. A backup DNS stays next to it so the server never loses the internet." }
   },
   docker_daemon: {
     title: { fa: "استفاده کانتینرها از این DNS", en: "Make containers use it" },
-    why: { fa: "تا برنامه‌های داخل Docker هم نام‌ها را از پیشکار بپرسند.", en: "So the apps inside Docker ask Pishkar too." }
+    why: { fa: "تا برنامه‌های داخل Docker هم نام‌ها را از DevAssist بپرسند.", en: "So the apps inside Docker ask DevAssist too." }
   },
   verify_from_host: {
     title: { fa: "بررسی از روی سرور", en: "Check from the server" },
@@ -630,8 +630,8 @@ export function setupStateWord(language: Language, state: string) {
 }
 
 const AGENT_WORDS: Bi = {
-  fa: "دستیار سرور وصل نیست یا جواب نمی‌دهد، پس پیشکار این را خودش نمی‌تواند بررسی کند. دستورها را اجرا کنید و بعد «دوباره بررسی کن» را بزنید.",
-  en: "The server helper isn't connected or isn't answering, so Pishkar can't check this itself. Run the commands, then press Check again."
+  fa: "دستیار سرور وصل نیست یا جواب نمی‌دهد، پس DevAssist این را خودش نمی‌تواند بررسی کند. دستورها را اجرا کنید و بعد «دوباره بررسی کن» را بزنید.",
+  en: "The server helper isn't connected or isn't answering, so DevAssist can't check this itself. Run the commands, then press Check again."
 };
 
 /**
@@ -648,7 +648,7 @@ const DETAIL_WORDS: Record<string, Bi> = {
   agent_unavailable: AGENT_WORDS,
   host_proc_unavailable: { fa: "دستیار سرور به فهرست برنامه‌های سرور دسترسی ندارد، پس پورت ۵۳ بررسی نشد.", en: "The server helper can't see the server's programs, so port 53 wasn't checked." },
   host_root_unavailable: { fa: "دستیار سرور به فایل‌های تنظیم سرور دسترسی ندارد، پس این قدم بررسی نشد.", en: "The server helper can't read the server's settings files, so this step wasn't checked." },
-  unknown: { fa: "پیشکار نتوانست این را بررسی کند. اگر دستورها را اجرا کرده‌اید، به قدم بعد بروید.", en: "Pishkar couldn't check this. If you ran the commands, go on to the next step." },
+  unknown: { fa: "DevAssist نتوانست این را بررسی کند. اگر دستورها را اجرا کرده‌اید، به قدم بعد بروید.", en: "DevAssist couldn't check this. If you ran the commands, go on to the next step." },
   // engine_running
   running: { fa: "برنامه DNS روشن است و جواب می‌دهد.", en: "The DNS program is running and answering." },
   not_installed: { fa: "برنامه DNS هنوز روشن نیست. دستور زیر را روی سرور اجرا کنید.", en: "The DNS program isn't running yet. Run the command below on the server." },
@@ -656,20 +656,20 @@ const DETAIL_WORDS: Record<string, Bi> = {
   listener_failed: { fa: "برنامه DNS روشن است ولی نمی‌تواند روی {address} گوش بدهد. معمولاً یعنی برنامه دیگری پورت ۵۳ را گرفته؛ قدم بعد را ببینید.", en: "The DNS program runs but can't listen on {address}. Usually another program holds port 53; see the next step." },
   // port_53_free
   free: { fa: "پورت ۵۳ آزاد است.", en: "Port 53 is free." },
-  held_by_mrk: { fa: "پورت ۵۳ دست خود پیشکار است.", en: "Pishkar itself holds port 53." },
+  held_by_mrk: { fa: "پورت ۵۳ دست خود DevAssist است.", en: "DevAssist itself holds port 53." },
   "port_53_free:systemd_resolved_stub": {
     fa: "برنامه DNS خود لینوکس پورت ۵۳ را گرفته. دستور زیر فقط شنیدنش روی پورت ۵۳ را خاموش می‌کند؛ اینترنت سرور قطع نمی‌شود.",
     en: "Linux's own DNS helper holds port 53. The command below only stops it listening on port 53; the server keeps its internet."
   },
   port_in_use: { fa: "برنامه «{process}» پورت ۵۳ را گرفته. اول آن را خاموش کنید یا به پورت دیگری ببرید.", en: "The program “{process}” holds port 53. Stop it or move it to another port first." },
   // host_resolver
-  uses_mrk: { fa: "نام‌ها از پیشکار پرسیده می‌شوند و یک DNS پشتیبان هم هست.", en: "Names are asked from Pishkar, with a backup DNS too." },
-  no_fallback: { fa: "نام‌ها از پیشکار پرسیده می‌شوند ولی DNS پشتیبان ندارد. اگر پیشکار بیفتد، اینترنت هم می‌افتد. دستور زیر یک پشتیبان ({fallback}) اضافه می‌کند.", en: "Names are asked from Pishkar, but there's no backup DNS. If Pishkar goes down, so does the internet. The command below adds a backup ({fallback})." },
-  "host_resolver:systemd_resolved_stub": { fa: "خود سرور هنوز از برنامه DNS لینوکس می‌پرسد. دستور زیر آن را به پیشکار و یک DNS پشتیبان می‌فرستد.", en: "The server still asks Linux's own DNS helper. The command below points it at Pishkar plus a backup DNS." },
-  resolved_stub_forwarding: { fa: "خود سرور از برنامه DNS لینوکس می‌پرسد و آن هم به پیشکار می‌فرستد. کار می‌کند، ولی دستور زیر مستقیم‌ترش می‌کند.", en: "The server asks Linux's DNS helper, which forwards to Pishkar. It works, but the command below makes it direct." },
-  mrk_not_first: { fa: "پیشکار در فهرست هست ولی اول نیست، پس بیشتر پرسش‌ها جای دیگری می‌روند. دستور زیر پیشکار را اول می‌گذارد.", en: "Pishkar is listed but not first, so most questions go elsewhere. The command below puts Pishkar first." },
-  "host_resolver:uses_other_dns": { fa: "خود سرور الان از {nameservers} می‌پرسد. دستور زیر پیشکار را اول و یک DNS پشتیبان را بعدش می‌گذارد.", en: "The server currently asks {nameservers}. The command below puts Pishkar first with a backup DNS after it." },
-  static_resolv_conf: { fa: "فایل DNS سرور دستی نوشته شده و از {nameservers} می‌پرسد. دستور زیر پیشکار و یک DNS پشتیبان را در آن می‌نویسد.", en: "The server's DNS file is written by hand and asks {nameservers}. The command below writes Pishkar plus a backup DNS into it." },
+  uses_mrk: { fa: "نام‌ها از DevAssist پرسیده می‌شوند و یک DNS پشتیبان هم هست.", en: "Names are asked from DevAssist, with a backup DNS too." },
+  no_fallback: { fa: "نام‌ها از DevAssist پرسیده می‌شوند ولی DNS پشتیبان ندارد. اگر DevAssist بیفتد، اینترنت هم می‌افتد. دستور زیر یک پشتیبان ({fallback}) اضافه می‌کند.", en: "Names are asked from DevAssist, but there's no backup DNS. If DevAssist goes down, so does the internet. The command below adds a backup ({fallback})." },
+  "host_resolver:systemd_resolved_stub": { fa: "خود سرور هنوز از برنامه DNS لینوکس می‌پرسد. دستور زیر آن را به DevAssist و یک DNS پشتیبان می‌فرستد.", en: "The server still asks Linux's own DNS helper. The command below points it at DevAssist plus a backup DNS." },
+  resolved_stub_forwarding: { fa: "خود سرور از برنامه DNS لینوکس می‌پرسد و آن هم به DevAssist می‌فرستد. کار می‌کند، ولی دستور زیر مستقیم‌ترش می‌کند.", en: "The server asks Linux's DNS helper, which forwards to DevAssist. It works, but the command below makes it direct." },
+  mrk_not_first: { fa: "DevAssist در فهرست هست ولی اول نیست، پس بیشتر پرسش‌ها جای دیگری می‌روند. دستور زیر DevAssist را اول می‌گذارد.", en: "DevAssist is listed but not first, so most questions go elsewhere. The command below puts DevAssist first." },
+  "host_resolver:uses_other_dns": { fa: "خود سرور الان از {nameservers} می‌پرسد. دستور زیر DevAssist را اول و یک DNS پشتیبان را بعدش می‌گذارد.", en: "The server currently asks {nameservers}. The command below puts DevAssist first with a backup DNS after it." },
+  static_resolv_conf: { fa: "فایل DNS سرور دستی نوشته شده و از {nameservers} می‌پرسد. دستور زیر DevAssist و یک DNS پشتیبان را در آن می‌نویسد.", en: "The server's DNS file is written by hand and asks {nameservers}. The command below writes DevAssist plus a backup DNS into it." },
   // docker_daemon
   daemon_json_missing: { fa: "فایل تنظیم Docker هنوز وجود ندارد؛ دستور زیر آن را با DNS درست می‌سازد.", en: "Docker's settings file doesn't exist yet; the command below creates it with the right DNS." },
   daemon_json_invalid: { fa: "فایل تنظیم Docker خراب است و خوانده نمی‌شود. اول آن را درست کنید، بعد DNS را اضافه کنید.", en: "Docker's settings file is broken and can't be read. Fix it first, then add the DNS." },
@@ -681,11 +681,11 @@ const DETAIL_WORDS: Record<string, Bi> = {
   "verify_from_container:ok": { fa: "پرسش آزمایشی از داخل کانتینر جواب درست گرفت.", en: "The test question from a container got the right answer." },
   engine_not_running: { fa: "تا برنامه DNS روشن نشود، این بررسی ممکن نیست. اول قدم اول را انجام دهید.", en: "This can't be checked until the DNS program runs. Do the first step first." },
   resolve_failed: { fa: "پرسش آزمایشی جواب نگرفت. قدم‌های قبلی را بررسی کنید.", en: "The test question got no answer. Check the earlier steps." },
-  engine_ok_host_unknown: { fa: "DNS جواب می‌دهد، ولی پیشکار نمی‌داند خود سرور از آن می‌پرسد یا نه. با دستور زیر خودتان امتحان کنید.", en: "DNS answers, but Pishkar can't tell whether the server itself uses it. Try it yourself with the command below." },
+  engine_ok_host_unknown: { fa: "DNS جواب می‌دهد، ولی DevAssist نمی‌داند خود سرور از آن می‌پرسد یا نه. با دستور زیر خودتان امتحان کنید.", en: "DNS answers, but DevAssist can't tell whether the server itself uses it. Try it yourself with the command below." },
   engine_ok_host_not_using: { fa: "DNS جواب می‌دهد، ولی خود سرور هنوز از آن نمی‌پرسد. قدم «استفاده خود سرور از این DNS» را انجام دهید.", en: "DNS answers, but the server itself doesn't use it yet. Do the “Make the server itself use it” step." },
   docker_dns_not_set: { fa: "کانتینرها هنوز از این DNS نمی‌پرسند. قدم «استفاده کانتینرها از این DNS» را انجام دهید.", en: "Containers don't ask this DNS yet. Do the “Make containers use it” step." },
   gateway_not_listening: { fa: "DNS روی نشانی شبکه Docker ({gateway}) گوش نمی‌دهد. آن را در تنظیمات DNS به نشانی‌ها اضافه کنید.", en: "DNS isn't listening on the Docker network address ({gateway}). Add it to the addresses in DNS settings." },
-  manual_check: { fa: "این را پیشکار خودش نمی‌تواند بررسی کند. دستور زیر را روی سرور اجرا کنید؛ اگر نشانی آمد، درست است.", en: "Pishkar can't check this by itself. Run the command below on the server; if an address comes back, it works." }
+  manual_check: { fa: "این را DevAssist خودش نمی‌تواند بررسی کند. دستور زیر را روی سرور اجرا کنید؛ اگر نشانی آمد، درست است.", en: "DevAssist can't check this by itself. Run the command below on the server; if an address comes back, it works." }
 };
 
 const STATE_FALLBACK: Record<string, Bi> = {

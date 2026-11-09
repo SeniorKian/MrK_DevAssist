@@ -69,7 +69,7 @@ const T = {
   hint: { fa: "برای اسکریپت‌ها و ابزارهای خودکار که باید بدون رمز شما وارد شوند. هر کلید مثل یک رمز است.", en: "For scripts and automated tools that must sign in without your password. Each key works like a password." },
   create: { fa: "ساخت کلید برنامه", en: "Create an app key" },
   emptyTitle: { fa: "هنوز کلید برنامه‌ای ندارید", en: "You don't have any app keys yet" },
-  emptyBody: { fa: "اگر یک اسکریپت یا CI باید به پیشکار وصل شود، برایش یک کلید جدا بسازید. هر وقت خواستید باطلش کنید.", en: "If a script or CI needs to reach Pishkar, give it its own key. You can revoke it any time." },
+  emptyBody: { fa: "اگر یک اسکریپت یا CI باید به DevAssist وصل شود، برایش یک کلید جدا بسازید. هر وقت خواستید باطلش کنید.", en: "If a script or CI needs to reach DevAssist, give it its own key. You can revoke it any time." },
   colName: { fa: "نام", en: "Name" },
   colPurpose: { fa: "برای چه", en: "Purpose" },
   colStatus: { fa: "وضعیت", en: "Status" },

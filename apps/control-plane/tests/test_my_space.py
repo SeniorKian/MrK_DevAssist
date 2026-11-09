@@ -539,10 +539,10 @@ def test_domain_verification(space: Space, env: dict[str, Any]) -> None:
     assert env["dns"].zones["proof.example"]["disabled"] is True
     info = alice.get("/dns/zones/proof.example/verification").json()
     txt = info["methods"][0]
-    assert txt["kind"] == "txt" and txt["name"] == "_pishkar-verify.proof.example"
+    assert txt["kind"] == "txt" and txt["name"] == "_devassist-verify.proof.example"
     assert info["verified"] is False
     assert alice.post("/dns/zones/proof.example/verify").json()["verified"] is False
-    env["txt"]["TXT:_pishkar-verify.proof.example"] = [txt["value"]]
+    env["txt"]["TXT:_devassist-verify.proof.example"] = [txt["value"]]
     result = alice.post("/dns/zones/proof.example/verify").json()
     assert result == {"verified": True, "method": "txt", "status": "active"}
     assert env["dns"].zones["proof.example"]["disabled"] is False

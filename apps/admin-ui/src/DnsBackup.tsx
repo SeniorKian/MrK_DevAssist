@@ -21,7 +21,7 @@ const COPY = {
   downloaded: { fa: "فایل «{name}» دانلود شد.", en: "The file “{name}” was downloaded." },
   restore: { fa: "بازگردانی از فایل", en: "Restore from a file" },
   restoreTitle: { fa: "همه تنظیمات DNS با فایل «{name}» جایگزین شود؟", en: "Replace every DNS setting with “{name}”?" },
-  restoreBody: { fa: "تنظیمات، دامنه‌ها و نام‌های فعلی DNS همان می‌شوند که در فایل است. پیشکار اول کل فایل را بررسی می‌کند و اگر مشکلی داشت، چیزی تغییر نمی‌کند.", en: "DNS settings, domains and names become what's in the file. Pishkar checks the whole file first; if anything is wrong, nothing changes." },
+  restoreBody: { fa: "تنظیمات، دامنه‌ها و نام‌های فعلی DNS همان می‌شوند که در فایل است. DevAssist اول کل فایل را بررسی می‌کند و اگر مشکلی داشت، چیزی تغییر نمی‌کند.", en: "DNS settings, domains and names become what's in the file. DevAssist checks the whole file first; if anything is wrong, nothing changes." },
   restoreConsequence1: { fa: "تغییرهایی که بعد از ساخت این فایل داده‌اید از بین می‌رود.", en: "Changes made after this file was created are lost." },
   restoreConsequence2: { fa: "پیشنهاد: اول یک پشتیبان تازه دانلود کنید.", en: "Tip: download a fresh backup first." },
   restoreYes: { fa: "بله، بازگردانی کن", en: "Yes, restore" },

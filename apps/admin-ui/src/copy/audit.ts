@@ -114,7 +114,7 @@ export const AUDIT_ACTIONS: Record<string, Bi> = {
   "domain.cert_expiring": { fa: "گواهی HTTPS دامنه[ «{target}»] به‌زودی تمام می‌شود", en: "The HTTPS certificate of[ “{target}”] expires soon" },
   "domains.routing.update": { fa: "{actor} روش اتصال دامنه‌ها را تغییر داد", en: "{actor} changed how domains are routed" },
 
-  // Pishkar DNS (docs/37 §4)
+  // DevAssist DNS (docs/37 §4)
   "dns.settings.update": { fa: "{actor} تنظیمات DNS را تغییر داد", en: "{actor} changed the DNS settings" },
   "dns.zone.create": { fa: "{actor} دامنه[ «{target}»] را به DNS اضافه کرد", en: "{actor} added the domain[ “{target}”] to DNS" },
   "dns.zone.update": { fa: "{actor} دامنه[ «{target}»] را در DNS تغییر داد", en: "{actor} changed the domain[ “{target}”] in DNS" },

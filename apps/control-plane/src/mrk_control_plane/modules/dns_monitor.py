@@ -48,16 +48,16 @@ LEVELS = ("normal", "warning", "critical", "emergency")
 # Pressure level -> notification severity (docs/38 §4); "warning" is home-only.
 LEVEL_SEVERITY = {"critical": "warning", "emergency": "error", "normal": "info"}
 LEVEL_TITLES = {
-    "critical": "Pishkar DNS is under heavy load",
-    "emergency": "Pishkar DNS is overloaded and protecting itself",
-    "normal": "Pishkar DNS load is back to normal",
+    "critical": "DevAssist DNS is under heavy load",
+    "emergency": "DevAssist DNS is overloaded and protecting itself",
+    "normal": "DevAssist DNS load is back to normal",
 }
 
 
 # D4 engine event -> (notification type, severity, title, panel route), docs/40 §5.
 D4_EVENTS: dict[str, tuple[str, str, str, str]] = {
     "dnssec.trust_anchor_failed": ("dns.dnssec_trust_anchor_failed", "error",
-                                   "Pishkar DNS could not update the DNSSEC root key",
+                                   "DevAssist DNS could not update the DNSSEC root key",
                                    "#/dns/settings"),
     "dnssec.bogus_spike": ("dns.dnssec_bogus_spike", "warning",
                            "Many DNS answers failed the DNSSEC check", "#/dns/monitor"),
@@ -67,7 +67,7 @@ D4_EVENTS: dict[str, tuple[str, str, str, str]] = {
     "tls.certificate_expired": ("dns.tls_certificate_expired", "error",
                                 "The encrypted DNS certificate has expired", "#/dns/encrypted"),
     "resolution.priming_failed": ("dns.priming_failed", "error",
-                                  "Pishkar DNS cannot reach the root servers", "#/dns/settings"),
+                                  "DevAssist DNS cannot reach the root servers", "#/dns/settings"),
 }
 
 
@@ -89,11 +89,11 @@ D5_EVENTS: dict[str, tuple[str, str, str, str]] = {
     "filter.list_failed": ("dns.filter_list_failed", "warning",
                            "A DNS block list could not be updated", "filter"),
     "zone.dnssec_signing_failed": ("dns.dnssec_signing_failed", "error",
-                                   "Pishkar DNS could not sign a zone", "signing"),
+                                   "DevAssist DNS could not sign a zone", "signing"),
     "dnssec.signing_failed": ("dns.dnssec_signing_failed", "error",
-                              "Pishkar DNS could not sign a zone", "signing"),
+                              "DevAssist DNS could not sign a zone", "signing"),
     "zone.signing_failed": ("dns.dnssec_signing_failed", "error",
-                            "Pishkar DNS could not sign a zone", "signing"),
+                            "DevAssist DNS could not sign a zone", "signing"),
 }
 # Events that end a per-zone problem on the home page (no notification).
 D5_RECOVERY: dict[str, str] = {
@@ -288,7 +288,7 @@ class DnsMonitor:
                 action = _text(data.get("action"), 16) or "?"
                 event = Event(
                     type="dns.mitigation_auto", severity="warning",
-                    title="Pishkar DNS limited a source automatically",
+                    title="DevAssist DNS limited a source automatically",
                     message=f"{action} {mkind} {match}",
                     module=MODULE_NAME, dedupe_key=f"dns.mitigation_auto.{mkind}.{match}",
                     details={

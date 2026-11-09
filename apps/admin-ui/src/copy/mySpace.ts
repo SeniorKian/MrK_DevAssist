@@ -641,10 +641,10 @@ export const TENANCY = {
   adminLocal: { fa: "بخش «مدیریت سرور» فقط از همین شبکه باز شود", en: "Open Server admin only from this network" },
   adminLocalHint: { fa: "مدیریت سرور فقط از همین سرور یا شبکه خصوصی (VPN) باز می‌شود.", en: "Server admin only opens from this server or the private network (VPN)." },
   settingsSaved: { fa: "تنظیمات ذخیره شد.", en: "Settings saved." },
-  settingsMissing: { fa: "این تنظیمات روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "These settings aren't on this server version. Update Pishkar." },
+  settingsMissing: { fa: "این تنظیمات روی نسخه فعلی سرور نیست. DevAssist را به‌روز کنید.", en: "These settings aren't on this server version. Update DevAssist." },
   verifyOffTitle: { fa: "اثبات مالکیت دامنه خاموش شود؟", en: "Turn off domain proof?" },
   verifyOffBody: { fa: "کاربران می‌توانند هر دامنه‌ای، حتی مال دیگران، را اضافه کنند.", en: "Users can add any domain, even someone else's." },
-  missing: { fa: "این بخش روی نسخه فعلی سرور نیست. پیشکار را به‌روز کنید.", en: "This part isn't on this server version yet. Update Pishkar." }
+  missing: { fa: "این بخش روی نسخه فعلی سرور نیست. DevAssist را به‌روز کنید.", en: "This part isn't on this server version yet. Update DevAssist." }
 } satisfies Record<string, Bi>;
 
 // ── plan errors with numbers (docs/43 §3: quota_exceeded {quota, limit, used}, feature_disabled) ──

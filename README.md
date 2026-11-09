@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="apps/admin-ui/public/favicon.svg" alt="Pishkar" width="96" />
-  <h1>Pishkar</h1>
-  <p><strong>The self-hosted steward for your server.</strong><br />
+  <img src="apps/admin-ui/public/favicon.svg" alt="DevAssist" width="96" />
+  <h1><sub>MrK</sub> DevAssist</h1>
+  <p><strong>Your self-hosted server and DevOps assistant.</strong><br />
   Package mirrors, S3 storage, DNS, backups and monitoring — in one panel, next to Dokploy.</p>
   <p>
     <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-14b8a6" /></a>
@@ -13,8 +13,7 @@
 
 ---
 
-**Pishkar** (Persian «پیشکار», *the steward who runs the house*) is a free, open-source
-server assistant. It keeps your builds and services working even when the Internet doesn't,
+**DevAssist** is a free, open-source server and DevOps assistant by MrK. It keeps your builds and services working even when the Internet doesn't,
 and gives the people you host a simple space of their own — without handing them the keys
 to the server.
 
@@ -33,8 +32,8 @@ to the server.
 Requirements: a Linux server (amd64/arm64) with Docker and the Compose plugin, and 2 GB of free RAM.
 
 ```bash
-git clone https://github.com/SeniorKian/MrK_DevAssist.git pishkar
-cd pishkar && docker compose up -d --build
+git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist
+cd devassist && docker compose up -d --build
 ```
 
 Every port listens on `127.0.0.1` only. Open a tunnel and visit <http://localhost:8080> to create the owner account:
@@ -65,7 +64,7 @@ tests and project conventions. Design notes and user stories live in [`docs/`](d
 
 ## Support
 
-Pishkar is free and has no paid edition. If it helps you, you can support it with a donation
+DevAssist is free and has no paid edition. If it helps you, you can support it with a donation
 (links coming soon in [FUNDING.yml](.github/FUNDING.yml)).
 
 ## License

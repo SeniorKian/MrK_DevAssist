@@ -12,8 +12,8 @@ type UpstreamPolicy = { allow_private_upstreams: boolean };
 const COPY = {
   title: { fa: "منابع داخل شبکه خودتان", en: "Sources inside your own network" },
   hint: {
-    fa: "به‌طور پیش‌فرض پیشکار فقط از آدرس‌های عمومی اینترنت بسته می‌گیرد تا کسی نتواند از راه پنل به سرویس‌های داخلی برسد.",
-    en: "By default Pishkar only fetches packages from public internet addresses, so nobody can reach internal services through the panel."
+    fa: "به‌طور پیش‌فرض DevAssist فقط از آدرس‌های عمومی اینترنت بسته می‌گیرد تا کسی نتواند از راه پنل به سرویس‌های داخلی برسد.",
+    en: "By default DevAssist only fetches packages from public internet addresses, so nobody can reach internal services through the panel."
   },
   label: { fa: "اجازه منابع داخل شبکه خودتان (مثل Nexus)", en: "Allow sources inside your network (such as Nexus)" },
   warning: {

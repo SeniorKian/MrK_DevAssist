@@ -52,8 +52,8 @@ const T = {
   noOwner: { fa: "صاحبی ندارد؛ مسیرش برداشته می‌شود", en: "No owner; its route is being removed" },
   via: { fa: "روش: {mode}", en: "Method: {mode}" },
   redeploy: {
-    fa: "Dokploy دامنه را ثبت کرد. یک بار سرویس پیشکار را در Dokploy دوباره منتشر کنید و بعد «دوباره امتحان کن» را بزنید.",
-    en: "Dokploy has the domain. Deploy the Pishkar service once in Dokploy, then press “Try again”."
+    fa: "Dokploy دامنه را ثبت کرد. یک بار سرویس DevAssist را در Dokploy دوباره منتشر کنید و بعد «دوباره امتحان کن» را بزنید.",
+    en: "Dokploy has the domain. Deploy the DevAssist service once in Dokploy, then press “Try again”."
   },
   state_ok: { fa: "وصل است", en: "Routed" },
   state_pending: { fa: "در انتظار انتشار", en: "Waiting for a deploy" },
