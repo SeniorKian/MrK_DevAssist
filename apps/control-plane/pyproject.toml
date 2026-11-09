@@ -35,7 +35,7 @@ dev = [
   # S3 engine end-to-end tests only (real SDK client against the engine).
   "boto3==1.43.126",
   "pytest==9.2.0",
-  "ruff==0.14.3",
+  "ruff==0.17.4",
 ]
 
 [project.scripts]
