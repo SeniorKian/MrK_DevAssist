@@ -74,7 +74,10 @@ const T = {
   clearFilters: { fa: "پاک کردن فیلترها", en: "Clear filters" },
   shown: { fa: "{count} مورد", en: "{count} items" },
   exportCsv: { fa: "دانلود فایل CSV", en: "Download CSV" },
-  exportHint: { fa: "تا ۵۰۰ ردیف آخر، برای بایگانی یا بررسی در صفحه‌گسترده.", en: "Up to the last 500 rows, for archiving or a spreadsheet." },
+  exportHint: { fa: "همه ردیف‌هایی که با فیلترهای بالا جور است (بدون جست‌وجوی متن)، برای بایگانی یا بررسی در صفحه‌گسترده.", en: "Every row matching the filters above (not the text search), for archiving or a spreadsheet." },
+  loadMore: { fa: "نمایش موارد قدیمی‌تر", en: "Show older items" },
+  loadingMore: { fa: "در حال آوردن…", en: "Loading…" },
+  searchHint: { fa: "جست‌وجو فقط در موارد نمایش‌داده‌شده است.", en: "Search covers only the items shown." },
   advAction: { fa: "کد کار", en: "Action" },
   advObject: { fa: "روی", en: "Object" },
   advIp: { fa: "نشانی IP", en: "IP address" },
@@ -89,6 +92,7 @@ const AREA_LABEL: Record<Area, Bi> = {
 };
 
 const WHEN_SECONDS: Record<When, number | null> = { day: 86400, week: 7 * 86400, month: 30 * 86400, all: null };
+const PAGE_SIZE = 200;
 
 export type HistoryPanelProps = {
   user?: AuthUser;
@@ -110,7 +114,29 @@ export function HistoryPanel({ permissions }: HistoryPanelProps) {
   const [when, setWhen] = useState<When>("all");
   const [failedOnly, setFailedOnly] = useState(false);
   const [query, setQuery] = useState("");
+  const [nextBefore, setNextBefore] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const controller = useRef<AbortController | null>(null);
+
+  // Who / area / when / result are applied by the server, so paging and the CSV
+  // export see the same rows; the text search and the "other" area stay local.
+  const filterParams = useMemo(() => {
+    const params = new URLSearchParams();
+    if (who === "system") params.set("actor_user_id", "0");
+    else if (who !== "all") params.set("actor_user_id", who);
+    if (area !== "all" && area !== "other") params.set("action", AREA_PREFIXES[area].join(","));
+    const seconds = WHEN_SECONDS[when];
+    if (seconds !== null) params.set("since", String(Math.floor(Date.now() / 1000) - seconds));
+    if (failedOnly) params.set("result", "!success");
+    return params;
+  }, [who, area, when, failedOnly]);
+
+  const fetchPage = useCallback((before: number | null, signal?: AbortSignal) => {
+    const params = new URLSearchParams(filterParams);
+    params.set("limit", String(PAGE_SIZE));
+    if (before !== null) params.set("before_id", String(before));
+    return getJson<{ items: AuditEvent[]; next_before_id?: number | null }>(`/api/v1/audit-events?${params.toString()}`, signal);
+  }, [filterParams]);
 
   const load = useCallback(async () => {
     if (!canAudit) return;
@@ -118,23 +144,43 @@ export function HistoryPanel({ permissions }: HistoryPanelProps) {
     const current = new AbortController();
     controller.current = current;
     try {
-      const [audit, people] = await Promise.all([
-        getJson<{ items: AuditEvent[] }>("/api/v1/audit-events?limit=500", current.signal),
-        canUsers ? getJson<{ items: UserRecord[] }>("/api/v1/users", current.signal).catch(() => ({ items: [] as UserRecord[] })) : Promise.resolve({ items: [] as UserRecord[] })
-      ]);
+      const audit = await fetchPage(null, current.signal);
       setEvents(audit.items ?? []);
-      setUsers(new Map((people.items ?? []).map((item) => [item.id, item])));
+      setNextBefore(audit.next_before_id ?? null);
       setError(null);
     } catch (caught) {
       if (isAbortError(caught) || (caught instanceof ApiError && caught.status === 401)) return;
       setError(caught);
     }
-  }, [canAudit, canUsers]);
+  }, [canAudit, fetchPage]);
+
+  const loadMore = async () => {
+    if (nextBefore === null || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const audit = await fetchPage(nextBefore, controller.current?.signal);
+      setEvents((previous) => [...(previous ?? []), ...(audit.items ?? [])]);
+      setNextBefore(audit.next_before_id ?? null);
+    } catch (caught) {
+      if (!isAbortError(caught)) setError(caught);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     void load();
     return () => controller.current?.abort();
   }, [load]);
+
+  useEffect(() => {
+    if (!canAudit || !canUsers) return;
+    const current = new AbortController();
+    getJson<{ items: UserRecord[] }>("/api/v1/users", current.signal)
+      .then((people) => setUsers(new Map((people.items ?? []).map((item) => [item.id, item]))))
+      .catch(() => undefined);
+    return () => current.abort();
+  }, [canAudit, canUsers]);
 
   const actorName = useCallback((id: number | null) => {
     if (id === null) return pick(language, T.system);
@@ -157,21 +203,21 @@ export function HistoryPanel({ permissions }: HistoryPanelProps) {
   }, [events, users, language, actorName]);
 
   const actors = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const row of rows) if (!seen.has(row.actor)) seen.set(row.actor, row.actor === "system" ? pick(language, T.system) : actorName(row.event.actor_user_id));
+    const seen = new Map<string, string>([["system", pick(language, T.system)]]);
+    for (const person of users.values()) seen.set(String(person.id), person.display_name?.trim() || person.username);
+    for (const row of rows) if (!seen.has(row.actor)) seen.set(row.actor, actorName(row.event.actor_user_id));
+    if (who !== "all" && !seen.has(who)) seen.set(who, pick(language, T.someone));
     return [...seen.entries()];
-  }, [rows, actorName, language]);
+  }, [rows, users, actorName, language, who]);
 
-  const now = Math.floor(Date.now() / 1000);
   const filtered = rows.filter((row) => {
-    if (who !== "all" && row.actor !== who) return false;
-    if (area !== "all" && row.area !== area) return false;
-    const limit = WHEN_SECONDS[when];
-    if (limit !== null && now - row.event.occurred_at > limit) return false;
-    if (failedOnly && row.human.result.tone === "ok") return false;
+    if (area === "other" && row.area !== "other") return false;
     if (query && !normalizeTyped(row.human.sentence).includes(normalizeTyped(query))) return false;
     return true;
   });
+
+  const exportQuery = filterParams.toString();
+  const exportHref = `/api/v1/audit-events/export.csv${exportQuery ? `?${exportQuery}` : ""}`;
 
   const clear = () => {
     setWho("all");
@@ -187,7 +233,7 @@ export function HistoryPanel({ permissions }: HistoryPanelProps) {
     <SectionCard
       title={pick(language, T.title)}
       hint={pick(language, T.hint)}
-      action={isAdvanced ? <Button startIcon={<DownloadRoundedIcon />} href="/api/v1/audit-events/export.csv" download sx={{ minHeight: 44 }}>{pick(language, T.exportCsv)}</Button> : undefined}
+      action={isAdvanced ? <Button startIcon={<DownloadRoundedIcon />} href={exportHref} download sx={{ minHeight: 44 }}>{pick(language, T.exportCsv)}</Button> : undefined}
       flush
     >
       <Stack spacing={1.5} sx={{ px: { xs: 2, sm: 2.5 }, pb: 1.5 }}>
@@ -253,6 +299,14 @@ export function HistoryPanel({ permissions }: HistoryPanelProps) {
           );
         })}
       </Stack>
+      {events !== null && nextBefore !== null && (
+        <Box sx={{ px: { xs: 2, sm: 2.5 }, py: 1.5, display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5 }}>
+          <Button onClick={() => void loadMore()} disabled={loadingMore} sx={{ minHeight: 44 }}>
+            {pick(language, loadingMore ? T.loadingMore : T.loadMore)}
+          </Button>
+          {query && <Typography variant="caption" color="text.secondary">{pick(language, T.searchHint)}</Typography>}
+        </Box>
+      )}
       {isAdvanced && <Typography variant="caption" color="text.secondary" display="block" sx={{ px: 2.5, py: 1.5 }}>{pick(language, T.exportHint)}</Typography>}
     </SectionCard>
   );

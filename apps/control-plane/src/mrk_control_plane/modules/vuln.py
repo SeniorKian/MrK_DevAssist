@@ -40,13 +40,14 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 
 from .. import outbound
 from ..models import VulnIgnore
 from ..module_context import Event, ModuleContext
 from ..netresolve import resolve_host
+from . import vuln_sbom
 from .host_agent import AgentError, HostAgentService
 from .vuln_inventory import Inventory, build_inventory
 from .vuln_osv import (
@@ -792,6 +793,41 @@ class VulnService:
             "items": items[offset : offset + limit],
         }
 
+    def sbom_document(
+        self, image_id: str | None, fmt: str, include_vulns: bool
+    ) -> tuple[dict[str, Any], str] | None:
+        """(document, download filename) for one image or the whole server; None if absent."""
+        if image_id is not None:
+            payload = self.results.image(normalize_image_id(image_id))
+            payloads = [payload] if payload is not None else []
+        else:
+            payloads = self.results.images()
+        if not payloads:
+            return None
+        rules = self.active_rules()
+        reasons = {rule.id: rule.reason for rule in rules}
+        all_findings = self.results.findings(payloads[0]["image_id"] if image_id else None)
+        targets: list[tuple[dict[str, Any], Inventory | None, list[dict[str, Any]]]] = []
+        for payload in payloads:
+            cached = self.results.cached_inventory(payload["image_id"])
+            inventory = Inventory.from_public(cached[0]) if cached is not None else None
+            annotated, _counts, _ignored = self._annotated(
+                rules, payload, all_findings.get(payload["image_id"], [])
+            )
+            for item in annotated:
+                item["ignore_reason"] = reasons.get(item["ignore_id"] or "")
+            targets.append((payload, inventory, sort_findings(annotated)))
+        now = self.clock()
+        whole = image_id is None
+        if fmt == "spdx":
+            document = vuln_sbom.spdx(targets, now=now, whole_host=whole)
+        else:
+            document = vuln_sbom.cyclonedx(
+                targets, now=now, whole_host=whole, include_vulns=include_vulns
+            )
+        label = "server" if whole else (payloads[0].get("image") or payloads[0]["image_id"])
+        return document, vuln_sbom.filename(str(label), fmt, now)
+
     def feeds_view(self) -> dict[str, Any]:
         settings = self.settings
         with self._lock:
@@ -926,6 +962,43 @@ def build_router(ctx: ModuleContext, service: VulnService) -> APIRouter:
         if view is None:
             return ctx.error_payload("image_not_found", "No scan result for that image", 404)
         return view
+
+    async def sbom_export(request: Request, image_id: str | None) -> Response | JSONResponse:
+        principal = ctx.require_principal(request, "vuln:read")
+        params = request.query_params
+        fmt = params.get("format", "cyclonedx")
+        if fmt not in vuln_sbom.FORMATS:
+            return ctx.error_payload(
+                "invalid_query", f"format must be among {', '.join(vuln_sbom.FORMATS)}", 422
+            )
+        include_vulns = params.get("vulnerabilities", "1") not in {"0", "false"}
+        object_id = normalize_image_id(image_id) if image_id else "server"
+        result = await asyncio.to_thread(service.sbom_document, image_id, fmt, include_vulns)
+        if result is None:
+            await audit(principal, "vuln.sbom.export", object_id[:128], "failure")
+            if image_id:
+                return ctx.error_payload("image_not_found", "No scan result for that image", 404)
+            return ctx.error_payload("no_scan_results", "No image has been scanned yet", 404)
+        document, name = result
+        await audit(principal, "vuln.sbom.export", f"{object_id[:110]}:{fmt}")
+        media = vuln_sbom.SPDX_MEDIA_TYPE if fmt == "spdx" else vuln_sbom.CDX_MEDIA_TYPE
+        return Response(
+            content=json.dumps(document, indent=2, ensure_ascii=False).encode("utf-8"),
+            media_type=media,
+            headers={
+                "Content-Disposition": f'attachment; filename="{name}"',
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @router.get("/sbom", response_model=None)
+    async def sbom_server(request: Request) -> Response | JSONResponse:
+        return await sbom_export(request, None)
+
+    @router.get("/images/{image_id}/sbom", response_model=None)
+    async def sbom_image(request: Request, image_id: str) -> Response | JSONResponse:
+        return await sbom_export(request, image_id)
 
     @router.post("/scan", status_code=202, response_model=None)
     async def scan(request: Request) -> dict[str, Any] | JSONResponse:

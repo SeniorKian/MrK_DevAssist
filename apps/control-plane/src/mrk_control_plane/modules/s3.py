@@ -284,6 +284,30 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
         await audit(principal, "s3.bucket.update", "s3_bucket", name)
         return item
 
+    @router.get("/buckets/{name}/lifecycle", response_model=None)
+    async def bucket_lifecycle(name: str, request: Request) -> dict[str, Any] | JSONResponse:
+        """Rules set through the S3 API (``PutBucketLifecycleConfiguration``) + last run."""
+        reader(request, "s3:read")
+        try:
+            await existing_bucket(name)
+            return await admin_api.lifecycle(name)
+        except (S3Error, EngineError) as exc:
+            return fail(exc)
+
+    @router.post("/buckets/{name}/lifecycle/preview", response_model=None)
+    async def bucket_lifecycle_preview(
+        name: str, request: Request
+    ) -> dict[str, Any] | JSONResponse:
+        principal = writer(request, "s3:admin")
+        try:
+            await existing_bucket(name)
+            preview = await admin_api.lifecycle_preview(name)
+        except (S3Error, EngineError) as exc:
+            await audit(principal, "s3.lifecycle.preview", "s3_bucket", name, "failure")
+            return fail(exc)
+        await audit(principal, "s3.lifecycle.preview", "s3_bucket", name)
+        return preview
+
     @router.delete("/buckets/{name}", response_model=None)
     async def delete_bucket(name: str, request: Request) -> dict[str, Any] | JSONResponse:
         principal = writer(request, "s3:admin")

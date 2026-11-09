@@ -60,6 +60,7 @@ class Engine:
         self._indexes: dict[str, BucketIndex] = {}
         self.key_last_used: dict[str, float] = {}
         self.last_gc: dict[str, object] = {}
+        self.last_lifecycle: dict[str, object] = {}
         self._stop = asyncio.Event()
         self.snapshots.reload(force=True)
         from .admin import AdminApi
@@ -167,6 +168,43 @@ class Engine:
         self.last_gc = {"at": time.time(), "buckets": report}
         return report
 
+    def lifecycle_once(self, now_ns: int | None = None) -> dict[str, object]:
+        """Run every bucket's lifecycle rules once (summary per bucket, not per object)."""
+        from .lifecycle import load_rules, run_bucket
+
+        report: dict[str, object] = {}
+        for bucket in self.buckets():
+            try:
+                if not load_rules(bucket):
+                    continue
+                report[bucket.name] = run_bucket(bucket, now_ns, dry_run=False)
+            except Exception:
+                LOGGER.exception("S3 lifecycle failed", extra={"bucket": bucket.name})
+        self.last_lifecycle = {"at": time.time(), "buckets": report}
+        return report
+
+    @staticmethod
+    def seconds_until_hour(hour: int, now: float | None = None) -> float:
+        now = time.time() if now is None else now
+        today = now - now % 86400 + hour * 3600
+        target = today if today > now else today + 86400
+        return max(1.0, target - now)
+
+    async def _lifecycle_loop(self) -> None:
+        hour = self.settings.lifecycle_hour_utc
+        if hour < 0:
+            return
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), self.seconds_until_hour(hour))
+                return
+            except TimeoutError:
+                pass
+            try:
+                await asyncio.to_thread(self.lifecycle_once)
+            except Exception:
+                LOGGER.exception("S3 lifecycle loop failed")
+
     async def _poll_loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -213,7 +251,9 @@ class Engine:
                     pass
 
     async def run_background(self) -> None:
-        await asyncio.gather(self._poll_loop(), self._gc_loop(), self._hash_loop())
+        await asyncio.gather(
+            self._poll_loop(), self._gc_loop(), self._hash_loop(), self._lifecycle_loop()
+        )
 
     def stop(self) -> None:
         self._stop.set()

@@ -27,12 +27,12 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote, unquote_to_bytes
 
 from .. import s3sigv4
-from . import checksums
+from . import checksums, lifecycle, tagging
 from .chunked import AwsChunkedDecoder
 from .errors import S3Error
-from .index import PartRecord
+from .index import PartRecord, VersionRecord, prefix_upper_bound
 from .linked import LinkedBucket
-from .listing import list_page
+from .listing import list_page, resume_point
 from .policy import ALLOW, DENY, RequestContext, evaluate, resource_arn
 from .snapshot import Identity, Snapshot
 from .storage import (
@@ -93,6 +93,8 @@ RESPONSE_OVERRIDES = {
     "response-content-encoding": "Content-Encoding",
 }
 MAX_COPY_SOURCE = 5 * 1024**3
+# Internal metadata that never travels with a copy (the index assigns new values).
+COPY_EXCLUDED_META = frozenset({"parts_count", "version_id", "vseq"})
 KEEPALIVE_SECONDS = 10.0
 
 
@@ -636,7 +638,9 @@ class S3Api:
             raise S3Error(
                 "AccessDenied", "Buckets are created in the MRK panel, not through the S3 API."
             )
-        if method == "DELETE" and not query:
+        if method == "DELETE" and not any(
+            item in query for item in ("tagging", "lifecycle", "policy", "cors", "website")
+        ):
             if not exists:
                 raise S3Error("NoSuchBucket", BucketName=name)
             raise S3Error(
@@ -654,7 +658,11 @@ class S3Api:
             return await self.bucket_get(request, principal, bucket)
         if method == "POST" and "delete" in query:
             return await self.delete_objects(request, principal, bucket)
-        if method in {"PUT", "DELETE", "POST"}:
+        if method == "PUT":
+            return await self.bucket_put(request, principal, bucket)
+        if method == "DELETE":
+            return await self.bucket_delete(request, principal, bucket)
+        if method == "POST":
             raise S3Error("NotImplemented", "This bucket operation is not implemented.")
         raise S3Error("MethodNotAllowed")
 
@@ -676,7 +684,32 @@ class S3Api:
             return xml_response(writer.to_bytes())
         if "versioning" in query:
             self.require(principal, request, "s3:GetBucketVersioning", name)
-            return xml_response(XmlWriter().empty("VersioningConfiguration", xmlns=True).to_bytes())
+            state = bucket.versioning
+            if not state:
+                return xml_response(
+                    XmlWriter().empty("VersioningConfiguration", xmlns=True).to_bytes()
+                )
+            body = (
+                XmlWriter()
+                .open("VersioningConfiguration", xmlns=True)
+                .elem("Status", state)
+                .close("VersioningConfiguration")
+            )
+            return xml_response(body.to_bytes())
+        if "versions" in query:
+            return await self.list_versions(request, principal, bucket)
+        if "tagging" in query:
+            self.require(principal, request, "s3:GetBucketTagging", name)
+            stored = await asyncio.to_thread(bucket.index.get_setting, "tagging")
+            if stored is None:
+                raise S3Error("NoSuchTagSet", BucketName=name)
+            return xml_response(tagging.to_xml([(pair[0], pair[1]) for pair in json.loads(stored)]))
+        if "lifecycle" in query:
+            self.require(principal, request, "s3:GetLifecycleConfiguration", name)
+            rules = await asyncio.to_thread(lifecycle.load_rules, bucket)
+            if not rules:
+                raise S3Error("NoSuchLifecycleConfiguration", BucketName=name)
+            return xml_response(lifecycle.to_xml(rules))
         if "acl" in query:
             self.require(principal, request, "s3:GetBucketAcl", name)
             return xml_response(self._acl_xml())
@@ -689,8 +722,6 @@ class S3Api:
         missing = {
             "policy": "NoSuchBucketPolicy",
             "cors": "NoSuchCORSConfiguration",
-            "lifecycle": "NoSuchLifecycleConfiguration",
-            "tagging": "NoSuchTagSet",
             "website": "NoSuchWebsiteConfiguration",
         }
         for item, code in missing.items():
@@ -731,11 +762,227 @@ class S3Api:
             "intelligent-tiering",
             "publicAccessBlock",
             "policyStatus",
-            "versions",
         }
         if unsupported & set(query):
             raise S3Error("NotImplemented", "This bucket subresource is not implemented.")
         return await self.list_objects(request, principal, bucket)
+
+    async def bucket_put(
+        self, request: Request, principal: Principal, bucket: BaseBucket
+    ) -> Response:
+        query = request.query
+        name = bucket.name
+        if "tagging" in query:
+            self.require(principal, request, "s3:PutBucketTagging", name)
+            body = await self.read_body_verified(request, principal, require_digest=False)
+            tags = tagging.parse_xml_tags(body, tagging.MAX_BUCKET_TAGS)
+            await asyncio.to_thread(
+                bucket.index.set_setting,
+                "tagging",
+                json.dumps([list(pair) for pair in tags], separators=(",", ":")),
+            )
+            return Response(204)
+        if "lifecycle" in query:
+            self.require(principal, request, "s3:PutLifecycleConfiguration", name)
+            if bucket.config.read_only:
+                raise S3Error("InvalidBucketState", "Read-only linked buckets have no lifecycle.")
+            body = await self.read_body_verified(request, principal, require_digest=False)
+            rules = lifecycle.parse_config(body)
+            await asyncio.to_thread(lifecycle.save_rules, bucket, rules)
+            return Response(200)
+        if "versioning" in query:
+            self.require(principal, request, "s3:PutBucketVersioning", name)
+            body = await self.read_body_verified(request, principal, require_digest=False)
+            root = parse_xml(body)
+            if root.tag != "VersioningConfiguration":
+                raise S3Error("MalformedXML")
+            mfa = (child_text(root, "MfaDelete") or child_text(root, "MFADelete") or "").strip()
+            if mfa == "Enabled" or request.header("x-amz-mfa"):
+                raise S3Error("NotImplemented", "MFA Delete is not supported.")
+            if mfa not in {"", "Disabled"}:
+                raise S3Error("IllegalVersioningConfigurationException")
+            status = child_text(root, "Status")
+            if status is None:
+                return Response(200)
+            status = status.strip()
+            if status not in {"Enabled", "Suspended"}:
+                raise S3Error("IllegalVersioningConfigurationException")
+            if not isinstance(bucket, ManagedBucket):
+                raise S3Error(
+                    "InvalidBucketState",
+                    "Versioning is not available for linked-folder buckets.",
+                )
+            await asyncio.to_thread(bucket.index.set_setting, "versioning", status)
+            return Response(200)
+        raise S3Error("NotImplemented", "This bucket operation is not implemented.")
+
+    async def bucket_delete(
+        self, request: Request, principal: Principal, bucket: BaseBucket
+    ) -> Response:
+        query = request.query
+        name = bucket.name
+        if "tagging" in query:
+            self.require(principal, request, "s3:PutBucketTagging", name)
+            await asyncio.to_thread(bucket.index.set_setting, "tagging", None)
+            return Response(204)
+        if "lifecycle" in query:
+            self.require(principal, request, "s3:PutLifecycleConfiguration", name)
+            await asyncio.to_thread(lifecycle.save_rules, bucket, None)
+            return Response(204)
+        raise S3Error("NotImplemented", "This bucket operation is not implemented.")
+
+    def _collect_versions(
+        self,
+        bucket: BaseBucket,
+        prefix: str,
+        delimiter: str,
+        key_marker: str,
+        vid_marker: str,
+        max_keys: int,
+    ) -> tuple[list[VersionRecord], list[str], bool, str | None, str | None]:
+        """One ListObjectVersions page: ``(versions, prefixes, truncated, next markers)``."""
+        items: list[VersionRecord] = []
+        prefixes: list[str] = []
+        if max_keys <= 0:
+            return items, prefixes, False, None, None
+        if isinstance(bucket, LinkedBucket):
+            page = list_page(
+                bucket.iter_entries(prefix, delimiter),
+                prefix=prefix,
+                delimiter=delimiter,
+                marker=key_marker,
+                max_keys=max_keys,
+            )
+            for entry in page.contents:
+                info = bucket.entry_info(entry)
+                items.append(
+                    VersionRecord(
+                        key=info.key,
+                        version_id="null",
+                        seq=0,
+                        size=info.size,
+                        etag=info.etag,
+                        last_modified_ns=info.last_modified_ns,
+                        meta=info.meta,
+                        layout=[],
+                        delete_marker=False,
+                        is_latest=True,
+                    )
+                )
+            return items, list(page.prefixes), page.truncated, page.next_marker, None
+        index = bucket.index
+        if vid_marker:
+            start, inclusive = key_marker, True
+        else:
+            start, inclusive = resume_point(prefix, delimiter, key_marker)
+            inclusive = inclusive and bool(key_marker)
+        count = 0
+        last_key: str | None = None
+        last_vid: str | None = None
+        while True:
+            keys = index.version_keys(start, inclusive=inclusive, prefix=prefix, limit=500)
+            if not keys:
+                return items, prefixes, False, None, None
+            jump: str | None = None
+            for key in keys:
+                if delimiter:
+                    position = key.find(delimiter, len(prefix))
+                    if position >= 0:
+                        common = key[: position + len(delimiter)]
+                        if count >= max_keys:
+                            return items, prefixes, True, last_key, last_vid
+                        prefixes.append(common)
+                        count += 1
+                        last_key, last_vid = common, None
+                        upper = prefix_upper_bound(common)
+                        if upper is None:
+                            return items, prefixes, False, None, None
+                        jump = upper
+                        break
+                versions = index.versions_for(key)
+                if key == key_marker and vid_marker:
+                    ids = [version.version_id for version in versions]
+                    if vid_marker not in ids:
+                        raise S3Error(
+                            "InvalidArgument",
+                            "Invalid version id specified",
+                            ArgumentName="version-id-marker",
+                        )
+                    versions = versions[ids.index(vid_marker) + 1 :]
+                for version in versions:
+                    if count >= max_keys:
+                        return items, prefixes, True, last_key, last_vid
+                    items.append(version)
+                    count += 1
+                    last_key, last_vid = key, version.version_id
+            if jump is not None:
+                start, inclusive = jump, True
+            else:
+                start, inclusive = keys[-1], False
+
+    async def list_versions(
+        self, request: Request, principal: Principal, bucket: BaseBucket
+    ) -> Response:
+        query = request.query
+        prefix = query.get("prefix", "")
+        delimiter = query.get("delimiter", "")
+        encoding = query.get("encoding-type")
+        if encoding is not None and encoding != "url":
+            raise S3Error(
+                "InvalidArgument",
+                "Invalid Encoding Method specified in Request",
+                ArgumentName="encoding-type",
+            )
+        key_marker = query.get("key-marker", "")
+        vid_marker = query.get("version-id-marker", "")
+        if vid_marker and not key_marker:
+            raise S3Error(
+                "InvalidArgument",
+                "A version-id marker cannot be specified without a key marker.",
+                ArgumentName="version-id-marker",
+            )
+        max_keys = _parse_int(query.get("max-keys"), "max-keys", default=1000) or 0
+        max_keys = min(max_keys, self.settings.max_keys_per_list)
+        self.require(
+            principal,
+            request,
+            "s3:ListBucketVersions",
+            bucket.name,
+            extra={"s3:prefix": prefix, "s3:delimiter": delimiter, "s3:max-keys": str(max_keys)},
+        )
+        items, prefixes, truncated, next_key, next_vid = await asyncio.to_thread(
+            self._collect_versions, bucket, prefix, delimiter, key_marker, vid_marker, max_keys
+        )
+        enc = encoding
+        writer = XmlWriter().open("ListVersionsResult", xmlns=True)
+        writer.elem("Name", bucket.name).elem("Prefix", encode_key(prefix, enc))
+        writer.elem("KeyMarker", encode_key(key_marker, enc)).elem("VersionIdMarker", vid_marker)
+        if truncated and next_key is not None:
+            writer.elem("NextKeyMarker", encode_key(next_key, enc))
+            if next_vid is not None:
+                writer.elem("NextVersionIdMarker", next_vid)
+        writer.elem("MaxKeys", max_keys)
+        if delimiter:
+            writer.elem("Delimiter", encode_key(delimiter, enc))
+        if enc:
+            writer.elem("EncodingType", enc)
+        writer.elem("IsTruncated", truncated)
+        for version in items:
+            tag = "DeleteMarker" if version.delete_marker else "Version"
+            writer.open(tag).elem("Key", encode_key(version.key, enc))
+            writer.elem("VersionId", version.version_id).elem("IsLatest", version.is_latest)
+            writer.elem("LastModified", iso8601(version.last_modified_ns))
+            if not version.delete_marker:
+                writer.elem("ETag", quote_etag(version.etag)).elem("Size", version.size)
+                writer.elem("StorageClass", version.meta.get("storage_class", "STANDARD"))
+            writer.open("Owner").elem("ID", OWNER_ID).elem("DisplayName", "mrk").close("Owner")
+            writer.close(tag)
+        for common in prefixes:
+            writer.open("CommonPrefixes").elem("Prefix", encode_key(common, enc)).close(
+                "CommonPrefixes"
+            )
+        writer.close("ListVersionsResult")
+        return xml_response(writer.to_bytes())
 
     def _acl_xml(self) -> bytes:
         writer = XmlWriter().open("AccessControlPolicy", xmlns=True)
@@ -947,28 +1194,39 @@ class S3Api:
         objects = list(children(root, "Object"))
         if not objects or len(objects) > self.settings.max_delete_objects:
             raise S3Error("MalformedXML")
-        deleted: list[str] = []
+        # (key, requested version, resulting version id, delete marker?)
+        deleted: list[tuple[str, str | None, str | None, bool]] = []
         errors: list[tuple[str, str, str]] = []
         for item in objects:
             key = child_text(item, "Key")
             if key is None:
                 raise S3Error("MalformedXML")
-            version = child_text(item, "VersionId")
-            if version not in (None, "", "null"):
+            version = child_text(item, "VersionId") or None
+            if version not in (None, "null") and not isinstance(bucket, ManagedBucket):
                 errors.append((key, "NoSuchVersion", "The specified version does not exist."))
                 continue
-            if not self.allowed(principal, request, "s3:DeleteObject", bucket.name, key):
+            action = "s3:DeleteObject" if version is None else "s3:DeleteObjectVersion"
+            if not self.allowed(principal, request, action, bucket.name, key):
                 errors.append((key, "AccessDenied", "Access Denied"))
                 continue
             try:
-                await asyncio.to_thread(bucket.delete, key)
-                deleted.append(key)
+                if isinstance(bucket, ManagedBucket):
+                    vid, marker = await asyncio.to_thread(bucket.delete_detail, key, version)
+                    deleted.append((key, version, vid, marker))
+                else:
+                    await asyncio.to_thread(bucket.delete, key)
+                    deleted.append((key, version, None, False))
             except S3Error as exc:
                 errors.append((key, exc.code, exc.message))
         writer = XmlWriter().open("DeleteResult", xmlns=True)
         if not quiet:
-            for key in deleted:
-                writer.open("Deleted").elem("Key", key).close("Deleted")
+            for key, version, vid, marker in deleted:
+                writer.open("Deleted").elem("Key", key)
+                if version is not None:
+                    writer.elem("VersionId", version)
+                if marker:
+                    writer.elem("DeleteMarker", True).elem("DeleteMarkerVersionId", vid)
+                writer.close("Deleted")
         for key, code, message in errors:
             writer.open("Error").elem("Key", key).elem("Code", code).elem("Message", message).close(
                 "Error"
@@ -1009,23 +1267,24 @@ class S3Api:
             if "acl" in query:
                 self.require(principal, request, "s3:GetObjectAcl", name, key)
                 return xml_response(self._acl_xml())
-            if "tagging" in query:
+            if "tagging" in query and method == "GET":
                 self.require(principal, request, "s3:GetObjectTagging", name, key)
-                info = await asyncio.to_thread(bucket.head, key)
-                if info is None:
-                    raise S3Error("NoSuchKey", Key=key)
-                return xml_response(
-                    XmlWriter()
-                    .open("Tagging", xmlns=True)
-                    .empty("TagSet")
-                    .close("Tagging")
-                    .to_bytes()
+                info = await self.tagging_target(bucket, key, query.get("versionId"))
+                response = xml_response(
+                    tagging.to_xml(tagging.decode(info.meta.get("tagging"), strict=False))
                 )
+                return self.version_header(response, bucket, info, query.get("versionId"))
             if {"attributes", "torrent", "retention", "legal-hold"} & set(query):
                 raise S3Error("NotImplemented", "This object subresource is not implemented.")
             return await self.get_object(request, principal, bucket, key)
         if method == "PUT":
-            if {"tagging", "acl", "retention", "legal-hold"} & set(query):
+            if "tagging" in query:
+                self.require(principal, request, "s3:PutObjectTagging", name, key)
+                body = await self.read_body_verified(request, principal, require_digest=False)
+                tags = tagging.parse_xml_tags(body, tagging.MAX_OBJECT_TAGS)
+                info = await self.set_tags(bucket, key, query.get("versionId"), tags)
+                return self.version_header(Response(200), bucket, info, query.get("versionId"))
+            if {"acl", "retention", "legal-hold"} & set(query):
                 raise S3Error("NotImplemented", "This object subresource is not implemented.")
             self.require(principal, request, "s3:PutObject", name, key)
             if "uploadId" in query or "partNumber" in query:
@@ -1042,13 +1301,24 @@ class S3Api:
                 await asyncio.to_thread(bucket.abort_upload, query["uploadId"])
                 return Response(204)
             if "tagging" in query:
-                raise S3Error("NotImplemented", "Object tagging is not implemented.")
-            self.require(principal, request, "s3:DeleteObject", name, key)
+                self.require(principal, request, "s3:DeleteObjectTagging", name, key)
+                info = await self.set_tags(bucket, key, query.get("versionId"), [])
+                return self.version_header(Response(204), bucket, info, query.get("versionId"))
             version = query.get("versionId")
+            action = "s3:DeleteObject" if version is None else "s3:DeleteObjectVersion"
+            self.require(principal, request, action, name, key)
+            response = Response(204)
+            if isinstance(bucket, ManagedBucket):
+                vid, marker = await asyncio.to_thread(bucket.delete_detail, key, version)
+                if vid is not None and (version is not None or bucket.versioning):
+                    response.header("x-amz-version-id", vid)
+                if marker:
+                    response.header("x-amz-delete-marker", "true")
+                return response
             if version not in (None, "null"):
                 raise S3Error("NoSuchVersion", Key=key, VersionId=version)
             await asyncio.to_thread(bucket.delete, key)
-            return Response(204)
+            return response
         if method == "POST":
             if "uploads" in query:
                 self.require(principal, request, "s3:PutObject", name, key)
@@ -1058,6 +1328,76 @@ class S3Api:
                 return await self.complete_upload(request, principal, bucket, key)
             raise S3Error("NotImplemented", "This object operation is not implemented.")
         raise S3Error("MethodNotAllowed")
+
+    # Versions and tags -------------------------------------------------------------
+    def version_header(
+        self,
+        response: Response,
+        bucket: BaseBucket,
+        info: ObjectInfo | None,
+        requested: str | None = None,
+    ) -> Response:
+        if info is not None and (requested is not None or bucket.versioning):
+            response.header("x-amz-version-id", info.version_id)
+        return response
+
+    def resolve_version(self, bucket: BaseBucket, key: str, version: str) -> ObjectInfo:
+        """The object info for ``?versionId=``; delete markers answer 405 like AWS."""
+        if isinstance(bucket, ManagedBucket):
+            record = bucket.head_version(key, version)
+            if record is None:
+                raise S3Error("NoSuchVersion", Key=key, VersionId=version)
+            if record.delete_marker:
+                raise S3Error(
+                    "MethodNotAllowed",
+                    headers={
+                        "x-amz-delete-marker": "true",
+                        "x-amz-version-id": record.version_id,
+                        "Last-Modified": http_date(record.last_modified_ns),
+                        "Allow": "DELETE",
+                    },
+                )
+            return bucket.version_info(record)
+        info = bucket.head(key)
+        if version != "null" or info is None:
+            raise S3Error("NoSuchVersion", Key=key, VersionId=version)
+        return info
+
+    def missing_key(self, bucket: BaseBucket, key: str) -> S3Error:
+        """``NoSuchKey``, flagged when the latest version is a delete marker."""
+        headers: dict[str, str] = {}
+        if isinstance(bucket, ManagedBucket) and bucket.versioning:
+            marker = bucket.index.latest_marker(key)
+            if marker is not None:
+                headers = {"x-amz-delete-marker": "true", "x-amz-version-id": marker.version_id}
+        return S3Error("NoSuchKey", headers=headers, Key=key)
+
+    async def tagging_target(self, bucket: BaseBucket, key: str, version: str | None) -> ObjectInfo:
+        if version is not None:
+            return await asyncio.to_thread(self.resolve_version, bucket, key, version)
+        info = await asyncio.to_thread(bucket.head, key)
+        if info is None or info.is_dir and isinstance(bucket, LinkedBucket):
+            raise await asyncio.to_thread(self.missing_key, bucket, key)
+        return info
+
+    async def set_tags(
+        self, bucket: BaseBucket, key: str, version: str | None, tags: tagging.Tags
+    ) -> ObjectInfo:
+        bucket.check_writable()
+        async with bucket.lock_for(key):
+            info = await self.tagging_target(bucket, key, version)
+            meta = dict(info.meta)
+            if tags:
+                meta["tagging"] = tagging.encode(tags)
+            else:
+                meta.pop("tagging", None)
+            stored = await asyncio.to_thread(
+                bucket.set_object_meta, key, meta, info.version_id if version is not None else None
+            )
+        if not stored:
+            raise S3Error("NoSuchKey", Key=key)
+        info.meta = meta
+        return info
 
     # Common object headers ----------------------------------------------------------
     def object_headers(self, response: Response, info: ObjectInfo) -> None:
@@ -1082,7 +1422,7 @@ class S3Api:
             response.header(f"x-amz-meta-{name}", value)
         if meta.get("tagging"):
             response.header(
-                "x-amz-tagging-count", len([t for t in meta["tagging"].split("&") if t])
+                "x-amz-tagging-count", len(tagging.decode(meta["tagging"], strict=False))
             )
 
     def checksum_headers(self, response: Response, info: ObjectInfo) -> None:
@@ -1094,16 +1434,19 @@ class S3Api:
     async def get_object(
         self, request: Request, principal: Principal, bucket: BaseBucket, key: str
     ) -> Response:
-        if not self.allowed(principal, request, "s3:GetObject", bucket.name, key):
-            raise S3Error("AccessDenied")
-        info = await asyncio.to_thread(bucket.head, key)
-        if info is None:
-            if not self.allowed(principal, request, "s3:ListBucket", bucket.name):
-                raise S3Error("AccessDenied")
-            raise S3Error("NoSuchKey", Key=key)
         version = request.query.get("versionId")
-        if version not in (None, "null"):
-            raise S3Error("NoSuchVersion", Key=key, VersionId=version)
+        action = "s3:GetObject" if version is None else "s3:GetObjectVersion"
+        if not self.allowed(principal, request, action, bucket.name, key):
+            raise S3Error("AccessDenied")
+        if version is not None:
+            info = await asyncio.to_thread(self.resolve_version, bucket, key, version)
+        else:
+            found = await asyncio.to_thread(bucket.head, key)
+            if found is None:
+                if not self.allowed(principal, request, "s3:ListBucket", bucket.name):
+                    raise S3Error("AccessDenied")
+                raise await asyncio.to_thread(self.missing_key, bucket, key)
+            info = found
         status = evaluate_conditions(request.headers, info)
         if status == 304:
             response = Response(304)
@@ -1135,6 +1478,7 @@ class S3Api:
         else:
             byte_range = parse_range(request.header("range"), size)
         self.object_headers(response, info)
+        self.version_header(response, bucket, info, version)
         if principal.identity is not None:
             for param, header in RESPONSE_OVERRIDES.items():
                 if param in request.query:
@@ -1249,7 +1593,9 @@ class S3Api:
                 raise S3Error("InvalidStorageClass", StorageClassRequested=storage_class)
             meta["storage_class"] = storage_class
         if headers.get("x-amz-tagging"):
-            meta["tagging"] = headers["x-amz-tagging"]
+            stored = tagging.from_header(headers["x-amz-tagging"])
+            if stored:
+                meta["tagging"] = stored
         self.check_unsupported_headers(request)
         return meta
 
@@ -1346,6 +1692,7 @@ class S3Api:
             await asyncio.to_thread(self._discard, bucket, pending)
             raise
         response = Response(200).header("ETag", quote_etag(info.etag))
+        self.version_header(response, bucket, info)
         for algorithm, value in values.items():
             response.header(checksums.HEADER_FOR[algorithm], value)
         if values:
@@ -1374,13 +1721,14 @@ class S3Api:
                 raise S3Error("PreconditionFailed", Condition="If-Match")
 
     # Copy --------------------------------------------------------------------------
-    def parse_copy_source(self, request: Request) -> tuple[str, str]:
+    def parse_copy_source(self, request: Request) -> tuple[str, str, str | None]:
         raw = request.header("x-amz-copy-source") or ""
         raw, _, query = raw.partition("?")
+        version: str | None = None
         if query:
             for name, value in s3sigv4.parse_query(query):
-                if name == "versionId" and value != "null":
-                    raise S3Error("NoSuchVersion", VersionId=value)
+                if name == "versionId":
+                    version = value
         decoded = unquote(raw)
         if decoded.startswith("/"):
             decoded = decoded[1:]
@@ -1391,17 +1739,33 @@ class S3Api:
                 "Copy Source must mention the source bucket and key: sourcebucket/sourcekey",
                 ArgumentName="x-amz-copy-source",
             )
-        return bucket, key
+        return bucket, key, version
 
     async def copy_source_info(
         self, request: Request, principal: Principal
     ) -> tuple[BaseBucket, ObjectInfo]:
-        source_bucket_name, source_key = self.parse_copy_source(request)
-        self.require(principal, request, "s3:GetObject", source_bucket_name, source_key)
+        source_bucket_name, source_key, version = self.parse_copy_source(request)
+        action = "s3:GetObject" if version is None else "s3:GetObjectVersion"
+        self.require(principal, request, action, source_bucket_name, source_key)
         source_bucket = self.bucket_for(source_bucket_name)
-        info = await asyncio.to_thread(source_bucket.head, source_key)
-        if info is None:
-            raise S3Error("NoSuchKey", Key=source_key)
+        if version is not None:
+            try:
+                info = await asyncio.to_thread(
+                    self.resolve_version, source_bucket, source_key, version
+                )
+            except S3Error as exc:
+                if exc.code == "MethodNotAllowed":
+                    raise S3Error(
+                        "InvalidRequest",
+                        "The source of a copy request may not specifically refer to a delete marker by version id.",  # noqa: E501
+                    ) from exc
+                raise
+            info.meta = dict(info.meta, copy_source_version=version)
+        else:
+            found = await asyncio.to_thread(source_bucket.head, source_key)
+            if found is None:
+                raise S3Error("NoSuchKey", Key=source_key)
+            info = found
         status = evaluate_conditions(request.headers, info, copy_source=True)
         if status is not None:
             raise S3Error("PreconditionFailed", Condition="x-amz-copy-source-If-Match")
@@ -1425,8 +1789,15 @@ class S3Api:
                 "Unknown metadata directive.",
                 ArgumentName="x-amz-metadata-directive",
             )
+        source_version = info.meta.get("copy_source_version")
         same = source_bucket.name == bucket.name and info.key == key
-        if same and directive == "COPY" and not request.header("x-amz-storage-class"):
+        if (
+            same
+            and source_version is None
+            and directive == "COPY"
+            and not request.header("x-amz-storage-class")
+            and (request.header("x-amz-tagging-directive") or "COPY").upper() != "REPLACE"
+        ):
             raise S3Error(
                 "InvalidRequest",
                 "This copy request is illegal because it is trying to copy an object to itself without changing "  # noqa: E501
@@ -1441,9 +1812,26 @@ class S3Api:
             meta = self.collect_meta(request)
         else:
             self.check_unsupported_headers(request)
-            meta = {k: v for k, v in info.meta.items() if k not in {"parts_count"}}
+            meta = {k: v for k, v in info.meta.items() if k not in COPY_EXCLUDED_META}
             if request.header("x-amz-storage-class"):
                 meta["storage_class"] = request.header("x-amz-storage-class")
+        meta.pop("copy_source_version", None)
+        tag_directive = (request.header("x-amz-tagging-directive") or "COPY").upper()
+        if tag_directive not in {"COPY", "REPLACE"}:
+            raise S3Error(
+                "InvalidArgument",
+                "Unknown tagging directive.",
+                ArgumentName="x-amz-tagging-directive",
+            )
+        new_tags = (
+            tagging.from_header(request.header("x-amz-tagging") or "")
+            if tag_directive == "REPLACE"
+            else info.meta.get("tagging")
+        )
+        if new_tags:
+            meta["tagging"] = new_tags
+        else:
+            meta.pop("tagging", None)
         existing = await asyncio.to_thread(bucket.head, key)
         self.check_quota(bucket, info.size, existing.size if existing else 0)
         self.check_disk(bucket)
@@ -1477,7 +1865,13 @@ class S3Api:
         for algorithm, value in (result.meta.get("checksums") or {}).items():
             writer.elem(f"Checksum{algorithm}", value)
         writer.close("CopyObjectResult")
-        return xml_response(writer.to_bytes())
+        response = xml_response(writer.to_bytes())
+        self.version_header(response, bucket, result)
+        if source_version is not None:
+            response.header("x-amz-copy-source-version-id", source_version)
+        elif source_bucket.versioning:
+            response.header("x-amz-copy-source-version-id", info.version_id)
+        return response
 
     async def _stream_copy(
         self,
@@ -1840,7 +2234,7 @@ class S3Api:
         done, _ = await asyncio.wait({task}, timeout=KEEPALIVE_SECONDS)
         if done:
             info = task.result()
-            return xml_response(success_xml(info))
+            return self.version_header(xml_response(success_xml(info)), bucket, info)
 
         async def body() -> AsyncIterator[bytes]:
             # Headers are already out: keep the connection alive, report failures in the body.

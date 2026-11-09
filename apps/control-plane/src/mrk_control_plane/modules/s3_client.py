@@ -570,6 +570,22 @@ class EngineAdmin:
             return False
         return response.status_code < 300
 
+    async def lifecycle(self, bucket: str) -> dict[str, Any]:
+        """Lifecycle rules, versioning state and the last worker run of one bucket."""
+        payload = await self.json("GET", f"/admin/buckets/{uri_encode(bucket)}/lifecycle")
+        if not isinstance(payload, dict):
+            raise EngineError("engine_error", 502, "S3 engine admin API returned invalid JSON")
+        return payload
+
+    async def lifecycle_preview(self, bucket: str) -> dict[str, Any]:
+        """Dry run: what the lifecycle worker would delete now (nothing is deleted)."""
+        payload = await self.json(
+            "POST", f"/admin/buckets/{uri_encode(bucket)}/lifecycle/preview", timeout=120.0
+        )
+        if not isinstance(payload, dict):
+            raise EngineError("engine_error", 502, "S3 engine admin API returned invalid JSON")
+        return payload
+
     async def delete_bucket(self, bucket: str, *, force: bool) -> None:
         response = await self.request(
             "DELETE",

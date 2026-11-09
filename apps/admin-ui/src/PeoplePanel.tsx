@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Avatar, Box, Button, Card, CardContent, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, Grid,
+  Avatar, Box, Button, Card, CardContent, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, Grid,
   IconButton, InputAdornment, ListItemIcon, ListItemText, Menu, MenuItem, Skeleton, Stack, Switch, TextField, Typography,
   useMediaQuery, useTheme
 } from "@mui/material";
@@ -10,6 +10,9 @@ import BlockRoundedIcon from "@mui/icons-material/BlockRounded";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import GroupRoundedIcon from "@mui/icons-material/GroupRounded";
+import LockResetRoundedIcon from "@mui/icons-material/LockResetRounded";
+import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
+import DeleteForeverRoundedIcon from "@mui/icons-material/DeleteForeverRounded";
 import { ApiError, getJson, hasPermission, isAbortError, mutateJson } from "./api";
 import type { AuthUser } from "./App";
 import {
@@ -18,6 +21,7 @@ import {
 } from "./kit";
 import { RolePicker, covers, fieldMessages, initials, roleTitle, roleView, sortRoles, useRoles, type RoleRecord, type RoleView, type UserRecord } from "./kit/people";
 import { errorSentence, normalizeTyped, pick, say, type Bi } from "./copy";
+import { nameConfirmation } from "./copy/confirm";
 
 const T = {
   listTitle: { fa: "افراد", en: "People" },
@@ -98,6 +102,35 @@ const T = {
   enableBody: { fa: "«{name}» دوباره می‌تواند وارد شود. کلیدهای برنامه قبلی‌اش باطل می‌مانند.", en: "“{name}” can sign in again. Their old app keys stay revoked." },
   disabledToast: { fa: "حساب «{name}» غیرفعال شد.", en: "“{name}” was deactivated." },
   enabledToast: { fa: "حساب «{name}» فعال شد.", en: "“{name}” was activated." },
+  // reset password
+  resetPassword: { fa: "رمز تازه بده", en: "Reset password" },
+  resetTitle: { fa: "برای «{name}» رمز موقت تازه ساخته شود؟", en: "Give “{name}” a new temporary password?" },
+  resetBody: { fa: "رمز فعلی «{name}» دیگر کار نمی‌کند. یک رمز موقت و لینک یک‌بار مصرف می‌گیرید تا برایش بفرستید.", en: "“{name}”'s current password stops working. You get a temporary password and a one-time link to send them." },
+  resetEffects1: { fa: "از همه دستگاه‌ها خارج می‌شود.", en: "They're signed out everywhere." },
+  resetEffects2: { fa: "در ورود بعدی باید رمز خودش را بگذارد.", en: "They'll choose their own password at next sign-in." },
+  resetConfirm: { fa: "بله، رمز تازه بساز", en: "Yes, make a new password" },
+  resetIssuedTitle: { fa: "رمز موقت تازه «{name}»", en: "“{name}”'s new temporary password" },
+  resetIssuedBody: { fa: "این اطلاعات را برای «{name}» بفرستید. در ورود بعدی باید رمز را عوض کند.", en: "Send these to “{name}”. They'll change the password at next sign-in." },
+  resetIssuedLink: { fa: "لینک گذاشتن رمز", en: "Set-password link" },
+  resetMessageText: {
+    fa: "سلام {name}! رمز شما در پنل MRK عوض شد.\nنشانی پنل: {url}\nنام کاربری: {username}\nرمز موقت: {password}\nدر ورود بعدی رمز را عوض کنید.",
+    en: "Hi {name}! Your MRK panel password was reset.\nPanel address: {url}\nUsername: {username}\nTemporary password: {password}\nPlease change the password when you next sign in."
+  },
+  resetToast: { fa: "برای «{name}» رمز موقت تازه ساخته شد.", en: "“{name}” has a new temporary password." },
+  // sign out everywhere
+  signOutAll: { fa: "خروج از همه دستگاه‌ها", en: "Sign out everywhere" },
+  signOutTitle: { fa: "«{name}» از همه دستگاه‌ها خارج شود؟", en: "Sign “{name}” out everywhere?" },
+  signOutBody: { fa: "«{name}» در همه مرورگرها خارج می‌شود و باید دوباره وارد شود. رمزش عوض نمی‌شود.", en: "“{name}” is signed out in every browser and must sign in again. Their password stays the same." },
+  signOutTokens: { fa: "کلیدهای برنامه‌اش را هم باطل کن", en: "Also revoke their app keys" },
+  signOutConfirm: { fa: "بله، خارج کن", en: "Yes, sign out" },
+  signOutToast: { fa: "«{name}» از همه دستگاه‌ها خارج شد.", en: "“{name}” was signed out everywhere." },
+  // delete
+  deleteUser: { fa: "حذف حساب", en: "Delete account" },
+  deleteTitle: { fa: "حساب «{name}» برای همیشه حذف شود؟", en: "Delete “{name}”'s account for good?" },
+  deleteBody: { fa: "«{name}» دیگر نمی‌تواند وارد شود و حسابش برنمی‌گردد. تاریخچه کارهایش می‌ماند.", en: "“{name}” can't sign in again and the account can't be brought back. Their history stays." },
+  deleteEffects1: { fa: "از همه دستگاه‌ها خارج می‌شود و کلیدهای برنامه‌اش پاک می‌شوند.", en: "They're signed out and their app keys are removed." },
+  deleteEffects2: { fa: "اگر فقط موقتاً نباید وارد شود، «غیرفعال کردن» بهتر است.", en: "If they only need a break, “Deactivate” is better." },
+  deletedToast: { fa: "حساب «{name}» حذف شد.", en: "“{name}”'s account was deleted." },
   // advanced
   advId: { fa: "شناسه", en: "ID" },
   advEmail: { fa: "ایمیل", en: "Email" },
@@ -132,7 +165,7 @@ type InviteResult = {
   invite?: { id: number; token?: string; path?: string; expires_at?: number } | null;
 };
 
-type Issued = { name: string; username: string; password: string; link: string | null };
+type Issued = { name: string; username: string; password: string; link: string | null; kind?: "invite" | "reset" };
 
 function userStatus(user: UserRecord): { tone: "ok" | "off" | "info" | "warn"; label: Bi } {
   if (!user.enabled) return { tone: "off", label: T.inactive };
@@ -280,6 +313,71 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
       setRoleError(caught);
     } finally {
       setRoleBusy(false);
+    }
+  };
+
+  const resetPassword = async (target: UserRecord) => {
+    const name = displayName(target);
+    const ok = await ask({
+      title: say(language, T.resetTitle, { name }),
+      body: say(language, T.resetBody, { name }),
+      consequences: [pick(language, T.resetEffects1), pick(language, T.resetEffects2)],
+      confirmLabel: pick(language, T.resetConfirm)
+    });
+    if (!ok) return;
+    try {
+      const result = await mutateJson<InviteResult>(`/api/v1/users/${target.id}/password-reset`, { method: "POST", body: { create_link: true } });
+      const invite = result.invite ?? null;
+      const link = invite ? (invite.token ? `${window.location.origin}/#/invite/${invite.token}` : `${window.location.origin}${invite.path ?? ""}`) : null;
+      setIssued({ name, username: result.user?.username ?? target.username, password: result.one_time_password, link, kind: "reset" });
+      notify({ message: say(language, T.resetToast, { name }) });
+      await load();
+    } catch (caught) {
+      notify({ message: describeForToast(language, caught), tone: "error" });
+    }
+  };
+
+  const tokensRef = useRef<HTMLInputElement | null>(null);
+  const signOutEverywhere = async (target: UserRecord) => {
+    const name = displayName(target);
+    const ok = await ask({
+      title: say(language, T.signOutTitle, { name }),
+      body: say(language, T.signOutBody, { name }),
+      confirmLabel: pick(language, T.signOutConfirm),
+      children: (
+        <FormControlLabel
+          control={<Checkbox inputRef={tokensRef} defaultChecked={false} />}
+          label={pick(language, T.signOutTokens)}
+        />
+      )
+    });
+    if (!ok) return;
+    const includeTokens = Boolean(tokensRef.current?.checked);
+    try {
+      await mutateJson(`/api/v1/users/${target.id}/sessions/revoke`, { method: "POST", body: { include_tokens: includeTokens } });
+      notify({ message: say(language, T.signOutToast, { name }) });
+    } catch (caught) {
+      notify({ message: describeForToast(language, caught), tone: "error" });
+    }
+  };
+
+  const deleteUser = async (target: UserRecord) => {
+    const name = displayName(target);
+    const ok = await ask({
+      title: say(language, T.deleteTitle, { name }),
+      body: say(language, T.deleteBody, { name }),
+      consequences: [pick(language, T.deleteEffects1), pick(language, T.deleteEffects2)],
+      severity: "destructive",
+      typed: nameConfirmation(target.username, target.username),
+      confirmLabel: pick(language, T.deleteUser)
+    });
+    if (!ok) return;
+    try {
+      await mutateJson(`/api/v1/users/${target.id}`, { method: "DELETE" });
+      notify({ message: say(language, T.deletedToast, { name }) });
+      await Promise.all([load(), reloadRoles()]);
+    } catch (caught) {
+      notify({ message: describeForToast(language, caught), tone: "error" });
     }
   };
 
@@ -467,7 +565,14 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
                 { key: "role", label: pick(language, T.changeRole), icon: <SwapHorizRoundedIcon fontSize="small" />, onClick: () => openRoleDialog(item) },
                 item.enabled
                   ? { key: "disable", label: pick(language, T.disable), icon: <BlockRoundedIcon fontSize="small" />, danger: true, onClick: () => void toggleEnabled(item) }
-                  : { key: "enable", label: pick(language, T.enable), icon: <CheckCircleOutlineRoundedIcon fontSize="small" />, onClick: () => void toggleEnabled(item) }
+                  : { key: "enable", label: pick(language, T.enable), icon: <CheckCircleOutlineRoundedIcon fontSize="small" />, onClick: () => void toggleEnabled(item) },
+                ...(item.enabled
+                  ? [
+                      { key: "reset", label: pick(language, T.resetPassword), icon: <LockResetRoundedIcon fontSize="small" />, onClick: () => void resetPassword(item) },
+                      { key: "signout", label: pick(language, T.signOutAll), icon: <LogoutRoundedIcon fontSize="small" />, onClick: () => void signOutEverywhere(item) }
+                    ]
+                  : []),
+                { key: "delete", label: pick(language, T.deleteUser), icon: <DeleteForeverRoundedIcon fontSize="small" />, danger: true, onClick: () => void deleteUser(item) }
               ]
             : [];
           return (
@@ -530,17 +635,17 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
       {issued && (
         <OneTimeSecret
           open
-          title={say(language, T.issuedTitle, { name: issued.name })}
-          body={pick(language, T.issuedBody)}
+          title={say(language, issued.kind === "reset" ? T.resetIssuedTitle : T.issuedTitle, { name: issued.name })}
+          body={issued.kind === "reset" ? say(language, T.resetIssuedBody, { name: issued.name }) : pick(language, T.issuedBody)}
           items={[
             { label: pick(language, T.issuedUsername), value: issued.username, ltr: true },
             { label: pick(language, T.issuedPassword), value: issued.password, ltr: true },
-            ...(issued.link ? [{ label: pick(language, T.issuedLink), value: issued.link, ltr: true }] : [])
+            ...(issued.link ? [{ label: pick(language, issued.kind === "reset" ? T.resetIssuedLink : T.issuedLink), value: issued.link, ltr: true }] : [])
           ]}
           message={{
             label: pick(language, T.issuedMessage),
             value:
-              say(language, T.messageText, { name: issued.name, url: panelUrl, username: issued.username, password: issued.password }) +
+              say(language, issued.kind === "reset" ? T.resetMessageText : T.messageText, { name: issued.name, url: panelUrl, username: issued.username, password: issued.password }) +
               (issued.link ? say(language, T.messageLink, { link: issued.link }) : "")
           }}
           onClose={() => setIssued(null)}

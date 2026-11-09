@@ -9,6 +9,9 @@ Every request needs ``X-MRK-Admin-Token`` equal to ``/data/modules/s3/admin.toke
   buckets only lose their index, never files)
 * ``GET /admin/links`` -> folders mounted under the link roots
 * ``POST /admin/reload``, ``POST /admin/gc``, ``POST /admin/buckets/{b}/rescan``
+* ``GET /admin/buckets/{b}/lifecycle`` -> rules, versioning state, last run summary
+* ``POST /admin/buckets/{b}/lifecycle/preview`` -> dry-run ("would delete N objects / B bytes")
+* ``POST /admin/lifecycle/run`` -> run every bucket's lifecycle rules now
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, unquote
 
+from . import lifecycle
 from .linked import LinkedBucket
 
 if TYPE_CHECKING:
@@ -143,6 +147,8 @@ class AdminApi:
                 "changed": changed,
                 "error": engine.snapshots.last_error,
             }
+        if rest == ["lifecycle", "run"] and method == "POST":
+            return 200, {"ok": True, "buckets": await asyncio.to_thread(engine.lifecycle_once)}
         if rest == ["gc"] and method == "POST":
             return 200, {"ok": True, "buckets": await asyncio.to_thread(engine.gc_once)}
         if len(rest) >= 2 and rest[0] == "buckets":
@@ -175,6 +181,25 @@ class AdminApi:
                 except Exception:
                     return 503, {"error": "storage_unavailable"}
                 return 200, {"objects": objects, "bytes": total}
+            if action == "lifecycle" and method == "GET" and len(rest) == 3:
+                bucket = engine.bucket(name)
+                if bucket is None:
+                    return 404, {"error": "unknown_bucket"}
+                return 200, {
+                    "rules": await asyncio.to_thread(lifecycle.load_rules, bucket) or [],
+                    "versioning": bucket.versioning or None,
+                    "last_run": await asyncio.to_thread(lifecycle.last_run, bucket),
+                    "supported": not bucket.config.read_only,
+                }
+            if action == "lifecycle" and rest[3:] == ["preview"] and method == "POST":
+                bucket = engine.bucket(name)
+                if bucket is None:
+                    return 404, {"error": "unknown_bucket"}
+                try:
+                    preview = await asyncio.to_thread(lifecycle.run_bucket, bucket, dry_run=True)
+                except Exception:
+                    return 503, {"error": "storage_unavailable"}
+                return 200, preview
             if action == "rescan" and method == "POST":
                 bucket = engine.bucket(name)
                 if not isinstance(bucket, LinkedBucket):

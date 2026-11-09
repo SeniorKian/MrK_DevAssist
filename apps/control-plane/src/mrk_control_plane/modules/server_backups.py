@@ -5,7 +5,8 @@ encrypted with MRKBKP2 using a per-job random passphrase from the SecretStore,
 and streamed to a local directory, an external S3 service or our own S3
 engine. A 30-second scheduler runs enabled jobs from their 5-field cron
 schedule in the configured time zone; retention runs after every success.
-Restore is manual for now (download + ``mrk-backup-decrypt``; docs/27).
+Restore and periodic test restores run in-process (``server_backups_restore``);
+the artifact can still be downloaded and opened with ``mrk-backup-decrypt``.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from .host_agent import AgentError, HostAgentService
 from .server_backups_cron import DEFAULT_TIMEZONE, CronError, load_timezone, parse_cron
 from .server_backups_crypto import new_passphrase
 from .server_backups_pipeline import PipelineError, run_backup
+from .server_backups_restore import RestoreError, RestoreManager
 from .server_backups_s3 import S3Error
 
 LOGGER = logging.getLogger(__name__)
@@ -115,6 +117,19 @@ class JobPatch(BaseModel):
     schedule: str | None = Field(default=None, min_length=9, max_length=120)
     retention: dict[str, Any] | None = None
     enabled: bool | None = None
+
+
+class RestoreBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: str = Field(min_length=1, max_length=80)
+    target: str | None = Field(default=None, max_length=400)
+
+
+class VerifySettingsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schedule: str | None = Field(default=None, max_length=120)
 
 
 class SettingsBody(BaseModel):
@@ -237,6 +252,7 @@ class ServerBackupService:
             concurrency = 2
         self._semaphore = asyncio.Semaphore(min(max(concurrency, 1), 8))
         self._lock = asyncio.Lock()
+        self.restores = RestoreManager(self)
 
     # -- settings --------------------------------------------------------------------
     def settings(self) -> dict[str, Any]:
@@ -757,6 +773,10 @@ class ServerBackupService:
                 started.append(await self.start_run(job_id, "schedule"))
             except BackupApiError:
                 continue
+        try:
+            await self.restores.tick(current)
+        except Exception:
+            LOGGER.exception("scheduled test restore failed to start")
         return started
 
     def recover(self) -> None:
@@ -780,9 +800,11 @@ class ServerBackupService:
 
     async def start(self) -> None:
         await asyncio.to_thread(self.recover)
+        await asyncio.to_thread(self.restores.recover)
         self._scheduler = asyncio.create_task(self._loop(), name="mrk-server-backup-scheduler")
 
     async def stop(self) -> None:
+        await self.restores.stop()
         tasks = [task for task in [self._scheduler, *self._tasks] if task is not None]
         for task in tasks:
             task.cancel()
@@ -795,6 +817,7 @@ class ServerBackupService:
         """Test helper: wait for running backups to finish."""
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await self.restores.wait_idle()
 
     # -- sources -----------------------------------------------------------------------
     async def sources(self) -> dict[str, Any]:
@@ -870,7 +893,7 @@ def register(ctx: ModuleContext) -> None:
     router = APIRouter(prefix="/api/v1/server-backups", tags=["server-backups"])
 
     def failure(exc: Exception):
-        if isinstance(exc, BackupApiError | dest.DestinationError | AgentError):
+        if isinstance(exc, BackupApiError | dest.DestinationError | AgentError | RestoreError):
             return ctx.error_payload(exc.code, exc.message, exc.status_code)
         if isinstance(exc, PipelineError):
             return ctx.error_payload(exc.code, str(exc), 422)
@@ -1071,6 +1094,67 @@ def register(ctx: ModuleContext) -> None:
         if run.get("bytes"):
             headers["Content-Length"] = str(run["bytes"])
         return StreamingResponse(body(), media_type=dest.ARTIFACT_CONTENT_TYPE, headers=headers)
+
+    # restore + test restore (docs/28 S6)
+    @router.post("/runs/{run_id}/restore", status_code=202)
+    async def restore_run(run_id: str, request: Request, body: RestoreBody):
+        principal = writer(request)
+        try:
+            restore_id = await service.restores.start(
+                run_id, "restore", target=body.target, confirmation=body.confirmation,
+                actor=principal.user_id,
+            )
+        except (BackupApiError, RestoreError) as exc:
+            await audit(principal, "server_backup.run.restore", "server_backup_run", run_id,
+                        "failure")
+            return failure(exc)
+        await audit(principal, "server_backup.run.restore", "server_backup_run", run_id)
+        return {"restore_id": restore_id}
+
+    @router.post("/runs/{run_id}/verify", status_code=202)
+    async def verify_run(run_id: str, request: Request):
+        principal = writer(request)
+        try:
+            restore_id = await service.restores.start(run_id, "verify",
+                                                      actor=principal.user_id)
+        except (BackupApiError, RestoreError) as exc:
+            return failure(exc)
+        await audit(principal, "server_backup.run.verify", "server_backup_run", run_id)
+        return {"restore_id": restore_id}
+
+    @router.get("/restores")
+    async def restores(
+        request: Request,
+        run_id: str | None = Query(default=None, max_length=32),
+        limit: int = Query(default=50, ge=1, le=200),
+    ):
+        ctx.require_principal(request, READ)
+        return {"items": await asyncio.to_thread(service.restores.list, run_id, limit)}
+
+    @router.get("/restores/{restore_id}")
+    async def restore_status(restore_id: str, request: Request):
+        ctx.require_principal(request, READ)
+        try:
+            return await asyncio.to_thread(service.restores.get, restore_id)
+        except RestoreError as exc:
+            return failure(exc)
+
+    @router.get("/verify-settings")
+    async def get_verify_settings(request: Request):
+        ctx.require_principal(request, READ)
+        return await asyncio.to_thread(service.restores.verify_settings)
+
+    @router.put("/verify-settings")
+    async def put_verify_settings(request: Request, body: VerifySettingsBody):
+        principal = writer(request)
+        try:
+            result = await asyncio.to_thread(service.restores.save_verify_settings,
+                                             body.schedule)
+        except RestoreError as exc:
+            return failure(exc)
+        await audit(principal, "server_backup.verify_settings.update", "server_backup",
+                    "verify-settings")
+        return result
 
     @router.get("/sources")
     async def sources(request: Request):

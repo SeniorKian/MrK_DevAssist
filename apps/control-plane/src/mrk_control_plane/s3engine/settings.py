@@ -79,6 +79,8 @@ class EngineSettings:
     hash_rate_bytes: int = 50 * MIB
     hash_max_file_bytes: int = 1 * GIB
     secret_cache_seconds: int = 300
+    # Lifecycle worker: daily at this UTC hour (docs/30 §1.10); -1 disables it.
+    lifecycle_hour_utc: int = 3
     extra: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -143,4 +145,5 @@ class EngineSettings:
             disk_block_percent=_int("MRK_S3_DISK_BLOCK_PERCENT", 90, 50, 100),
             hash_rate_bytes=_int("MRK_S3_HASH_RATE_BYTES", 50 * MIB, 0, 10 * GIB),
             hash_max_file_bytes=_int("MRK_S3_HASH_MAX_FILE_BYTES", 1 * GIB, 0, 5 * TIB),
+            lifecycle_hour_utc=_int("MRK_S3_LIFECYCLE_HOUR_UTC", 3, -1, 23),
         )

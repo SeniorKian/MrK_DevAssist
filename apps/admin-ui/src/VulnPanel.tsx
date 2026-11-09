@@ -12,7 +12,8 @@ import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
-import { ApiError, getJson, hasPermission, isAbortError, mutateJson } from "./api";
+import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
+import { ApiError, apiGet, ensureOk, getJson, hasPermission, isAbortError, mutateJson } from "./api";
 import { pick, reasonFor, say, severityWord, termWithEnglish, type Bi, type Tone } from "./copy";
 import {
   Bytes, EmptyState, FriendlyError, HelpTip, Ltr, NoAccess, Notice, NumberInput, RelativeTime, ResponsiveList, SectionCard, StatGrid,
@@ -219,7 +220,22 @@ const COPY = {
   saved: { fa: "تنظیمات بررسی ذخیره شد.", en: "Check settings were saved." },
   moreSettings: { fa: "سقف‌ها و زمان‌بندی‌های داخلی", en: "Internal limits and timings" },
   moreSettingsHint: { fa: "مقدارهایی که فعلاً ثابت‌اند.", en: "Values that are fixed for now." },
-  readOnly: { fa: "نقش شما فقط اجازه دیدن نتیجه‌ها را دارد.", en: "Your role can only view the results." }
+  readOnly: { fa: "نقش شما فقط اجازه دیدن نتیجه‌ها را دارد.", en: "Your role can only view the results." },
+  // SBOM export (Advanced; adv_ keys may carry technical names)
+  // copy-ok: format name shown only in Advanced mode
+  adv_sbomTitle: { fa: "خروجی SBOM", en: "SBOM export" },
+  adv_sbomHint: { fa: "فهرست کامل بسته‌های نصب‌شده در برنامه‌ها، برای ابزارهای امنیتی دیگر یا بازرسی.", en: "The full list of packages installed in your apps, for other security tools or audits." },
+  adv_sbomFormat: { fa: "قالب فایل", en: "File format" },
+  adv_sbomCdx: { fa: "CycloneDX 1.5 (JSON)", en: "CycloneDX 1.5 (JSON)" },
+  adv_sbomSpdx: { fa: "SPDX 2.3 (JSON)", en: "SPDX 2.3 (JSON)" },
+  adv_sbomTarget: { fa: "برای", en: "For" },
+  adv_sbomServer: { fa: "کل سرور (همه برنامه‌های بررسی‌شده)", en: "The whole server (every checked app)" },
+  adv_sbomVulns: { fa: "مشکل‌های امنیتی پیداشده هم در فایل باشد (نادیده‌گرفته‌ها با دلیلشان)", en: "Include the security issues found (ignored ones with their reason)" },
+  // copy-ok: format name shown only in Advanced mode
+  adv_sbomSpdxNoVulns: { fa: "قالب SPDX مشکل‌های امنیتی را نگه نمی‌دارد؛ فقط فهرست بسته‌ها دانلود می‌شود.", en: "SPDX doesn't hold security issues; only the package list is downloaded." },
+  adv_sbomDownload: { fa: "دانلود فایل", en: "Download file" },
+  adv_sbomEmpty: { fa: "هنوز برنامه‌ای بررسی نشده؛ بعد از اولین بررسی می‌توانید فایل را بگیرید.", en: "No app has been checked yet; you can get the file after the first check." },
+  adv_sbomDone: { fa: "فایل {name} دانلود شد.", en: "{name} was downloaded." }
 } satisfies Record<string, Bi>;
 
 /** Errors on this page use the catalog with this module's wording (copy/errors.ts `vuln:<code>`). */
@@ -474,6 +490,7 @@ export default function VulnPanel({ permissions }: { permissions: readonly strin
           }}
         />
       )}
+      {isAdvanced && <SbomCard images={images} onDone={(name) => notify({ message: say(language, COPY.adv_sbomDone, { name }) })} />}
       {isAdvanced && <FeedsCard />}
       {isAdvanced && <VulnSettingsCard canWrite={canWrite} onSaved={() => { notify({ message: pick(language, COPY.saved) }); void load(); }} />}
       <RegistrySettings
@@ -768,6 +785,87 @@ function IgnoresCard({ canWrite, onAdd, onChanged }: { canWrite: boolean; onAdd:
         empty={<EmptyState compact icon={VisibilityRoundedIcon} title={pick(language, COPY.ignoresEmpty)} body={pick(language, COPY.ignoresEmptyBody)} />}
       />
       {dialog}
+    </SectionCard>
+  );
+}
+
+// ── Advanced: SBOM export ───────────────────────────────────────────────────
+
+const SERVER_TARGET = "__server__";
+
+function downloadName(response: Response, fallback: string) {
+  const match = /filename="?([^";]+)"?/i.exec(response.headers.get("Content-Disposition") ?? "");
+  return match ? match[1] : fallback;
+}
+
+function SbomCard({ images, onDone }: { images: ImageRecord[]; onDone: (name: string) => void }) {
+  const { language } = useKit();
+  const [format, setFormat] = useState<"cyclonedx" | "spdx">("cyclonedx");
+  const [target, setTarget] = useState(SERVER_TARGET);
+  const [withVulns, setWithVulns] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const known = target === SERVER_TARGET || images.some((image) => image.image_id === target);
+  const chosen = known ? target : SERVER_TARGET;
+
+  const download = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const base = chosen === SERVER_TARGET ? `${API}/sbom` : `${API}/images/${encodeURIComponent(chosen)}/sbom`;
+      const query = new URLSearchParams({ format, vulnerabilities: withVulns ? "1" : "0" });
+      const response = await ensureOk(await apiGet(`${base}?${query.toString()}`));
+      const blob = await response.blob();
+      const name = downloadName(response, `mrk-sbom.${format === "spdx" ? "spdx" : "cdx"}.json`);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+      onDone(name);
+    } catch (caught) {
+      if (!(caught instanceof ApiError && caught.status === 401)) setError(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SectionCard title={pick(language, COPY.adv_sbomTitle)} hint={pick(language, COPY.adv_sbomHint)} collapsible defaultCollapsed>
+      <Stack spacing={2}>
+        {error !== null && <ErrorBox error={error} onClose={() => setError(null)} />}
+        {images.length === 0 ? (
+          <Notice>{pick(language, COPY.adv_sbomEmpty)}</Notice>
+        ) : (
+          <>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+              <TextField select fullWidth label={pick(language, COPY.adv_sbomTarget)} value={chosen} onChange={(event) => setTarget(event.target.value)}>
+                <MenuItem value={SERVER_TARGET}>{pick(language, COPY.adv_sbomServer)}</MenuItem>
+                {images.map((image) => (
+                  <MenuItem key={image.image_id} value={image.image_id}><Ltr>{image.image || image.image_id.slice(0, 19)}</Ltr></MenuItem>
+                ))}
+              </TextField>
+              <TextField select fullWidth label={pick(language, COPY.adv_sbomFormat)} value={format} onChange={(event) => setFormat(event.target.value === "spdx" ? "spdx" : "cyclonedx")}>
+                <MenuItem value="cyclonedx"><Ltr>{pick(language, COPY.adv_sbomCdx)}</Ltr></MenuItem>
+                <MenuItem value="spdx"><Ltr>{pick(language, COPY.adv_sbomSpdx)}</Ltr></MenuItem>
+              </TextField>
+            </Stack>
+            {format === "cyclonedx" ? (
+              <FormControlLabel control={<Checkbox checked={withVulns} onChange={(event) => setWithVulns(event.target.checked)} />} label={pick(language, COPY.adv_sbomVulns)} />
+            ) : (
+              <Typography variant="body2" color="text.secondary">{pick(language, COPY.adv_sbomSpdxNoVulns)}</Typography>
+            )}
+            <Box>
+              <Button variant="outlined" startIcon={busy ? <CircularProgress size={16} /> : <DownloadRoundedIcon />} disabled={busy} onClick={() => void download()} sx={{ minHeight: 44 }}>
+                {pick(language, COPY.adv_sbomDownload)}
+              </Button>
+            </Box>
+          </>
+        )}
+      </Stack>
     </SectionCard>
   );
 }

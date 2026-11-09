@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import functools
 import io
 import json
 import logging
@@ -137,6 +138,14 @@ class InviteUserRequest(BaseModel):
     role: str = Field(default="viewer", min_length=1, max_length=32)
     username: str | None = Field(default=None, max_length=64)
     create_link: bool = True
+
+
+class ResetPasswordRequest(BaseModel):
+    create_link: bool = True
+
+
+class RevokeSessionsRequest(BaseModel):
+    include_tokens: bool = False
 
 
 class AcceptInviteRequest(BaseModel):
@@ -1941,6 +1950,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _error_payload("invalid_user_update", str(exc), 409)
         return {"status": "updated"}
 
+    def _lifecycle_error(exc: Exception) -> JSONResponse:
+        if isinstance(exc, PermissionEscalationError):
+            return escalation_error(exc)
+        assert isinstance(exc, FieldError)
+        if exc.status_code == 404:
+            raise StarletteHTTPException(status_code=404) from None
+        return _field_error(exc)
+
+    @app.delete("/api/v1/users/{user_id}", include_in_schema=False, response_model=None)
+    async def delete_user(user_id: int, request: Request) -> dict[str, str] | JSONResponse:
+        principal = require_principal(request, "user:write")
+        require_csrf(request, principal)
+        try:
+            await asyncio.to_thread(
+                auth_store.delete_user, user_id, principal,
+                request.client.host if request.client else None,
+                correlation_id_context.get(),
+            )
+        except (PermissionEscalationError, FieldError) as exc:
+            return _lifecycle_error(exc)
+        return {"status": "deleted"}
+
+    @app.post("/api/v1/users/{user_id}/password-reset", include_in_schema=False,
+              response_model=None)
+    async def reset_user_password(
+        user_id: int, request: Request, payload: ResetPasswordRequest | None = None
+    ) -> dict[str, object] | JSONResponse:
+        principal = require_principal(request, "user:write")
+        require_csrf(request, principal)
+        try:
+            # The one-time password and link token are in this response only.
+            return await asyncio.to_thread(
+                auth_store.reset_user_password, user_id, principal,
+                payload.create_link if payload is not None else True,
+                request.client.host if request.client else None,
+                correlation_id_context.get(),
+            )
+        except (PermissionEscalationError, FieldError) as exc:
+            return _lifecycle_error(exc)
+
+    @app.post("/api/v1/users/{user_id}/sessions/revoke", include_in_schema=False,
+              response_model=None)
+    async def revoke_user_sessions(
+        user_id: int, request: Request, payload: RevokeSessionsRequest | None = None
+    ) -> dict[str, object] | JSONResponse:
+        principal = require_principal(request, "user:write")
+        require_csrf(request, principal)
+        try:
+            counts = await asyncio.to_thread(
+                auth_store.revoke_user_sessions, user_id, principal,
+                payload.include_tokens if payload is not None else False,
+                request.client.host if request.client else None,
+                correlation_id_context.get(),
+            )
+        except (PermissionEscalationError, FieldError) as exc:
+            return _lifecycle_error(exc)
+        return {"status": "revoked", **counts}
+
     @app.get("/api/v1/tokens", include_in_schema=False)
     async def api_tokens(request: Request) -> dict[str, object]:
         principal = require_principal(request, "token:read")
@@ -1986,15 +2053,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "revoked"}
 
     @app.get("/api/v1/audit-events", include_in_schema=False)
-    async def audit_events(request: Request, limit: int = 100) -> dict[str, object]:
+    async def audit_events(
+        request: Request,
+        limit: int = 100,
+        before_id: int | None = Query(default=None, ge=1),
+        actor_user_id: int | None = Query(default=None, ge=0),
+        action: str | None = Query(default=None, max_length=400),
+        result: str | None = Query(default=None, max_length=32),
+        since: int | None = Query(default=None, ge=0),
+        until: int | None = Query(default=None, ge=0),
+    ) -> dict[str, object]:
         require_principal(request, "audit:read")
-        return {"items": await asyncio.to_thread(auth_store.list_audit, limit)}
+        size = min(max(limit, 1), 500)
+        items = await asyncio.to_thread(
+            functools.partial(
+                auth_store.list_audit, size, before_id=before_id,
+                actor_user_id=actor_user_id, action_prefix=action, result=result,
+                since=since, until=until,
+            )
+        )
+        # Keyset cursor: pass it back as before_id for the next (older) page.
+        next_before_id = items[-1]["id"] if len(items) == size else None
+        return {"items": items, "next_before_id": next_before_id}
 
     @app.get("/api/v1/audit-events/export.csv", include_in_schema=False)
-    async def export_audit_events(request: Request) -> Response:
+    async def export_audit_events(
+        request: Request,
+        actor_user_id: int | None = Query(default=None, ge=0),
+        action: str | None = Query(default=None, max_length=400),
+        result: str | None = Query(default=None, max_length=32),
+        since: int | None = Query(default=None, ge=0),
+        until: int | None = Query(default=None, ge=0),
+    ) -> Response:
         principal = require_principal(request, "audit:read")
-        rows = await asyncio.to_thread(auth_store.list_audit, 500)
-        output = io.StringIO(newline="")
         fields = [
             "id",
             "actor_user_id",
@@ -2006,10 +2097,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "request_id",
             "occurred_at",
         ]
-        writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: _csv_cell(row.get(key)) for key in fields})
+        # Recorded before streaming so the export itself is in the file, and the
+        # snapshot is bounded: rows written while streaming are not chased.
         await asyncio.to_thread(
             auth_store.record_audit,
             principal.user_id,
@@ -2017,8 +2106,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "audit",
             "csv",
         )
-        return Response(
-            content="\ufeff" + output.getvalue(),
+        batch_size = 500
+
+        async def rows_csv() -> AsyncIterator[str]:
+            output = io.StringIO(newline="")
+            writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            yield "\ufeff" + output.getvalue()
+            cursor: int | None = None
+            while True:
+                rows = await asyncio.to_thread(
+                    functools.partial(
+                        auth_store.list_audit, batch_size, before_id=cursor,
+                        actor_user_id=actor_user_id, action_prefix=action, result=result,
+                        since=since, until=until,
+                    )
+                )
+                if not rows:
+                    return
+                output.seek(0)
+                output.truncate(0)
+                for row in rows:
+                    writer.writerow({key: _csv_cell(row.get(key)) for key in fields})
+                yield output.getvalue()
+                if len(rows) < batch_size:
+                    return
+                cursor = int(rows[-1]["id"])  # type: ignore[call-overload]
+
+        return StreamingResponse(
+            rows_csv(),
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": 'attachment; filename="mrk-audit.csv"'},
         )

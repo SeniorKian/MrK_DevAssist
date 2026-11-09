@@ -1778,6 +1778,169 @@ class AuthStore:
                 self._revoke_invites(db, user_id, now)
             self._audit_db(db, actor_user_id, "user.update", "user", str(user_id), "success")
 
+    # ----- user lifecycle (delete, password reset, sign out everywhere) -------
+    def _lifecycle_target(
+        self, db: OrmSession, user_id: int, actor: Principal
+    ) -> User:
+        """Load a user another person manages, applying the shared guards.
+
+        Owners are managed only by owners, and nobody acts on a person who holds
+        permissions they lack (the same rule as role changes).
+        """
+        user = db.get(User, user_id)
+        if user is None:
+            raise FieldError("user_not_found", "user not found", "user_id", "not_found",
+                             status_code=404)
+        if user.role == "owner" and actor.role != "owner":
+            raise PermissionEscalationError("only an owner can manage an owner", ["*"])
+        current = self._role_permissions_db(db, user.role) or frozenset()
+        if not covers(actor.permissions, current):
+            raise PermissionEscalationError(
+                "the user holds permissions you do not have",
+                sorted(set(current) - set(actor.permissions)),
+            )
+        return user
+
+    @staticmethod
+    def _revoke_api_tokens(db: OrmSession, user_id: int, now: int) -> int:
+        result = db.execute(
+            update(ApiToken)
+            .where(ApiToken.user_id == user_id, ApiToken.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        return int(result.rowcount or 0)
+
+    def delete_user(
+        self,
+        user_id: int,
+        actor: Principal,
+        source_ip: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        if user_id == actor.user_id:
+            raise FieldError("cannot_delete_self", "you cannot delete your own account",
+                             "user_id", "self", status_code=409)
+        now = int(time.time())
+        with self.db.session() as db, db.begin():
+            user = self._lifecycle_target(db, user_id, actor)
+            if user.role == "owner" and user.enabled:
+                owners = db.scalar(
+                    select(func.count()).select_from(User).where(
+                        User.role == "owner", User.enabled.is_(True)
+                    )
+                )
+                if int(owners or 0) <= 1:
+                    raise FieldError(
+                        "last_owner", "the last enabled owner cannot be deleted",
+                        "user_id", "last_owner", status_code=409,
+                    )
+            # Revoke first (and delete explicitly): SQLite does not always
+            # enforce ON DELETE CASCADE, and a revoked row is safe either way.
+            self._revoke_sessions(db, user_id, now)
+            self._revoke_api_tokens(db, user_id, now)
+            self._revoke_invites(db, user_id, now)
+            username = user.username
+            db.execute(delete(LoginSession).where(LoginSession.user_id == user_id))
+            db.execute(delete(ApiToken).where(ApiToken.user_id == user_id))
+            db.execute(delete(UserInvite).where(UserInvite.user_id == user_id))
+            db.execute(delete(UserPasswordState).where(UserPasswordState.user_id == user_id))
+            # History stays; the deleted person's own events lose the link.
+            db.execute(
+                update(AuditEvent)
+                .where(AuditEvent.actor_user_id == user_id)
+                .values(actor_user_id=None)
+            )
+            db.execute(delete(User).where(User.id == user_id))
+            self._audit_db(db, actor.user_id, "user.delete", "user",
+                           f"{user_id}:{username}", "success", source_ip, request_id)
+
+    def reset_user_password(
+        self,
+        user_id: int,
+        actor: Principal,
+        create_link: bool = True,
+        source_ip: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, object]:
+        """Give a person a one-time password (and optional link) they must replace.
+
+        Reuses the invite mechanism: every open session and earlier link ends,
+        and the account is flagged to choose a new password at next sign-in.
+        """
+        if user_id == actor.user_id:
+            raise FieldError("cannot_reset_self", "change your own password instead",
+                             "user_id", "self", status_code=409)
+        one_time_password = generate_one_time_password(
+            int(password_policy()["min_length"])  # type: ignore[call-overload]
+        )
+        password_hash = self._hash_password(one_time_password)
+        token = secrets.token_urlsafe(32) if create_link else None
+        now = int(time.time())
+        with self.db.session() as db, db.begin():
+            user = self._lifecycle_target(db, user_id, actor)
+            if not user.enabled:
+                raise FieldError("user_disabled", "enable the account first", "user_id",
+                                 "disabled", status_code=409)
+            user.password_hash = password_hash
+            user.updated_at = now
+            self._set_must_change(db, user_id, True, "reset")
+            self._revoke_invites(db, user_id, now)
+            self._revoke_sessions(db, user_id, now)
+            invite_payload: dict[str, object] | None = None
+            if token is not None:
+                invite = UserInvite(
+                    user_id=user_id,
+                    token_hash=self._digest(token),
+                    created_by_user_id=actor.user_id,
+                    created_at=now,
+                    expires_at=now + INVITE_TTL_SECONDS,
+                )
+                db.add(invite)
+                db.flush()
+                invite_payload = {
+                    "id": invite.id,
+                    "token": token,
+                    "path": f"/#/invite/{token}",
+                    "expires_at": invite.expires_at,
+                }
+            self._audit_db(db, actor.user_id, "user.password.reset", "user", str(user_id),
+                           "success", source_ip, request_id)
+            return {
+                "user": {"id": user_id, "username": user.username,
+                         "display_name": user.display_name},
+                "one_time_password": one_time_password,
+                "must_change_password": True,
+                "invite": invite_payload,
+            }
+
+    def revoke_user_sessions(
+        self,
+        user_id: int,
+        actor: Principal,
+        include_tokens: bool = False,
+        source_ip: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, int]:
+        now = int(time.time())
+        with self.db.session() as db, db.begin():
+            if user_id == actor.user_id:
+                if db.get(User, user_id) is None:
+                    raise FieldError("user_not_found", "user not found", "user_id",
+                                     "not_found", status_code=404)
+            else:
+                self._lifecycle_target(db, user_id, actor)
+            query = update(LoginSession).where(
+                LoginSession.user_id == user_id, LoginSession.revoked_at.is_(None)
+            )
+            if user_id == actor.user_id and actor.session_id is not None:
+                # "Sign out everywhere" on yourself keeps this browser.
+                query = query.where(LoginSession.id != actor.session_id)
+            sessions = int(db.execute(query.values(revoked_at=now)).rowcount or 0)
+            tokens = self._revoke_api_tokens(db, user_id, now) if include_tokens else 0
+            self._audit_db(db, actor.user_id, "user.sessions.revoke", "user", str(user_id),
+                           "success", source_ip, request_id)
+            return {"sessions": sessions, "tokens": tokens}
+
     def create_api_token(
         self, user_id: int, name: str, scopes: list[str], expires_in_seconds: int
     ) -> tuple[int, str]:
@@ -1930,10 +2093,51 @@ class AuthStore:
                 for row in rows
             ]
 
-    def list_audit(self, limit: int = 100) -> list[dict[str, object]]:
+    def list_audit(
+        self,
+        limit: int = 100,
+        *,
+        before_id: int | None = None,
+        actor_user_id: int | None = None,
+        action_prefix: str | None = None,
+        result: str | None = None,
+        since: int | None = None,
+        until: int | None = None,
+        max_limit: int = 500,
+    ) -> list[dict[str, object]]:
+        """Newest-first audit events; ``before_id`` pages backwards (keyset).
+
+        ``actor_user_id=0`` selects events with no actor (the system).
+        ``action_prefix`` may list several comma-separated prefixes (OR).
+        ``result`` starting with ``!`` excludes that result (``!success``).
+        """
+        query = select(AuditEvent)
+        if before_id is not None:
+            query = query.where(AuditEvent.id < before_id)
+        if actor_user_id == 0:
+            query = query.where(AuditEvent.actor_user_id.is_(None))
+        elif actor_user_id is not None:
+            query = query.where(AuditEvent.actor_user_id == actor_user_id)
+        prefixes = [item.strip() for item in (action_prefix or "").split(",") if item.strip()]
+        if prefixes:
+            query = query.where(or_(*(
+                AuditEvent.action.like(
+                    prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",
+                    escape="\\",
+                )
+                for prefix in prefixes[:16]
+            )))
+        if result and result.startswith("!"):
+            query = query.where(AuditEvent.result != result[1:])
+        elif result:
+            query = query.where(AuditEvent.result == result)
+        if since is not None:
+            query = query.where(AuditEvent.occurred_at >= since)
+        if until is not None:
+            query = query.where(AuditEvent.occurred_at <= until)
         with self.db.session() as db:
             rows = db.scalars(
-                select(AuditEvent).order_by(AuditEvent.id.desc()).limit(min(max(limit, 1), 500))
+                query.order_by(AuditEvent.id.desc()).limit(min(max(limit, 1), max_limit))
             ).all()
             return [
                 {

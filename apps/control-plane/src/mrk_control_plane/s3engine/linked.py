@@ -501,6 +501,40 @@ class LinkedBucket(BaseBucket):
         self.hash_queue.pop(key, None)
         return self._file_info(key, info, record)
 
+    def set_object_meta(
+        self, key: str, meta: dict[str, Any], version_id: str | None = None
+    ) -> bool:
+        """Tags live in the sidecar row, which stays valid while the file is unchanged."""
+        if version_id not in (None, "null"):
+            return False
+        try:
+            parts, is_dir = key_parts(key)
+            if is_dir:
+                return False
+            with self.safe.open_dir(parts[:-1]) as handle:
+                info = self.safe.lstat(handle, parts[-1])
+        except (OSError, ValueError, S3Error):
+            return False
+        if not stat.S_ISREG(info.st_mode):
+            return False
+        record = self.index.get(key)
+        etag = record.etag if record is not None and self._sidecar_valid(record, info) else ""
+        self.index.put(
+            ObjectRecord(
+                key=key,
+                size=info.st_size,
+                etag=etag,
+                last_modified_ns=info.st_mtime_ns,
+                meta=meta,
+                layout=[],
+                mtime_ns=info.st_mtime_ns,
+                inode=info.st_ino,
+                dev=info.st_dev,
+            ),
+            count_stats=False,
+        )
+        return True
+
     def delete(self, key: str) -> bool:
         self.check_writable()
         try:

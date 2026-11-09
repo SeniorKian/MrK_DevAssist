@@ -25,6 +25,8 @@ import CloudRoundedIcon from "@mui/icons-material/CloudRounded";
 import DnsRoundedIcon from "@mui/icons-material/DnsRounded";
 import LockRoundedIcon from "@mui/icons-material/LockRounded";
 import BackupRoundedIcon from "@mui/icons-material/BackupRounded";
+import RestoreRoundedIcon from "@mui/icons-material/RestoreRounded";
+import FactCheckRoundedIcon from "@mui/icons-material/FactCheckRounded";
 import { ApiError, getJson, hasPermission, isAbortError, mutateJson } from "./api";
 import type { Language } from "./i18n";
 import { useVisibleInterval } from "./polling";
@@ -58,6 +60,14 @@ type Run = { id: string; job_id: string; state: RunState; started_at: number | s
 type Source = JobSource & { key: string; label: string; detail?: string; protected?: boolean; size_bytes?: number | null; supported?: boolean };
 type DestTest = { ok: boolean; latency_ms: number; error_code?: string | null };
 type KeyExport = { passphrase: string; key_ref?: string; decrypt_command?: string };
+type RestorePhase = "download" | "decrypt" | "extract" | "finish" | "done";
+type Restore = {
+  id: string; run_id: string; job_id: string; job_name: string; mode: "restore" | "verify"; trigger: string; state: RunState;
+  phase: RestorePhase; progress: number; started_at: number | null; finished_at: number | null; target: string | null; path: string | null;
+  error_code: string | null; details: { files?: number; bytes?: number; file?: string };
+};
+type VerifySettings = { schedule: string | null; next_run_at: number | null };
+const DEFAULT_VERIFY_SCHEDULE = "0 4 * * 0";
 
 const BASE = "/api/v1/server-backups";
 const DEFAULT_SCHEDULE = "0 2 * * *";
@@ -185,6 +195,34 @@ const T = {
   required: { fa: "این را پر کنید.", en: "Fill this in." },
   saveAndTest: { fa: "ذخیره و امتحان", en: "Save and test" },
   destSaved: { fa: "«{name}» ذخیره شد. حالا اتصال امتحان می‌شود:", en: "“{name}” was saved. Testing the connection now:" },
+
+  restore: { fa: "بازگردانی", en: "Restore" },
+  testRestore: { fa: "امتحان بازگردانی", en: "Test restore" },
+  restoreTitle: { fa: "پشتیبان «{name}» بازگردانی شود؟", en: "Restore backup “{name}”?" },
+  restoreBody: { fa: "فایل‌های این پشتیبان باز و بررسی می‌شوند و در یک پوشه تازه روی همین سرور قرار می‌گیرند. اطلاعات فعلی برنامه دست نمی‌خورد و چیزی پاک یا رونویسی نمی‌شود.", en: "The backup is opened, checked and placed in a new folder on this server. The app's current data isn't touched, and nothing is deleted or overwritten." },
+  restoreDbNote: { fa: "برای پایگاه داده، فایل خروجی آن در پوشه قرار می‌گیرد؛ وارد کردنش در پایگاه داده با خود شماست.", en: "For a database, its export file is placed in the folder; loading it into the database is up to you." },
+  restoreConfirm: { fa: "بله، بازگردانی کن", en: "Yes, restore" },
+  restoreTarget: { fa: "نام پوشه بازگردانی (اختیاری)", en: "Restore folder name (optional)" },
+  restoreTargetHint: { fa: "خالی یعنی یک نام خودکار. پوشه نباید از قبل وجود داشته باشد.", en: "Empty means an automatic name. The folder must not exist yet." },
+  restoreStarted: { fa: "بازگردانی «{name}» شروع شد.", en: "Restore of “{name}” started." },
+  testStarted: { fa: "امتحان بازگردانی «{name}» شروع شد.", en: "Test restore of “{name}” started." },
+  restoresTitle: { fa: "بازگردانی‌ها و امتحان‌ها", en: "Restores and tests" },
+  restoresHint: { fa: "هر بازگردانی یا امتحانش این‌جا با نتیجه‌اش دیده می‌شود.", en: "Every restore or test shows up here with its result." },
+  modeRestore: { fa: "بازگردانی", en: "Restore" },
+  modeVerify: { fa: "امتحان", en: "Test" },
+  modeScheduled: { fa: "خودکار", en: "Automatic" },
+  restoredTo: { fa: "در این پوشه", en: "In this folder" },
+  phase_download: { fa: "در حال گرفتن فایل…", en: "Fetching the file…" },
+  phase_decrypt: { fa: "در حال باز کردن رمز…", en: "Decrypting…" },
+  phase_extract: { fa: "در حال بیرون آوردن فایل‌ها…", en: "Unpacking files…" },
+  phase_finish: { fa: "در حال تمام کردن…", en: "Finishing…" },
+  phase_done: { fa: "تمام شد", en: "Done" },
+  filesCount: { fa: "{n} فایل", en: "{n} files" },
+  verifyTitle: { fa: "امتحان خودکار بازگردانی", en: "Automatic restore test" },
+  verifyHint: { fa: "تازه‌ترین پشتیبان هر برنامه روشن، سر وقت در یک پوشه موقت باز و بررسی می‌شود و بعد پاک می‌شود. اگر خراب باشد اعلان می‌گیرید.", en: "The newest backup of every active schedule is opened in a temporary folder on schedule, checked, then removed. You're alerted if it's broken." },
+  verifyOn: { fa: "امتحان خودکار روشن باشد", en: "Run the test automatically" },
+  verifySaved: { fa: "زمان‌بندی امتحان خودکار ذخیره شد.", en: "The automatic test schedule was saved." },
+  nextVerify: { fa: "امتحان بعدی", en: "Next test" },
 
   advTitle: { fa: "تنظیمات پیشرفته پشتیبان برنامه‌ها", en: "Advanced app-backup settings" }
 } satisfies Record<string, Bi>;
@@ -712,6 +750,9 @@ export function ServerBackupsPanel({ language, permissions }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [keySecret, setKeySecret] = useState<{ name: string; key: KeyExport } | null>(null);
   const [deleting, setDeleting] = useState<{ job: Job; artifacts: boolean; busy: boolean; error: unknown } | null>(null);
+  const [restores, setRestores] = useState<Restore[]>([]);
+  const [verify, setVerify] = useState<VerifySettings | null>(null);
+  const [restoring, setRestoring] = useState<{ run: Run; target: string; busy: boolean; error: unknown } | null>(null);
   const controller = useRef<AbortController | null>(null);
   const openedFromHash = useRef(false);
 
@@ -721,14 +762,22 @@ export function ServerBackupsPanel({ language, permissions }: Props) {
     controller.current = current;
     if (!background) setLoading(true);
     try {
-      const [dests, jobList, runList] = await Promise.all([
+      const optional = <V,>(promise: Promise<V>) => promise.catch((caught: unknown) => {
+        if (isAbortError(caught) || isUnauthorized(caught)) throw caught;
+        return null; // an older server without restore support
+      });
+      const [dests, jobList, runList, restoreList, verifySettings] = await Promise.all([
         getJson<{ items: Destination[] }>(`${BASE}/destinations`, current.signal),
         getJson<{ items: Job[] }>(`${BASE}/jobs`, current.signal),
-        getJson<{ items: Run[] }>(`${BASE}/runs?limit=50${runFilter ? `&job_id=${encodeURIComponent(runFilter)}` : ""}`, current.signal)
+        getJson<{ items: Run[] }>(`${BASE}/runs?limit=50${runFilter ? `&job_id=${encodeURIComponent(runFilter)}` : ""}`, current.signal),
+        optional(getJson<{ items: Restore[] }>(`${BASE}/restores?limit=20`, current.signal)),
+        optional(getJson<VerifySettings>(`${BASE}/verify-settings`, current.signal))
       ]);
       setDestinations(dests.items ?? []);
       setJobs(jobList.items ?? []);
       setRuns(runList.items ?? []);
+      setRestores(restoreList?.items ?? []);
+      setVerify(verifySettings);
       setUnavailable(false);
       setError(null);
     } catch (caught) {
@@ -745,8 +794,9 @@ export function ServerBackupsPanel({ language, permissions }: Props) {
     return () => controller.current?.abort();
   }, [load]);
 
+  const restoreRunning = restores.some((item) => item.state === "running");
   const anyRunning = (runs ?? []).some((run) => run.state === "running");
-  useVisibleInterval(() => void load(true), unavailable ? null : anyRunning ? 10_000 : 60_000);
+  useVisibleInterval(() => void load(true), unavailable ? null : restoreRunning ? 2_000 : anyRunning ? 10_000 : 60_000);
 
   // `#/files/app-backups?new=1` (Home "create your first backup") opens the wizard once.
   useEffect(() => {
@@ -803,6 +853,32 @@ export function ServerBackupsPanel({ language, permissions }: Props) {
       setDeleting((current) => (current ? { ...current, busy: false, error: caught } : current));
     }
   };
+
+  const confirmRestore = async () => {
+    if (!restoring) return;
+    const name = jobName(restoring.run.job_id);
+    setRestoring({ ...restoring, busy: true, error: null });
+    try {
+      const target = restoring.target.trim();
+      await mutateJson(`${BASE}/runs/${encodeURIComponent(restoring.run.id)}/restore`, { method: "POST", body: { confirmation: name, ...(target ? { target } : {}) } });
+      notify({ message: say(language, T.restoreStarted, { name }), tone: "success" });
+      setRestoring(null);
+      await load(true);
+    } catch (caught) {
+      setRestoring((current) => (current ? { ...current, busy: false, error: caught } : current));
+    }
+  };
+
+  const testRestore = (run: Run) => act(run.id, async () => {
+    await mutateJson(`${BASE}/runs/${encodeURIComponent(run.id)}/verify`, { method: "POST" });
+    notify({ message: say(language, T.testStarted, { name: jobName(run.job_id) }), tone: "success" });
+  });
+
+  const saveVerify = (schedule: string | null) => act("verify-settings", async () => {
+    const saved = await mutateJson<VerifySettings>(`${BASE}/verify-settings`, { method: "PUT", body: { schedule } });
+    setVerify(saved);
+    notify({ message: t("verifySaved"), tone: "success" });
+  });
 
   const deleteDestination = async (dest: Destination) => {
     if (!(await ask({ title: say(language, T.deleteDestTitle, { name: dest.name }), body: t("deleteDestBody"), severity: "destructive", typed: nameConfirmation(dest.name, dest.name) }))) return;
@@ -950,8 +1026,20 @@ export function ServerBackupsPanel({ language, permissions }: Props) {
                   render: (run) => run.state === "succeeded" ? (
                     <Button size="small" startIcon={<DownloadRoundedIcon />} href={`${BASE}/runs/${encodeURIComponent(run.id)}/download`}>{c.download}</Button>
                   ) : null
+                },
+                {
+                  key: "restore", header: t("restore"), align: "end",
+                  render: (run) => canWrite && run.state === "succeeded" && run.object_key ? (
+                    <Button size="small" variant="outlined" startIcon={<RestoreRoundedIcon />} disabled={restores.some((item) => item.run_id === run.id && item.state === "running")} onClick={() => setRestoring({ run, target: "", busy: false, error: null })}>{t("restore")}</Button>
+                  ) : null
                 }
               ]}
+              actions={canWrite ? [{
+                key: "test", label: t("testRestore"), icon: FactCheckRoundedIcon, advancedOnly: true,
+                hidden: (run) => run.state !== "succeeded" || !run.object_key,
+                disabled: (run) => busy === run.id || restores.some((item) => item.run_id === run.id && item.state === "running"),
+                onClick: (run) => void testRestore(run)
+              }] : undefined}
               card={{
                 title: (run) => <Box component="span" dir="auto">{jobName(run.job_id)}</Box>,
                 meta: (run) => <><RelativeTime value={run.started_at} />{run.bytes ? <> · <Bytes value={run.bytes} /></> : null}</>,
@@ -960,6 +1048,68 @@ export function ServerBackupsPanel({ language, permissions }: Props) {
               empty={<EmptyState compact title={t("noRunsTitle")} body={t("noRunsBody")} />}
             />
           </SectionCard>
+
+          {restores.length > 0 && (
+            <SectionCard title={t("restoresTitle")} hint={t("restoresHint")} flush>
+              <ResponsiveList
+                label={t("restoresTitle")}
+                rows={restores}
+                rowKey={(item) => item.id}
+                columns={[
+                  { key: "job", header: t("colJob"), render: (item) => <Box component="span" dir="auto">{item.job_name}</Box> },
+                  {
+                    key: "mode", header: t("colState"),
+                    render: (item) => (
+                      <Stack spacing={0.5} sx={{ minWidth: 160 }}>
+                        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                          <Typography variant="body2">{item.mode === "restore" ? t("modeRestore") : t("modeVerify")}</Typography>
+                          {item.trigger === "schedule" && <Typography variant="caption" color="text.secondary">({t("modeScheduled")})</Typography>}
+                          <StatusPill status={item.state} />
+                        </Stack>
+                        {item.state === "running" && (
+                          <>
+                            <LinearProgress variant="determinate" value={item.progress} aria-label={t(`phase_${item.phase}`)} />
+                            <Typography variant="caption" color="text.secondary">{t(`phase_${item.phase}`)}</Typography>
+                          </>
+                        )}
+                        {item.state === "failed" && <Typography variant="caption" color="error.main">{reasonFor(language, item.error_code, "server_backups")}</Typography>}
+                      </Stack>
+                    )
+                  },
+                  { key: "when", header: t("colWhen"), render: (item) => <RelativeTime value={item.started_at} /> },
+                  {
+                    key: "result", header: t("restoredTo"),
+                    render: (item) => item.state === "succeeded" ? (
+                      <Stack spacing={0.25}>
+                        {item.path && <Typography variant="caption"><Ltr mono>{item.path}</Ltr></Typography>}
+                        {typeof item.details.files === "number" && <Typography variant="caption" color="text.secondary">{say(language, T.filesCount, { n: item.details.files })}{item.details.bytes ? <> · <Bytes value={item.details.bytes} /></> : null}</Typography>}
+                      </Stack>
+                    ) : "—"
+                  }
+                ]}
+                card={{
+                  title: (item) => <Box component="span" dir="auto">{item.job_name}</Box>,
+                  meta: (item) => <>{item.mode === "restore" ? t("modeRestore") : t("modeVerify")} · <RelativeTime value={item.started_at} /></>,
+                  status: (item) => <StatusPill status={item.state} />
+                }}
+              />
+            </SectionCard>
+          )}
+
+          {isAdvanced && verify && (
+            <SectionCard title={t("verifyTitle")} hint={t("verifyHint")}>
+              <Stack spacing={1.5}>
+                <FormControlLabel
+                  control={<Switch checked={verify.schedule !== null} disabled={!canWrite || busy === "verify-settings"} onChange={(_event, on) => void saveVerify(on ? DEFAULT_VERIFY_SCHEDULE : null)} />}
+                  label={t("verifyOn")}
+                />
+                {verify.schedule !== null && (
+                  <SchedulePicker value={verify.schedule} onChange={(value) => { if (cronValid(value)) void saveVerify(value); }} validateCron={cronValid} label={t("verifyTitle")} disabled={!canWrite || busy === "verify-settings"} />
+                )}
+                {verify.schedule !== null && verify.next_run_at && <Typography variant="caption" color="text.secondary">{t("nextVerify")}: <RelativeTime value={verify.next_run_at} /></Typography>}
+              </Stack>
+            </SectionCard>
+          )}
 
           <SectionCard
             title={t("destTitle")}
@@ -1017,6 +1167,34 @@ export function ServerBackupsPanel({ language, permissions }: Props) {
             control={<Switch checked={deleting.artifacts} onChange={(event) => setDeleting({ ...deleting, artifacts: event.target.checked })} />}
             label={<Box><Typography variant="body2">{t("deleteArtifacts")}</Typography><Typography variant="caption" color="error.main">{t("deleteArtifactsHint")}</Typography></Box>}
           />
+        </ConfirmAction>
+      )}
+      {restoring && (
+        <ConfirmAction
+          open
+          title={say(language, T.restoreTitle, { name: jobName(restoring.run.job_id) })}
+          body={t("restoreBody")}
+          severity="disruptive"
+          typed={nameConfirmation(jobName(restoring.run.job_id), jobName(restoring.run.job_id))}
+          confirmLabel={t("restoreConfirm")}
+          busy={restoring.busy}
+          error={restoring.error}
+          onConfirm={() => void confirmRestore()}
+          onClose={() => setRestoring(null)}
+        >
+          <Stack spacing={1.5}>
+            {jobs?.find((job) => job.id === restoring.run.job_id)?.source.kind !== "volume" && <Notice>{t("restoreDbNote")}</Notice>}
+            {isAdvanced && (
+              <TextField
+                size="small"
+                label={t("restoreTarget")}
+                helperText={t("restoreTargetHint")}
+                value={restoring.target}
+                onChange={(event) => setRestoring({ ...restoring, target: event.target.value })}
+                slotProps={{ htmlInput: { dir: "ltr", maxLength: 200 } }}
+              />
+            )}
+          </Stack>
         </ConfirmAction>
       )}
       {keySecret && (

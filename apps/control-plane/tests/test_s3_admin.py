@@ -81,9 +81,26 @@ class FakeEngine:
         path = request.url.path
         if path == "/admin/health":
             return httpx.Response(200, json={"ok": True})
-        match = re.fullmatch(r"/admin/buckets/([^/]+)(/stats|/ensure)?", path)
+        match = re.fullmatch(
+            r"/admin/buckets/([^/]+)(/stats|/ensure|/lifecycle|/lifecycle/preview)?", path
+        )
         assert match, path
         bucket, action = match.group(1), match.group(2)
+        if action == "/lifecycle":
+            return httpx.Response(
+                200,
+                json={
+                    "rules": [{"id": "logs", "status": "Enabled", "expiration_days": 7}],
+                    "versioning": None,
+                    "last_run": None,
+                    "supported": True,
+                },
+            )
+        if action == "/lifecycle/preview":
+            self.calls.append(("POST", bucket, "lifecycle-preview"))
+            return httpx.Response(
+                200, json={"objects": 3, "bytes": 30, "dry_run": True, "sample": []}
+            )
         if action == "/stats":
             items = [obj for (b, _k), obj in self.objects.items() if b == bucket]
             count = self.stats_override.get(bucket, len(items))
@@ -1003,3 +1020,17 @@ def test_rbac(client: TestClient) -> None:
     assert ROLE_PERMISSIONS["developer"] >= {"updates:read"}
     assert "updates:write" not in ROLE_PERMISSIONS["developer"]
     assert "updates:read" in ROLE_PERMISSIONS["viewer"]
+
+
+def test_lifecycle_rules_and_dry_run_preview(client: TestClient, engine: FakeEngine) -> None:
+    headers = owner(client)
+    assert make_bucket(client, headers, "logs").status_code == 201
+    info = client.get(f"{API}/buckets/logs/lifecycle")
+    assert info.status_code == 200 and info.json()["rules"][0]["id"] == "logs"
+    assert client.get(f"{API}/buckets/nope/lifecycle").status_code == 404
+    # The preview is a state-free POST but still needs CSRF + s3:admin.
+    assert client.post(f"{API}/buckets/logs/lifecycle/preview").status_code == 403
+    preview = client.post(f"{API}/buckets/logs/lifecycle/preview", headers=headers)
+    assert preview.status_code == 200, preview.text
+    assert preview.json() == {"objects": 3, "bytes": 30, "dry_run": True, "sample": []}
+    assert ("POST", "logs", "lifecycle-preview") in engine.calls

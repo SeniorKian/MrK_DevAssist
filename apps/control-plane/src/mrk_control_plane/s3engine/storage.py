@@ -18,7 +18,7 @@ from typing import Any
 
 from . import checksums
 from .errors import S3Error
-from .index import BucketIndex, ObjectRecord, PartRecord, UploadRecord
+from .index import BucketIndex, ObjectRecord, PartRecord, UploadRecord, VersionRecord, version_of
 from .listing import Entry
 from .settings import EngineSettings
 from .snapshot import BucketConfig
@@ -45,6 +45,10 @@ class ObjectInfo:
     def parts_count(self) -> int | None:
         value = self.meta.get("parts_count")
         return int(value) if value else None
+
+    @property
+    def version_id(self) -> str:
+        return version_of(self.meta)
 
 
 class BodyHasher:
@@ -199,6 +203,17 @@ class BaseBucket:
     def check_writable(self) -> None:
         if self.config.read_only:
             raise S3Error("AccessDenied", "The bucket is read-only (linked folder).")
+
+    @property
+    def versioning(self) -> str:
+        """``""`` (never versioned), ``Enabled`` or ``Suspended``; linked buckets: always ``""``."""
+        return ""
+
+    def set_object_meta(
+        self, key: str, meta: dict[str, Any], version_id: str | None = None
+    ) -> bool:
+        """Replace stored metadata (tags) of an existing object; False if it is missing."""
+        raise NotImplementedError
 
     # Multipart ---------------------------------------------------------------------
     def create_upload(self, key: str, meta: dict[str, Any], initiator: str) -> UploadRecord:
@@ -364,8 +379,48 @@ class ManagedBucket(BaseBucket):
             meta=meta,
             layout=[[self._relative(final), pending.written]],
         )
-        self.index.put(record)
+        self.index.put(record, versioning=self.versioning)
         return self._info(record)
+
+    @property
+    def versioning(self) -> str:
+        return self.index.get_setting("versioning") or ""
+
+    def set_object_meta(
+        self, key: str, meta: dict[str, Any], version_id: str | None = None
+    ) -> bool:
+        return self.index.update_meta(key, meta, version_id)
+
+    def version_info(self, version: VersionRecord) -> ObjectInfo:
+        return ObjectInfo(
+            key=version.key,
+            size=version.size,
+            etag=version.etag,
+            last_modified_ns=version.last_modified_ns,
+            meta=version.meta,
+            segments=[(str(self.root / item[0]), int(item[1])) for item in version.layout],
+        )
+
+    def head_version(self, key: str, version_id: str) -> VersionRecord | None:
+        return self.index.get_version(key, version_id)
+
+    def delete_detail(self, key: str, version_id: str | None = None) -> tuple[str | None, bool]:
+        """Versioning-aware delete: returns ``(version id, is delete marker)`` for headers.
+
+        Without ``version_id`` a versioned bucket gets a delete marker; with it, that
+        exact version is removed permanently.
+        """
+        self.check_writable()
+        state = self.versioning
+        if version_id is not None:
+            removed = self.index.delete_version(key, version_id)
+            if removed is None:
+                return version_id, False
+            return removed.version_id, removed.delete_marker
+        if state:
+            return self.index.delete_marker(key, state), True
+        self.index.delete(key)
+        return None, False
 
     def link_copy(self, source: ObjectInfo, key: str, meta: dict[str, Any]) -> ObjectInfo | None:
         """Copy within the managed store by hard-linking content files (no data copy)."""
@@ -392,11 +447,14 @@ class ManagedBucket(BaseBucket):
             meta=meta,
             layout=layout,
         )
-        self.index.put(record)
+        self.index.put(record, versioning=self.versioning)
         return self._info(record)
 
     def delete(self, key: str) -> bool:
         self.check_writable()
+        if self.versioning:
+            self.index.delete_marker(key, self.versioning)
+            return True
         return self.index.delete(key) is not None
 
     def complete_upload(
@@ -416,7 +474,12 @@ class ManagedBucket(BaseBucket):
             meta=meta,
             layout=layout,
         )
-        self.index.finish_upload(upload.upload_id, record, keep_paths={part.path for part in parts})
+        self.index.finish_upload(
+            upload.upload_id,
+            record,
+            keep_paths={part.path for part in parts},
+            versioning=self.versioning,
+        )
         self._remove_part_dir(upload.upload_id)
         return self._info(record)
 

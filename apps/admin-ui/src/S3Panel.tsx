@@ -49,6 +49,7 @@ import type { Language } from "./i18n";
 import { useVisibleInterval } from "./polling";
 import { KeySecretDialog, S3Connect, S3Identities, TEMPLATE_CARDS, createKeyFor, type NewKey } from "./S3Access";
 import { S3FileManager } from "./S3FileManager";
+import { S3Lifecycle } from "./S3Lifecycle";
 import {
   ActionWizard, BytesInput, ConfirmAction, CopyField, EmptyState, FriendlyError, HelpTip, Ltr, NoAccess, Notice, RelativeTime,
   ResponsiveList, SectionCard, StatGrid, StatTile, StatusPill, Term, useKit, useUndoSnackbar, ChoiceCards, RegistrySettings, helperProblem,
@@ -759,6 +760,11 @@ export function S3Panel({ language, permissions }: Props) {
               }
             >
               <S3FileManager key={openBucket} bucket={openBucket} language={language} canWrite={canWrite} />
+              {isAdvanced && (
+                <Box sx={{ mt: 2 }}>
+                  <S3Lifecycle key={openBucket} bucket={openBucket} canAdmin={canAdmin} />
+                </Box>
+              )}
             </SectionCard>
           ) : (
             <SectionCard

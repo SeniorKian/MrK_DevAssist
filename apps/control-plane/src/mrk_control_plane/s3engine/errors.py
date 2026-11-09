@@ -112,6 +112,12 @@ _DEFAULTS: dict[str, tuple[int, str]] = {
         "The specified bucket does not have a website configuration",
     ),
     "InsufficientStorage": (507, "Insufficient storage space."),
+    "InvalidTag": (400, "The tag provided was not a valid tag."),
+    "InvalidBucketState": (409, "The request is not valid with the current state of the bucket."),
+    "IllegalVersioningConfigurationException": (
+        400,
+        "The versioning configuration specified in the request is invalid.",
+    ),
 }
 
 
