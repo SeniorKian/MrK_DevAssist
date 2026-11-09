@@ -18,6 +18,7 @@
     "@fontsource-variable/vazirmatn": "5.3.0",
     "@mui/icons-material": "7.3.11",
     "@mui/material": "7.3.11",
+    "qrcode-generator": "1.4.4",
     "react": "19.2.9",
     "react-dom": "19.2.9",
     "stylis": "4.2.0",

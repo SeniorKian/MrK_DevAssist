@@ -7,6 +7,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { getJson, mutateJson } from "./api";
 import type { Language } from "./i18n";
 import { formatRelative } from "./kit/formatters";
+import { formatNumber } from "./format";
 import { ECOSYSTEM_WORDS } from "./copy/kinds";
 import { reasonFor } from "./copy/errors";
 import { fill, type Bi } from "./copy/text";
@@ -227,6 +228,16 @@ const RULES: Record<string, RuleCopy> = {
     why: { fa: "کسی تعداد زیادی نام ساختگی می‌پرسد تا DNS را خسته کند. با یک دکمه جلویش را بگیرید.", en: "Someone is asking lots of made-up names to wear DNS out. Stop it with one button." },
     button: { fa: "جلویش را بگیر", en: "Stop it" }
   },
+  dns_certificate_expiring: {
+    title: { fa: "گواهی اتصال رمزدار DNS رو به اتمام است", en: "DNS's encrypted connection certificate is ending" },
+    why: { fa: "اگر تمام شود، گوشی‌ها و لپ‌تاپ‌ها دیگر رمزدار به DNS وصل نمی‌شوند. گواهی را تمدید یا جایگزین کنید.", en: "When it ends, phones and laptops can no longer connect to DNS encrypted. Renew or replace the certificate." },
+    button: { fa: "دیدن گواهی", en: "See the certificate" }
+  },
+  dns_trust_anchor_problem: {
+    title: { fa: "کلید اعتماد ریشه DNS مشکل دارد", en: "DNS's root trust key has a problem" },
+    why: { fa: "تا درست نشود، بررسی امضای امنیتی جواب‌ها ممکن است درست کار نکند. در تنظیمات DNS «به‌روزرسانی» را بزنید.", en: "Until it's fixed, checking answers' security signatures may not work right. Press Update in DNS settings." },
+    button: { fa: "بررسی امضای امنیتی", en: "Check signatures" }
+  },
   domain_problem: {
     title: { fa: "دامنه {host} مشکل دارد", en: "The domain {host} has a problem" },
     why: { fa: "تا درست نشود، این دامنه از بیرون باز نمی‌شود.", en: "Until it's fixed, this domain won't open from outside." },
@@ -284,12 +295,19 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
       ? `کسی تعداد زیادی نام ساختگی زیر «${params.parent}» می‌پرسد تا DNS را خسته کند. با یک دکمه جلویش را بگیرید.`
       : `Someone is asking lots of made-up names under “${params.parent}” to wear DNS out. Stop it with one button.`;
   }
+  if (item.rule === "dns_certificate_expiring" && typeof params.days_left === "number") {
+    const days = formatNumber(params.days_left, language);
+    why = params.days_left <= 0
+      ? (language === "fa" ? "گواهی تمام شده و دستگاه‌ها رمزدار وصل نمی‌شوند. گواهی را تمدید یا جایگزین کنید." : "The certificate has ended and devices can't connect encrypted. Renew or replace it.")
+      : (language === "fa" ? `گواهی ${days} روز دیگر تمام می‌شود. پیش از آن تمدید یا جایگزینش کنید.` : `The certificate ends in ${days} days. Renew or replace it before then.`);
+  }
   if (item.rule === "agent_unreachable" && typeof params.since === "number") {
     const when = formatRelative(params.since * 1000, language);
     why = language === "fa" ? `آخرین بار ${when} جواب داد. مطمئن شوید روی سرور روشن است.` : `It last answered ${when}. Make sure it's running on the server.`;
   }
   const severity = item.severity === "critical" || item.severity === "error" ? "critical" : item.severity === "warning" ? "warning" : "info";
-  const route = item.action?.route ?? (item.rule === "domain_problem" ? "#/services" : item.rule === "dns_unreachable" ? "#/dns/status" : DNS_MONITOR_RULES.has(item.rule) ? "#/dns/monitor" : undefined);
+  const route = item.action?.route ?? (item.rule === "domain_problem" ? "#/services" : item.rule === "dns_unreachable" ? "#/dns/status" : DNS_MONITOR_RULES.has(item.rule) ? "#/dns/monitor"
+    : item.rule === "dns_certificate_expiring" ? "#/dns/encrypted" : item.rule === "dns_trust_anchor_problem" ? "#/dns/settings" : undefined);
   return { title: fill(copy.title[language], values, language), why, button: copy.button[language], severity, route };
 }
 

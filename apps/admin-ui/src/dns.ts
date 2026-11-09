@@ -10,6 +10,7 @@ import type { Language } from "./i18n";
 import { fill, type Bi } from "./copy/text";
 import { fieldIssueMessage } from "./kit/people";
 import { useVisibleInterval } from "./polling";
+import type { ResolveExtras } from "./dnsSecure";
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -137,7 +138,7 @@ export type DnsOverride = {
   disabled?: boolean;
 };
 
-export type ResolveSource = "authoritative" | "override" | "cache" | "upstream" | "refused" | string;
+export type ResolveSource = "authoritative" | "override" | "cache" | "upstream" | "recursive" | "refused" | string;
 export type DnsAnswer = { name: string; type: string; ttl?: number | null; data: unknown };
 export type ResolveResult = {
   rcode?: string | number;
@@ -145,7 +146,10 @@ export type ResolveResult = {
   source?: ResolveSource;
   upstream?: string | null;
   rtt_ms?: number | null;
-};
+} & ResolveExtras;
+
+/** docs/40 §5: `dnssec` (ask for signatures, default true), `cd` (skip checking), `trace` (dns:write), `no_cache`. */
+export type ResolveInput = { name: string; type: string; client_ip?: string; dnssec?: boolean; cd?: boolean; trace?: boolean; no_cache?: boolean };
 
 // ── API ──────────────────────────────────────────────────────────────────────
 
@@ -242,7 +246,7 @@ export type DnsIntegration = {
 export const fetchDnsIntegration = (signal?: AbortSignal) => getJson<DnsIntegration>(`${BASE}/integration?${fresh()}`, signal);
 export const saveDnsIntegration = (body: Partial<DnsIntegrationSettings>) => mutateJson<DnsIntegration>(`${BASE}/integration`, { method: "PUT", body });
 
-export const resolveName = (body: { name: string; type: string; client_ip?: string }) => mutateJson<ResolveResult>(`${BASE}/resolve`, { method: "POST", body });
+export const resolveName = (body: ResolveInput) => mutateJson<ResolveResult>(`${BASE}/resolve`, { method: "POST", body });
 export const flushDnsCache = (name?: string) => mutateJson(`${BASE}/cache/flush`, { method: "POST", body: name ? { name } : {} });
 
 /**
@@ -340,11 +344,12 @@ export const TTL_MAX = 604_800;
 
 // ── upstream addresses ───────────────────────────────────────────────────────
 
-export type UpstreamProto = "udp" | "dot" | "doh";
+export type UpstreamProto = "udp" | "dot" | "doh" | "doq";
 
 /** `1.1.1.1:53` → udp, `tls://1.1.1.1:853#host` → dot, `https://…` → doh. */
 export function upstreamProto(address: string): UpstreamProto {
   if (/^tls:\/\//i.test(address)) return "dot";
+  if (/^quic:\/\//i.test(address)) return "doq";
   if (/^https:\/\//i.test(address)) return "doh";
   return "udp";
 }
@@ -355,6 +360,7 @@ export function buildUpstreamAddress(proto: UpstreamProto, host: string, tlsName
   if (proto === "doh") return /^https:\/\//i.test(value) ? value : `https://${value.replace(/^\/+/, "")}`;
   const withPort = (port: number) => (/:\d+$/.test(value) && !value.endsWith("]") ? value : `${isIPv6(value) ? `[${value}]` : value}:${port}`);
   if (proto === "dot") return `tls://${withPort(853)}${tlsName.trim() ? `#${tlsName.trim()}` : ""}`;
+  if (proto === "doq") return `quic://${withPort(853)}${tlsName.trim() ? `#${tlsName.trim()}` : ""}`;
   return withPort(53);
 }
 
@@ -369,7 +375,7 @@ export function upstreamAddressProblem(language: Language, address: string): str
       return fa ? "آدرس را مثل https://dns.google/dns-query بنویسید." : "Write the address like https://dns.google/dns-query.";
     }
   }
-  const body = proto === "dot" ? address.replace(/^tls:\/\//i, "").split("#")[0] : address;
+  const body = proto === "dot" || proto === "doq" ? address.replace(/^(tls|quic):\/\//i, "").split("#")[0] : address;
   if (isListenAddress(body)) return null;
   return fa ? "نشانی را مثل 1.1.1.1 بنویسید." : "Write the address like 1.1.1.1.";
 }
@@ -433,7 +439,8 @@ type Tone = "ok" | "warn" | "error" | "off" | "busy" | "info";
 export const PROTO_WORDS: Record<UpstreamProto, Bi> = {
   udp: { fa: "معمولی (بدون رمز)", en: "Plain (not encrypted)" },
   dot: { fa: "رمزدار با TLS", en: "Encrypted with TLS" },
-  doh: { fa: "رمزدار با HTTPS", en: "Encrypted with HTTPS" }
+  doh: { fa: "رمزدار با HTTPS", en: "Encrypted with HTTPS" },
+  doq: { fa: "رمزدار و سریع (DoQ)", en: "Encrypted and fast (DoQ)" }
 };
 
 export const STRATEGY_WORDS: Record<UpstreamStrategy, { label: Bi; body: Bi }> = {
@@ -462,6 +469,7 @@ export const SOURCE_WORDS: Record<string, { label: Bi; body: Bi; tone: Tone }> =
   authoritative: { label: { fa: "از دامنه‌های شما", en: "From your domains" }, body: { fa: "این نام در یکی از دامنه‌هایی است که MRK خودش جواب می‌دهد.", en: "This name is in one of the domains MRK answers for itself." }, tone: "ok" },
   cache: { label: { fa: "از جواب‌های ذخیره‌شده", en: "From stored answers" }, body: { fa: "MRK این را قبلاً پرسیده بود و جواب را نگه داشته بود؛ برای همین سریع بود.", en: "MRK asked this before and kept the answer, so it was quick." }, tone: "ok" },
   upstream: { label: { fa: "از اینترنت", en: "From the internet" }, body: { fa: "MRK این را از یک DNS بیرونی پرسید.", en: "MRK asked an outside DNS server." }, tone: "info" },
+  recursive: { label: { fa: "خودش از ریشه پیدا کرد", en: "Found from the root" }, body: { fa: "MRK بدون واسطه، از سرورهای ریشه اینترنت شروع کرد و خودش جواب را پیدا کرد.", en: "MRK started at the internet's root servers and found the answer itself, with no middleman." }, tone: "info" },
   refused: { label: { fa: "جواب داده نشد", en: "Refused" }, body: { fa: "این نشانی اجازه پرسیدن ندارد، یا پرسیدن از اینترنت خاموش است.", en: "This address isn't allowed to ask, or asking the internet is turned off." }, tone: "warn" }
 };
 
@@ -844,6 +852,17 @@ const DNS_FIELD_REASONS: Record<string, Bi> = {
   incorrect: { fa: "درست نوشته نشد؛ دوباره بنویسید.", en: "That isn't right; type it again." },
   outside_zone: { fa: "این نام بیرون از این دامنه است.", en: "This name is outside this domain." },
   too_long: { fa: "این متن بیش از حد بلند است؛ کوتاه‌ترش کنید.", en: "This is too long; shorten it." },
+  // D4 (docs/40 §0.1, §2.3)
+  less_than_query_timeout: { fa: "صبر کل باید از صبر هر سرور بیشتر باشد.", en: "The whole wait must be longer than each server's wait." },
+  address_required: { fa: "دست‌کم یک نشانی لازم است.", en: "At least one address is needed." },
+  listen_conflict: { fa: "این نشانی و پورت را بخش دیگری گرفته است؛ پورت دیگری بدهید.", en: "Another part already uses this address and port; pick another port." },
+  plain_doh_public: { fa: "بدون گواهی (پشت Traefik) فقط نشانی‌های داخلی مثل 127.0.0.1:8053 یا 172.17.0.1:8053 مجازند.", en: "Without a certificate (behind Traefik) only internal addresses like 127.0.0.1:8053 or 172.17.0.1:8053 are allowed." },
+  certificate_required: { fa: "این اتصال گواهی لازم دارد؛ اول در کارت «گواهی» یکی بسازید یا بارگذاری کنید.", en: "This connection needs a certificate; make or upload one in the Certificate card first." },
+  invalid_path: { fa: "مسیر باید با / شروع شود، مثل /dns-query", en: "The path must start with /, like /dns-query" },
+  invalid_network: { fa: "محدوده را مثل 172.16.0.0/12 بنویسید.", en: "Write the range like 172.16.0.0/12." },
+  token_invalid: { fa: "نام یا سقف این کلید درست نیست.", en: "This token's name or limit isn't valid." },
+  invalid_format: { fa: "شکل این مقدار درست نیست.", en: "This value isn't in the right format." },
+  invalid_type: { fa: "شکل این مقدار درست نیست.", en: "This value isn't in the right format." },
   required: { fa: "این خانه را پر کنید.", en: "Fill in this field." }
 };
 

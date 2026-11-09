@@ -164,8 +164,15 @@ func (e *Engine) heavyClient(a netip.Addr) bool {
 }
 
 func protoCode(p Proto) uint8 {
-	if p == TCP {
+	switch p {
+	case TCP:
 		return querylog.ProtoTCP
+	case DoT:
+		return querylog.ProtoDoT
+	case DoH:
+		return querylog.ProtoDoH
+	case DoQ:
+		return querylog.ProtoDoQ
 	}
 	return querylog.ProtoUDP
 }
@@ -184,7 +191,8 @@ func (e *Engine) record(shard uint32, start int64, client netip.Addr, proto Prot
 	}
 	h := querylog.Hdr{TS: start, Client: client, Upstream: upstream, DurUS: uint32(d), Size: uint16(size), QType: qtype,
 		Rcode: uint8(rcode & 15), Source: src, Proto: protoCode(proto), Flags: flags}
-	e.mon.st.C.Observe(shard, h.Rcode, src, qtype, h.DurUS)
+	e.mon.st.C.Observe(shard, h.Rcode, src, qtype, h.DurUS, flags)
+	e.mon.st.C.ObserveProto(shard, h.Proto)
 	e.mon.ring.Put(shard, &h, name)
 }
 

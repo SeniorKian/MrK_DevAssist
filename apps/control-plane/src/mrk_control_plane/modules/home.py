@@ -103,7 +103,15 @@ ATTENTION_RULES: dict[str, dict[str, Any]] = {
     # (the pressure/events APIs hide names from dns:read-only users too).
     "dns_attack_detected": {"any_of": ["dns:logs"],
                             "action": {"kind": "navigate", "route": "#/dns/monitor"}},
+    # docs/40 §5: the certificate of DoT/DoH/DoQ expires soon (or has), and the
+    # DNSSEC root trust anchor cannot be kept up to date.
+    "dns_certificate_expiring": {"any_of": ["dns:read"],
+                                 "action": {"kind": "navigate", "route": "#/dns/encrypted"}},
+    "dns_trust_anchor_problem": {"any_of": ["dns:read"],
+                                 "action": {"kind": "navigate", "route": "#/dns/settings"}},
 }
+CERTIFICATE_WARNING_DAYS = 14
+CERTIFICATE_ERROR_DAYS = 3
 MAX_DNS_ATTACK_ITEMS = 5
 
 QUICK_ACTIONS: tuple[dict[str, Any], ...] = (
@@ -318,8 +326,50 @@ def evaluate(facts: dict[str, Any], now: float) -> list[dict[str, Any]]:
             items.append(_item("dns_attack_detected", "warning",
                                {"parent": parent, "since": attack.get("since")}, parent))
 
+    # 18./19. D4: encrypted-DNS certificate and DNSSEC trust anchor (docs/40 §5), from
+    # the cached engine status (no engine call per home request).
+    d4 = (dns or {}).get("d4") if dns and dns.get("reachable") else None
+    if isinstance(d4, dict):
+        certificate = d4.get("certificate") if isinstance(d4.get("certificate"), dict) else {}
+        days = certificate.get("days_left")
+        if d4.get("encrypted_in_use") and certificate.get("present") and isinstance(
+            days, int | float
+        ) and not isinstance(days, bool) and days <= CERTIFICATE_WARNING_DAYS:
+            items.append(_item("dns_certificate_expiring",
+                               "error" if days <= CERTIFICATE_ERROR_DAYS else "warning",
+                               {"days_left": int(days), "not_after": certificate.get("not_after"),
+                                "self_signed": bool(certificate.get("self_signed"))}))
+        dnssec = d4.get("dnssec") if isinstance(d4.get("dnssec"), dict) else {}
+        if dnssec.get("mode") in {"validate", "log_only"}:
+            anchors = [item for item in dnssec.get("trust_anchors") or []
+                       if isinstance(item, dict)]
+            valid = sum(1 for item in anchors if item.get("state") == "valid")
+            error = dnssec.get("trust_anchor_error")
+            if (anchors and not valid) or (isinstance(error, str) and error):
+                items.append(_item("dns_trust_anchor_problem", "error", {
+                    "valid_anchors": valid,
+                    "error": error[:200] if isinstance(error, str) else None,
+                    "updated_at": dnssec.get("trust_anchor_updated_at"),
+                }))
+
     items.sort(key=lambda item: (SEVERITY_ORDER[item["severity"]], item["id"]))
     return items
+
+
+def _dns_d4(engine: Any) -> dict[str, Any] | None:
+    """The D4 parts of a cached engine status that home rules read (docs/40 §3)."""
+    if not isinstance(engine, dict):
+        return None
+    encrypted = engine.get("encrypted") if isinstance(engine.get("encrypted"), dict) else {}
+    listeners = engine.get("listeners") if isinstance(engine.get("listeners"), list) else []
+    return {
+        "certificate": encrypted.get("certificate")
+        if isinstance(encrypted.get("certificate"), dict) else None,
+        # The certificate matters only while a TLS listener (DoT/DoQ, DoH with TLS) runs.
+        "encrypted_in_use": any(isinstance(item, dict) and item.get("proto") in {
+            "dot", "doq", "doh"} and item.get("tls", True) is not False for item in listeners),
+        "dnssec": engine.get("dnssec") if isinstance(engine.get("dnssec"), dict) else None,
+    }
 
 
 def checklist_done(facts: dict[str, Any]) -> dict[str, bool | None]:
@@ -743,7 +793,8 @@ class HomeService:
                 "checked_at": status.get("checked_at"),
                 "setup_complete": bool(status.get("setup_complete")),
                 # Cached by the dns monitor loop; never an engine call per request.
-                "pressure": service.monitor.cached_pressure()}
+                "pressure": service.monitor.cached_pressure(),
+                "d4": _dns_d4(status.get("engine"))}
 
     async def _people(self) -> dict[str, Any]:
         def users() -> int:

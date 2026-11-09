@@ -570,6 +570,22 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   dns_querylog_disabled: { fa: "ثبت لاگ پرسش‌ها خاموش است. از «لاگ» در حالت پیشرفته روشنش کنید.", en: "The question log is off. Turn it on under Log in Advanced mode." },
   dns_query_invalid: { fa: "فیلترهای جست‌وجو درست نیست؛ زمان، نشانی یا نام را بررسی کنید.", en: "The search filters aren't right; check the time, address or name.", action: "fixFields" },
   dns_stream_limit: { fa: "الان نمایش‌های زنده زیادی باز است. یکی را ببندید و دوباره امتحان کنید.", en: "Too many live views are open. Close one and try again.", action: "retry" },
+  // ── MRK DNS D4: root, DNSSEC, encrypted DNS (docs/40 §3, §5) ─────────────
+  dns_settings_invalid: { fa: "تنظیمات DNS ذخیره نشد؛ خانه‌های قرمز را بررسی کنید.", en: "The DNS settings weren't saved; check the fields in red.", action: "fixFields" },
+  certificate_required: { fa: "این اتصال رمزدار گواهی لازم دارد. اول در کارت «گواهی» یکی بسازید یا بارگذاری کنید.", en: "This encrypted connection needs a certificate. Make or upload one in the Certificate card first." },
+  dns_certificate_required: { fa: "این اتصال رمزدار گواهی لازم دارد. اول در کارت «گواهی» یکی بسازید یا بارگذاری کنید.", en: "This encrypted connection needs a certificate. Make or upload one in the Certificate card first." },
+  certificate_in_use: { fa: "این گواهی الان استفاده می‌شود. اول اتصال‌های رمزدار را خاموش کنید، بعد حذفش کنید.", en: "This certificate is in use. Turn off the encrypted connections first, then remove it." },
+  dns_certificate_in_use: { fa: "این گواهی الان استفاده می‌شود. اول اتصال‌های رمزدار را خاموش کنید، بعد حذفش کنید.", en: "This certificate is in use. Turn off the encrypted connections first, then remove it." },
+  tls_invalid: { fa: "این گواهی یا کلید پذیرفته نشد. فایل‌ها را بررسی کنید.", en: "This certificate or key wasn't accepted. Check the files." },
+  dns_tls_invalid: { fa: "این گواهی یا کلید پذیرفته نشد. فایل‌ها را بررسی کنید.", en: "This certificate or key wasn't accepted. Check the files." },
+  token_not_found: { fa: "این کلید دسترسی دیگر وجود ندارد. فهرست را تازه کنید.", en: "This access token no longer exists. Refresh the list.", action: "refreshList" },
+  dns_token_not_found: { fa: "این کلید دسترسی دیگر وجود ندارد. فهرست را تازه کنید.", en: "This access token no longer exists. Refresh the list.", action: "refreshList" },
+  listen_conflict: { fa: "این نشانی و پورت را بخش دیگری گرفته است؛ پورت دیگری بدهید.", en: "Another part already uses this address and port; pick another port.", action: "fixFields" },
+  plain_doh_public: { fa: "بدون گواهی (پشت Traefik) فقط نشانی‌های داخلی مثل 127.0.0.1:8053 مجازند.", en: "Without a certificate (behind Traefik) only internal addresses like 127.0.0.1:8053 are allowed.", action: "fixFields" },
+  token_invalid: { fa: "نام یا سقف این کلید درست نیست؛ نام ۱ تا ۶۴ نویسه و سقف ۱ تا ۱۰۰۰۰.", en: "This token's name or limit isn't valid; a name of 1 to 64 characters and a limit of 1 to 10000.", action: "fixFields" },
+  dns_token_invalid: { fa: "نام یا سقف این کلید درست نیست؛ نام ۱ تا ۶۴ نویسه و سقف ۱ تا ۱۰۰۰۰.", en: "This token's name or limit isn't valid; a name of 1 to 64 characters and a limit of 1 to 10000.", action: "fixFields" },
+  dns_doh_plain_disabled: { fa: "برای وصل کردن دامنه، اول در DNS › «اتصال رمزدار» گزینه «پشت Traefik» را روشن کنید.", en: "To connect a domain, first turn on “Behind Traefik” in DNS › Encrypted connections." },
+  dns_profile_invalid: { fa: "پروفایل ساخته نشد؛ نشانی DNS رمزدار درست نیست.", en: "The profile wasn't made; the encrypted DNS address isn't valid." },
   "dns_logs:confirmation_mismatch": { fa: "کلمه تأیید درست نوشته نشد. دوباره بنویسید.", en: "The confirmation word wasn't typed correctly. Type it again.", field: "confirmation" }
 };
 

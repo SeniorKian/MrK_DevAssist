@@ -5,7 +5,9 @@ While the engine is installed (its admin socket exists) one loop:
 * every ``EVENTS_SECONDS`` reads ``GET /v1/events?after=<seq>`` and turns
   engine events into notification-centre events (``dns.pressure``,
   ``dns.attack_detected``, ``dns.mitigation_auto``, ``dns.logs_degraded`` /
-  ``dns.logs_recovered``). The cursor lives in memory only; after a panel
+  ``dns.logs_recovered``; D4, docs/40 §5: ``dns.dnssec_trust_anchor_failed``,
+  ``dns.dnssec_bogus_spike``, ``dns.tls_certificate_expiring|expired``,
+  ``dns.priming_failed``). The cursor lives in memory only; after a panel
   restart the first read just takes the current tail so old events are not
   replayed. An engine restart (its ``next`` going backwards) restarts at 0.
 * every ``PRESSURE_SECONDS`` caches ``GET /v1/pressure`` for the home rules,
@@ -47,6 +49,23 @@ LEVEL_TITLES = {
     "critical": "MRK DNS is under heavy load",
     "emergency": "MRK DNS is overloaded and protecting itself",
     "normal": "MRK DNS load is back to normal",
+}
+
+
+# D4 engine event -> (notification type, severity, title, panel route), docs/40 §5.
+D4_EVENTS: dict[str, tuple[str, str, str, str]] = {
+    "dnssec.trust_anchor_failed": ("dns.dnssec_trust_anchor_failed", "error",
+                                   "MRK DNS could not update the DNSSEC root key",
+                                   "#/dns/settings"),
+    "dnssec.bogus_spike": ("dns.dnssec_bogus_spike", "warning",
+                           "Many DNS answers failed the DNSSEC check", "#/dns/monitor"),
+    "tls.certificate_expiring": ("dns.tls_certificate_expiring", "warning",
+                                 "The encrypted DNS certificate expires soon",
+                                 "#/dns/encrypted"),
+    "tls.certificate_expired": ("dns.tls_certificate_expired", "error",
+                                "The encrypted DNS certificate has expired", "#/dns/encrypted"),
+    "resolution.priming_failed": ("dns.priming_failed", "error",
+                                  "MRK DNS cannot reach the root servers", "#/dns/settings"),
 }
 
 
@@ -256,10 +275,42 @@ class DnsMonitor:
                                              or data.get("degraded_reason"), 64),
                              "route": "#/dns/logs"},
                 )
+        elif kind in D4_EVENTS:
+            event = self._d4_event(kind, data)
         if event is None:
             return False
         self.ctx.events.publish(event)
         return True
+
+    def _d4_event(self, kind: str, data: dict[str, Any]) -> Event | None:
+        """docs/40 §5: DNSSEC, certificate and root-priming problems."""
+        name, severity, title, route = D4_EVENTS[kind]
+        details: dict[str, Any] = {"route": route}
+        message = ""
+        dedupe = name
+        if kind == "dnssec.bogus_spike":
+            count = data.get("count")
+            names = [item[:253] for item in data.get("names") or []
+                     if isinstance(item, str)][:10]
+            details.update({"count": count if isinstance(count, int | float) else None,
+                            "names": names})
+            message = f"{count} answers failed the DNSSEC check" if isinstance(
+                count, int | float) else ""
+        elif kind == "tls.certificate_expiring":
+            days = _int(data.get("days_left"))
+            details["days_left"] = days
+            message = f"{days} days left" if days is not None else ""
+            dedupe = f"{name}.{days}"
+        elif kind == "tls.certificate_expired":
+            details["not_after"] = _text(data.get("not_after"), 40)
+        else:  # trust anchor / priming failures
+            error = _text(data.get("error"), 300)
+            details["error"] = error
+            message = error or ""
+        if not self._fresh_key(dedupe):
+            return None
+        return Event(type=name, severity=severity, title=title, message=message,
+                     module=MODULE_NAME, dedupe_key=dedupe, details=details)
 
     def _pressure_event(self, data: dict[str, Any]) -> Event | None:
         level = data.get("level") if data.get("level") in LEVELS else data.get("to")

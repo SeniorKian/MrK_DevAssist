@@ -452,7 +452,8 @@ def listen_address(value: Any) -> str:
 
 
 def upstream_address(value: Any) -> str:
-    """``ip[:port]``, ``tls://ip[:port][#sni]`` or ``https://host/path`` (no credentials)."""
+    """``ip[:port]``, ``tls://ip[:port][#sni]``, ``quic://host[:port][#sni]`` (D4, DoQ) or
+    ``https://host/path`` (no credentials)."""
     if not isinstance(value, str) or not value.strip() or len(value) > 512:
         raise ValueError("invalid")
     text = value.strip()
@@ -468,6 +469,19 @@ def upstream_address(value: Any) -> str:
         address, _, sni = rest.partition("#")
         host, _port = _host_port(address, 853)
         ipaddress.ip_address(host)
+        if sni:
+            name, problem = name_problem(sni, allow_underscore=False, allow_wildcard=False)
+            if problem:
+                raise ValueError("invalid")
+        return text
+    if text.startswith("quic://"):
+        rest = text[len("quic://"):]
+        address, _, sni = rest.partition("#")
+        host, _port = _host_port(address, 853)
+        if not _is_ip(host):
+            name, problem = name_problem(host, allow_underscore=False, allow_wildcard=False)
+            if problem:
+                raise ValueError("invalid")
         if sni:
             name, problem = name_problem(sni, allow_underscore=False, allow_wildcard=False)
             if problem:
@@ -529,6 +543,9 @@ def engine_settings(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise DnsInputError("dns_settings_invalid", "Settings must be an object",
                             [_field("body", "invalid_type")])
+    # ``warnings`` is panel advice added to GET/PUT answers (docs/40 §5), not a setting.
+    if "warnings" in payload:
+        payload = {key: value for key, value in payload.items() if key != "warnings"}
     errors: list[dict[str, Any]] = []
     version = payload.get("config_version")
     if version is None or isinstance(version, bool) or not isinstance(version, int | str):
@@ -617,6 +634,9 @@ def engine_settings(payload: Any) -> dict[str, Any]:
     ):
         errors.append(_field("overrides.enabled", "invalid_type"))
     errors.extend(d2_settings_errors(payload))
+    from .dns_validate_d4 import d4_settings_errors
+
+    errors.extend(d4_settings_errors(payload))
     if errors:
         raise DnsInputError("dns_settings_invalid", "Some DNS settings are invalid", errors[:50])
     return payload

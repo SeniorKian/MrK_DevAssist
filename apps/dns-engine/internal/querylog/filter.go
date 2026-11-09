@@ -30,6 +30,8 @@ type Filter struct {
 	Source       int    // -1 = any
 	Blocked      int    // 0 any, 1 only blocked, 2 only not blocked
 	MinUS        uint32
+	Proto        int // 0 = any, else the proto code + 1
+	DNSSEC       int // 0 any, else dnssecFilter* (docs/40 §4)
 	Limit        int
 	Cursor       *Cursor
 }
@@ -209,6 +211,30 @@ func ParseFilter(v url.Values) (Filter, error) {
 			l.Add("source", "invalid_choice", "choices", SourceNames[:])
 		}
 	}
+	if s := get("proto"); s != "" {
+		found := false
+		for i, n := range ProtoNames {
+			if strings.EqualFold(n, s) {
+				f.Proto, found = i+1, true
+			}
+		}
+		if !found {
+			l.Add("proto", "invalid_choice", "choices", ProtoNames[:])
+		}
+	}
+	switch strings.ToLower(get("dnssec")) {
+	case "":
+	case "secure":
+		f.DNSSEC = dnssecSecure
+	case "insecure":
+		f.DNSSEC = dnssecInsecure
+	case "bogus":
+		f.DNSSEC = dnssecBogus
+	case "none":
+		f.DNSSEC = dnssecNone
+	default:
+		l.Add("dnssec", "invalid_choice", "choices", []string{"secure", "insecure", "bogus", "none"})
+	}
 	switch strings.ToLower(get("blocked")) {
 	case "":
 	case "true", "1", "yes":
@@ -245,6 +271,30 @@ func ParseFilter(v url.Values) (Filter, error) {
 		return f, err
 	}
 	return f, nil
+}
+
+// DNSSEC filter values.
+const (
+	dnssecSecure = iota + 1
+	dnssecInsecure
+	dnssecBogus
+	dnssecNone
+)
+
+const dnssecMask = FlagSecure | FlagBogus | FlagInsecure
+
+func (f *Filter) matchFlags(fl uint8) bool {
+	switch f.DNSSEC {
+	case dnssecSecure:
+		return fl&FlagSecure != 0
+	case dnssecInsecure:
+		return fl&FlagInsecure != 0
+	case dnssecBogus:
+		return fl&FlagBogus != 0
+	case dnssecNone:
+		return fl&dnssecMask == 0
+	}
+	return true
 }
 
 // matchName reports whether a presentation name matches the name filter.
@@ -351,6 +401,9 @@ func (mt *matcher) match(b *block, i int) bool {
 	if b.dur[i] < f.MinUS {
 		return false
 	}
+	if f.Proto > 0 && int(b.proto[i]) != f.Proto-1 || !f.matchFlags(b.flags[i]) {
+		return false
+	}
 	if mt.nameOK != nil && !mt.nameOK[b.name[i]] {
 		return false
 	}
@@ -369,6 +422,9 @@ func (f *Filter) MatchRow(r *Row) bool {
 		return false
 	}
 	if f.Blocked == 1 && !Blocked(r.Source) || f.Blocked == 2 && Blocked(r.Source) || r.DurUS < f.MinUS {
+		return false
+	}
+	if f.Proto > 0 && int(r.Proto) != f.Proto-1 || !f.matchFlags(r.Flags) {
 		return false
 	}
 	if !f.matchName(r.Name) {

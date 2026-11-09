@@ -1,13 +1,13 @@
 /**
  * «DNS» (docs/36, contract docs/37 §5): MRK's own DNS server, phase D1.
- * Tabs from nav.ts: status · monitor (D2) · logs (D2, dns:logs) · setup · names · test · settings (Advanced, dns:admin).
+ * Tabs from nav.ts: status · monitor (D2) · logs (D2, dns:logs) · setup · names · test · encrypted (D4) · settings (dns:admin).
  * The D3 («دور زدن تحریم») tab is added when that phase lands.
  *
  * This file holds the page shell plus the two small tabs (status and test); the bigger tabs
  * load on demand from DnsMonitor.tsx, DnsLogs.tsx, DnsSetup.tsx, DnsNames.tsx and DnsSettings.tsx.
  */
 import { lazy, useState, type FormEvent } from "react";
-import { Box, Button, CircularProgress, Divider, MenuItem, Stack, TextField, Typography } from "@mui/material";
+import { Box, Button, Checkbox, CircularProgress, Divider, FormControlLabel, MenuItem, Stack, TextField, Typography } from "@mui/material";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import TravelExploreRoundedIcon from "@mui/icons-material/TravelExploreRounded";
 import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
@@ -29,12 +29,14 @@ import {
   resolveName, sourceWord, answerValue, upstreamProto, PROTO_WORDS, type DnsStatus, type ResolveResult
 } from "./dns";
 import { useDnsStatus } from "./dns";
+import { DnssecBadge, TRACE_COPY, TraceView } from "./DnsTrace";
 
 const DnsSetupTab = lazy(() => import("./DnsSetup"));
 const DnsNamesTab = lazy(() => import("./DnsNames"));
 const DnsSettingsTab = lazy(() => import("./DnsSettings"));
 const DnsMonitorTab = lazy(() => import("./DnsMonitor"));
 const DnsLogsTab = lazy(() => import("./DnsLogs"));
+const DnsEncryptedTab = lazy(() => import("./DnsEncrypted"));
 
 const COPY = {
   title: { fa: "DNS", en: "DNS" },
@@ -103,7 +105,13 @@ const COPY = {
   upstreamUsed: { fa: "DNS بیرونی که جواب داد", en: "Outside DNS that answered" },
   rcode: { fa: "کد جواب", en: "Response code" },
   notReady: { fa: "تا DNS روشن نشده، امتحان کردن ممکن نیست.", en: "You can try names once DNS is running." },
-  testFailed: { fa: "پرسش انجام نشد.", en: "The question didn't go through." }
+  testFailed: { fa: "پرسش انجام نشد.", en: "The question didn't go through." },
+  trace: { fa: "مسیر کامل را نشانم بده", en: "Show me the full path" },
+  traceHint: { fa: "از ریشه اینترنت تا خود دامنه، قدم‌به‌قدم؛ کمی کندتر است.", en: "From the internet's root to the domain itself, step by step; a little slower." },
+  traceNeedsWrite: { fa: "برای دیدن مسیر کامل، اجازه «تغییر DNS» لازم است.", en: "Seeing the full path needs permission to change DNS." },
+  askSignatures: { fa: "امضاها را هم بخواه", en: "Ask for signatures too" },
+  skipCheck: { fa: "بدون بررسی امضا (برای عیب‌یابی)", en: "Don't check signatures (for troubleshooting)" },
+  noCache: { fa: "از حافظه استفاده نکن، تازه بپرس", en: "Don't use memory, ask fresh" }
 } satisfies Record<string, Bi>;
 
 /** Plain words for the common question types; the rest keep their technical name. */
@@ -355,8 +363,13 @@ function StatusTab({ permissions }: { permissions: readonly string[] }) {
   );
 }
 
-function TestTab() {
+function TestTab({ permissions }: { permissions: readonly string[] }) {
   const { language, isAdvanced } = useKit();
+  const canTrace = hasPermission(permissions, "dns:write");
+  const [trace, setTrace] = useState(false);
+  const [askDo, setAskDo] = useState(true);
+  const [skipCheck, setSkipCheck] = useState(false);
+  const [noCache, setNoCache] = useState(false);
   const { status, error: statusError, reload } = useDnsStatus(null);
   const [name, setName] = useState("");
   const [type, setType] = useState("A");
@@ -376,7 +389,15 @@ function TestTab() {
     setBusy(true);
     setError(null);
     try {
-      const data = await resolveName({ name: trimmed, type, ...(isAdvanced && clientIp.trim() ? { client_ip: clientIp.trim() } : {}) });
+      const data = await resolveName({
+        name: trimmed,
+        type,
+        ...(isAdvanced && clientIp.trim() ? { client_ip: clientIp.trim() } : {}),
+        ...(trace && canTrace ? { trace: true } : {}),
+        ...(isAdvanced && !askDo ? { dnssec: false } : {}),
+        ...(isAdvanced && skipCheck ? { cd: true } : {}),
+        ...(isAdvanced && noCache ? { no_cache: true } : {})
+      });
       setResult({ name: trimmed, type, data: data ?? {} });
     } catch (caught) {
       setResult(null);
@@ -438,6 +459,19 @@ function TestTab() {
             </Button>
           </Stack>
           {!ready && status ? <Typography variant="caption" color="text.secondary">{pick(language, COPY.notReady)}</Typography> : null}
+          <Stack direction={{ xs: "column", md: "row" }} columnGap={2} sx={{ mt: 0.5 }}>
+            <Box>
+              <FormControlLabel control={<Checkbox checked={trace && canTrace} disabled={!canTrace} onChange={(event) => setTrace(event.target.checked)} />} label={pick(language, COPY.trace)} />
+              <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: -0.5, mx: 4 }}>{pick(language, canTrace ? COPY.traceHint : COPY.traceNeedsWrite)}</Typography>
+            </Box>
+            {isAdvanced ? (
+              <>
+                <FormControlLabel control={<Checkbox checked={askDo} onChange={(event) => setAskDo(event.target.checked)} />} label={pick(language, COPY.askSignatures)} />
+                <FormControlLabel control={<Checkbox checked={skipCheck} onChange={(event) => setSkipCheck(event.target.checked)} />} label={pick(language, COPY.skipCheck)} />
+                <FormControlLabel control={<Checkbox checked={noCache} onChange={(event) => setNoCache(event.target.checked)} />} label={pick(language, COPY.noCache)} />
+              </>
+            ) : null}
+          </Stack>
         </Box>
       </SectionCard>
 
@@ -456,6 +490,7 @@ function TestTab() {
               {typeof result.data.rtt_ms === "number" ? <>{" · "}{say(language, COPY.took, { ms: formatQps(language, result.data.rtt_ms) })}</> : null}
             </Typography>
             {source.body ? <Typography variant="body2" color="text.secondary">{source.body}</Typography> : null}
+            <DnssecBadge dnssec={result.data.dnssec} ede={result.data.ede} />
             {answers.length ? (
               <Stack divider={<Divider flexItem />} spacing={1}>
                 {answers.map((answer, index) => (
@@ -486,6 +521,13 @@ function TestTab() {
               />
             ) : null}
           </Stack>
+        </SectionCard>
+      ) : null}
+
+      {result && Array.isArray(result.data.trace) ? (
+        <SectionCard title={pick(language, TRACE_COPY.traceTitle)} hint={pick(language, TRACE_COPY.traceHint)}
+          status={<StatusPill tone="info" label={say(language, TRACE_COPY.steps, { count: result.data.trace.length })} />}>
+          <TraceView steps={result.data.trace} forwardMode={result.data.source !== "recursive" && result.data.trace.every((step) => (step.zone ?? ".") === "." || step.server === "validator")} />
         </SectionCard>
       ) : null}
     </Stack>
@@ -522,7 +564,8 @@ export default function DnsPage(props: GroupPageProps) {
           {current.key === "logs" && <DnsLogsTab permissions={permissions} />}
           {current.key === "setup" && <DnsSetupTab permissions={permissions} />}
           {current.key === "names" && <DnsNamesTab permissions={permissions} />}
-          {current.key === "test" && <TestTab />}
+          {current.key === "test" && <TestTab permissions={permissions} />}
+          {current.key === "encrypted" && <DnsEncryptedTab permissions={permissions} />}
           {current.key === "settings" && <DnsSettingsTab permissions={permissions} />}
         </TabBody>
       </TabPanel>

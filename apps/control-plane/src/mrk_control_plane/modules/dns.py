@@ -13,6 +13,9 @@ Routes (all under ``/api/v1/dns``; every change needs CSRF and is audited):
 * D2 (docs/38 §4, ``dns_logs``): ``logs[/status|/stream|/export]`` (dns:logs),
   ``DELETE logs`` (dns:admin), ``stats``/``pressure`` (dns:read),
   ``mitigations[/{id}]`` (dns:write); background work in ``dns_monitor``.
+* D4 (docs/40 §5, ``dns_encrypted``): ``dnssec[/refresh]``, ``tls[/self-signed]``,
+  ``doh/tokens[/{id}]``, ``encrypted/clients``, ``encrypted/apple-profile``; settings
+  answers carry ``warnings``; ``resolve`` takes ``dnssec/cd/trace/no_cache``.
 
 The engine runs in its own container (compose profile ``dns``) and is reached
 over its admin unix socket (``dns_client``). Without the socket every engine
@@ -40,7 +43,7 @@ from ..config import setting_env
 from ..dns_client import DnsClient, DnsError
 from ..models import ServiceDomain, SystemSetting
 from ..module_context import Event, ModuleContext
-from . import dns_logs, dns_setup
+from . import dns_encrypted, dns_logs, dns_setup
 from .dns_monitor import DnsMonitor
 from .dns_validate import (
     MAX_IMPORT_BYTES,
@@ -54,6 +57,7 @@ from .dns_validate import (
     zone_from_path,
     zone_patch_body,
 )
+from .dns_validate_d4 import doh_public, resolve_flags, settings_warnings, tls_listeners_enabled
 
 LOGGER = logging.getLogger(__name__)
 MODULE_NAME = "dns"
@@ -64,6 +68,8 @@ MANAGED_COMMENT = "managed by MRK: services"
 SERVICES_SOURCE = "services"
 STATUS_TTL_SECONDS = 10.0
 SETUP_TTL_SECONDS = 60.0
+ENGINE_SETTINGS_TTL_SECONDS = 30.0
+RESOLVE_TIMEOUT_SECONDS = 35.0  # resolve_timeout_ms may be up to 30 s (docs/40 §2.1)
 FACTS_TTL_SECONDS = 30.0
 LOOP_SECONDS = 60.0
 SYNC_EVERY_SECONDS = 600.0
@@ -184,6 +190,76 @@ class DnsService:
         self._sync_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._last_sync_at = 0.0
+        self._engine_settings: tuple[float, dict[str, Any]] | None = None
+
+    # ------------------------------------------------------------------ engine settings cache
+    async def current_settings(self, *, refresh: bool = False) -> dict[str, Any] | None:
+        """The engine settings document, cached briefly (``dns-doh``, device guides).
+
+        ``refresh`` re-reads unless the copy is under two seconds old."""
+        cached = self._engine_settings
+        if cached is not None:
+            age = time.monotonic() - cached[0]
+            if age < (2.0 if refresh else ENGINE_SETTINGS_TTL_SECONDS):
+                return cached[1]
+        if not dns_client.installed():
+            return None
+        value = await self.client.get("/v1/settings")
+        self.remember_settings(value)
+        return value if isinstance(value, dict) else None
+
+    def remember_settings(self, value: Any) -> None:
+        if isinstance(value, dict):
+            self._engine_settings = (time.monotonic(), value)
+
+    def cached_settings(self) -> dict[str, Any] | None:
+        return self._engine_settings[1] if self._engine_settings else None
+
+    def invalidate_settings(self) -> None:
+        self._engine_settings = None
+
+    def plain_doh_port(self) -> int | None:
+        """Port of the plain-HTTP DoH listener when ``doh.enabled && !doh.tls``."""
+        settings = self.cached_settings() or {}
+        encrypted = settings.get("encrypted") if isinstance(settings.get("encrypted"),
+                                                            dict) else {}
+        doh = encrypted.get("doh")
+        if not isinstance(doh, dict) or doh.get("enabled") is not True or doh.get(
+            "tls"
+        ) is not False:
+            return None
+        from .dns_validate_d4 import listen_on
+
+        ports = []
+        for item in doh.get("listen") or []:
+            try:
+                ports.append(listen_on(item, 443)[1])
+            except ValueError:
+                continue
+        return ports[0] if ports else None
+
+    async def settings_warnings(self, settings: Any) -> list[dict[str, str]]:
+        """Non-blocking advice for GET/PUT settings (docs/40 §5); engine trouble skips a check."""
+        if not isinstance(settings, dict):
+            return []
+        domains = len(await asyncio.to_thread(dns_encrypted.doh_domains, self.ctx))
+        tokens: int | None = None
+        certificate: dict[str, Any] | None = None
+        if doh_public(settings, domains):
+            try:
+                payload = await self.client.get("/v1/doh/tokens")
+                items = payload.get("items") if isinstance(payload, dict) else None
+                tokens = len(items) if isinstance(items, list) else None
+            except DnsError:
+                tokens = None
+        if tls_listeners_enabled(settings):
+            try:
+                value = await self.client.get("/v1/tls")
+                certificate = value if isinstance(value, dict) else None
+            except DnsError:
+                certificate = None
+        return settings_warnings(settings, tokens=tokens, certificate=certificate,
+                                 plain_domains=domains)
 
     # ------------------------------------------------------------------ settings
     def get_settings(self) -> dict[str, Any]:
@@ -494,6 +570,11 @@ class DnsService:
     # ------------------------------------------------------------------ lifecycle
     async def _tick(self) -> None:
         await self.status(refresh=True)
+        if (self.last_status or {}).get("reachable"):
+            try:
+                await self.current_settings()
+            except DnsError:
+                pass
         settings = self.get_settings()
         wanted = settings["services_overrides"] or settings["internal_zone_enabled"]
         due = time.monotonic() - self._last_sync_at >= SYNC_EVERY_SECONDS
@@ -606,15 +687,25 @@ def register(ctx: ModuleContext) -> None:
         return await service.setup_view(refresh=refresh)
 
     # ---------------------------------------------------------------- engine settings
+    async def with_warnings(value: Any) -> Any:
+        service.remember_settings(value)
+        if isinstance(value, dict):
+            value = {**value, "warnings": await service.settings_warnings(value)}
+        return value
+
     @router.get("/settings", response_model=None)
     async def get_settings(request: Request) -> Any:
-        return await read(request, "dns:admin", lambda: service.client.get("/v1/settings"))
+        async def work() -> Any:
+            return await with_warnings(await service.client.get("/v1/settings"))
+
+        return await read(request, "dns:admin", work)
 
     @router.put("/settings", response_model=None)
     async def put_settings(request: Request) -> Any:
         async def work(body: Any) -> tuple[Any, str | None]:
             payload = engine_settings(body)
-            return await service.client.request("PUT", "/v1/settings", payload), "engine"
+            saved = await service.client.request("PUT", "/v1/settings", payload)
+            return await with_warnings(saved), "engine"
 
         return await change(request, "dns:admin", "dns.settings.update", "dns_settings",
                             "engine", work)
@@ -867,8 +958,15 @@ def register(ctx: ModuleContext) -> None:
         principal = ctx.require_principal(request, "dns:read")
         ctx.require_csrf(request, principal)
         try:
-            payload = resolve_body(await body_of(request))
-            return await service.client.request("POST", "/v1/resolve", payload, timeout=8.0)
+            raw = await body_of(request)
+            payload = resolve_body(raw)
+            flags = resolve_flags(raw)
+            if flags.get("trace"):
+                # A trace asks authorities directly and skips every cache (docs/40 §5).
+                ctx.require_principal(request, "dns:write")
+            payload.update(flags)
+            return await service.client.request("POST", "/v1/resolve", payload,
+                                                timeout=RESOLVE_TIMEOUT_SECONDS)
         except (DnsInputError, DnsError) as exc:
             return fail(exc)
 
@@ -894,6 +992,9 @@ def register(ctx: ModuleContext) -> None:
     # D2 (docs/38 §4): query log, stats, pressure, mitigations.
     dns_logs.register_routes(ctx, router, service, fail=fail, audit=audit, change=change,
                              read=read)
+    # D4 (docs/40 §5): DNSSEC, certificates, DoH tokens, device guides.
+    dns_encrypted.register_routes(ctx, router, service, fail=fail, change=change, read=read,
+                                  body_of=body_of)
 
     ctx.routers.append(router)
     ctx.start_hooks.append(service.start)

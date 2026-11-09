@@ -67,7 +67,7 @@ export function Login({ language, expired, onLogin, onLanguageChange, registrati
         </Alert>
       ) : null}
 
-      <Box component="form" noValidate onSubmit={(event) => void submit(event)} sx={{ mt: 3 }}>
+      <Box component="form" noValidate onSubmit={(event) => void submit(event)} sx={{ mt: 3.5 }}>
         <Stack spacing={2}>
           <TextField
             label={language === "fa" ? "ایمیل یا نام کاربری" : "Email or username"}

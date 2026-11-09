@@ -51,7 +51,7 @@ func TestCountersConcurrent(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			for i := 0; i < 1000; i++ {
-				c.Observe(uint32(g), 3, querylog.SrcUpstream, dns.TypeHTTPS, 500)
+				c.Observe(uint32(g), 3, querylog.SrcUpstream, dns.TypeHTTPS, 500, 0)
 			}
 		}(g)
 	}
@@ -60,7 +60,7 @@ func TestCountersConcurrent(t *testing.T) {
 	if s.Queries != 8000 || s.Rcode[3] != 8000 || s.QType[qtSlot(dns.TypeHTTPS)] != 8000 || s.Source[querylog.SrcUpstream] != 8000 {
 		t.Fatalf("%+v", s.Queries)
 	}
-	if n := testing.AllocsPerRun(100, func() { c.Observe(1, 0, 0, 1, 10) }); n != 0 {
+	if n := testing.AllocsPerRun(100, func() { c.Observe(1, 0, 0, 1, 10, 0) }); n != 0 {
 		t.Fatal(n)
 	}
 }
@@ -85,11 +85,11 @@ func TestRollupsQueryAndPersist(t *testing.T) {
 	// 3 hours (crossing midnight), 100 queries per minute: 90 cache + 10 upstream NXDOMAIN
 	for m := 0; m < 180; m++ {
 		for i := 0; i < 90; i++ {
-			s.C.Observe(uint32(i), 0, querylog.SrcCache, dns.TypeA, 200)
+			s.C.Observe(uint32(i), 0, querylog.SrcCache, dns.TypeA, 200, querylog.FlagSecure)
 			s.ObserveTop("popular.example", "10.0.0.1", 0, querylog.SrcCache)
 		}
 		for i := 0; i < 10; i++ {
-			s.C.Observe(uint32(i), 3, querylog.SrcUpstream, dns.TypeAAAA, 20000)
+			s.C.Observe(uint32(i), 3, querylog.SrcUpstream, dns.TypeAAAA, 20000, querylog.FlagBogus)
 			s.ObserveTop("nx.example", "10.0.0.2", 3, querylog.SrcUpstream)
 		}
 		ck.add(time.Minute)
@@ -116,6 +116,9 @@ func TestRollupsQueryAndPersist(t *testing.T) {
 	p := r.Points[len(r.Points)-2]
 	if p.Queries != 100 || p.QPS != 1.667 || p.CacheHitRatio != 0.9 || p.ByRcode["NXDOMAIN"] != 10 || p.BySource["cache"] != 90 {
 		t.Fatalf("%+v", p)
+	}
+	if p.DNSSEC.Secure != 90 || p.DNSSEC.Bogus != 10 || p.DNSSEC.Insecure != 0 || r.Totals.DNSSEC.Secure < 5000 {
+		t.Fatalf("dnssec counters %+v %+v", p.DNSSEC, r.Totals.DNSSEC)
 	}
 	if p.P50 > 0.25 || p.P99 < 15 {
 		t.Fatalf("percentiles %v %v", p.P50, p.P99)
@@ -149,7 +152,7 @@ func TestRollupsQueryAndPersist(t *testing.T) {
 		t.Fatal("unknown range")
 	}
 	// live counters show up in the open minute
-	s.C.Observe(0, 0, querylog.SrcCache, 1, 10)
+	s.C.Observe(0, 0, querylog.SrcCache, 1, 10, 0)
 	r, _ = s.Query("1h")
 	if r.Points[len(r.Points)-1].Queries != 1 {
 		t.Fatal("live minute")

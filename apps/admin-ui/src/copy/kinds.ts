@@ -139,7 +139,7 @@ export const EVENT_FAMILY_WORDS: Record<string, { label: Bi; patterns: string[] 
   server: { label: { fa: "سرور و مصرف منابع", en: "Server and resources" }, patterns: ["metrics.*", "agent.*", "docker.*"] },
   apps: { label: { fa: "برنامه‌ها و نسخه‌های تازه", en: "Apps and updates" }, patterns: ["update.*", "dokploy.*"] },
   services: { label: { fa: "سرویس‌ها و دامنه‌ها", en: "Services and domains" }, patterns: ["service.*", "domain.*"] },
-  dns: { label: { fa: "DNS سرور (فشار، حمله، لاگ)", en: "The server's DNS (load, attacks, log)" }, patterns: ["dns.*"] },
+  dns: { label: { fa: "DNS سرور (فشار، حمله، لاگ، امضا، گواهی)", en: "The server's DNS (load, attacks, log, signatures, certificate)" }, patterns: ["dns.*"] },
   security: { label: { fa: "امنیت", en: "Security" }, patterns: ["firewall.*", "vuln.*"] },
   jobs: { label: { fa: "کارهای پس‌زمینه", en: "Background jobs" }, patterns: ["task.*"] }
 };

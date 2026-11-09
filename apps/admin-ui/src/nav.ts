@@ -45,6 +45,7 @@ export type PanelKey =
   | "DnsSettings"
   | "DnsMonitor"
   | "DnsLogs"
+  | "DnsEncrypted"
   | "PackagesPanel"
   | "UpstreamsPanel"
   | "RegistriesPanel"
@@ -180,16 +181,25 @@ export const NAV_GROUPS: NavGroup[] = [
         hint: { fa: "یک نام بپرسید و ببینید جوابش چیست و از کجا آمد.", en: "Ask about a name and see the answer and where it came from." },
         anyOf: ["dns:read"],
         panel: "DnsPage",
-        keywords: ["dig", "nslookup", "lookup", "resolve", "پرسش"]
+        keywords: ["dig", "nslookup", "lookup", "resolve", "پرسش", "trace", "مسیر", "dnssec", "امضا"]
       },
       {
+        // docs/40 §6 (D4): DoT, DoH, DoQ for phones, laptops and browsers.
+        key: "encrypted",
+        label: { fa: "اتصال رمزدار", en: "Encrypted connection" },
+        hint: { fa: "گوشی و لپ‌تاپ رمزدار به DNS وصل شوند؛ گواهی، کلیدهای دسترسی و راهنمای هر دستگاه.", en: "Connect phones and laptops to DNS encrypted; certificate, access tokens and a guide for each device." },
+        anyOf: ["dns:read"],
+        panel: "DnsEncrypted",
+        keywords: ["dot", "doh", "doq", "dns over https", "dns over tls", "private dns", "رمزدار", "گواهی", "certificate", "token", "mobileconfig", "android", "iphone"]
+      },
+      {
+        // Simple mode shows only «روش پیدا کردن نشانی‌ها» and «امضای امنیتی» (docs/40 §0.4).
         key: "settings",
         label: { fa: "تنظیمات", en: "Settings" },
-        hint: { fa: "کجا گوش بدهد، چه کسی بپرسد، از کدام DNS بیرونی بپرسد و سقف‌ها.", en: "Where it listens, who may ask, which outside DNS it asks, and limits." },
+        hint: { fa: "نشانی‌ها از کجا پیدا شوند، امضای امنیتی، کجا گوش بدهد، چه کسی بپرسد و سقف‌ها.", en: "Where addresses are found, security signatures, where it listens, who may ask, and limits." },
         anyOf: ["dns:admin"],
-        advancedOnly: true,
         panel: "DnsSettings",
-        keywords: ["upstream", "forwarder", "cloudflare", "shecan", "شکن", "cache", "rate limit", "acl", "recursion"]
+        keywords: ["upstream", "forwarder", "cloudflare", "shecan", "شکن", "cache", "rate limit", "acl", "recursion", "recursive", "root", "ریشه", "dnssec", "امضا", "trust anchor"]
       }
     ]
   },
@@ -549,6 +559,14 @@ export const ROUTE_ALIASES: Record<string, { group: GroupKey; tab?: string }> = 
   "dns/top": { group: "dns", tab: "monitor" },
   "dns/log": { group: "dns", tab: "logs" },
   "dns/querylog": { group: "dns", tab: "logs" },
+  "dns/doh": { group: "dns", tab: "encrypted" },
+  "dns/dot": { group: "dns", tab: "encrypted" },
+  "dns/doq": { group: "dns", tab: "encrypted" },
+  "dns/tls": { group: "dns", tab: "encrypted" },
+  "dns/certificate": { group: "dns", tab: "encrypted" },
+  "dns/dnssec": { group: "dns", tab: "settings" },
+  "dns/resolution": { group: "dns", tab: "settings" },
+  "dns/trace": { group: "dns", tab: "test" },
   "dns/queries": { group: "dns", tab: "logs" },
   "server/dns": { group: "dns", tab: "status" },
   "services/dns": { group: "dns", tab: "status" },

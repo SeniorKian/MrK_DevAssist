@@ -16,6 +16,7 @@ export { OneTimeSecret, SecretOnce, type OneTimeSecretProps, type SecretItem } f
 export { ResponsiveList, type ResponsiveListProps, type ListColumn, type RowAction } from "./ResponsiveList";
 export { KeyValueList, type KeyValueItem } from "./KeyValueList";
 export { CopyField, CopyButton, useCopy, type CopyFieldProps } from "./CopyField";
+export { QrCode } from "./QrCode";
 export { StatTile, StatGrid, type StatTileProps } from "./StatTile";
 export { DangerZone, type DangerZoneProps, type DangerAction } from "./DangerZone";
 export { useUndoSnackbar, TestResult, Notice, type UndoToast, type TestOutcome } from "./Feedback";

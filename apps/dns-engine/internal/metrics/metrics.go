@@ -23,11 +23,12 @@ const (
 	SrcError
 	SrcMitigated
 	SrcRateLimited
+	SrcRecursive // resolved from the root (D4)
 	srcCount
 )
 
 var srcNames = [srcCount]string{"authoritative", "override", "cache", "stale", "upstream", "refused", "local", "error",
-	"mitigated", "rate_limited"}
+	"mitigated", "rate_limited", "recursive"}
 
 // Drop reasons.
 const (

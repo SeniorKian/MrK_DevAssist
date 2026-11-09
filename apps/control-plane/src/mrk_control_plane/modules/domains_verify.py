@@ -44,13 +44,17 @@ PROBLEM_ORDER = (
 TIMEOUT_SECONDS = 6.0
 
 # Path per service and how its answer is recognised.
-PROBE_PATHS = {"panel": "/health/live", "npm": "/-/ping", "pypi": "/+api", "s3": "/"}
+PROBE_PATHS = {"panel": "/health/live", "npm": "/-/ping", "pypi": "/+api", "s3": "/",
+               # docs/40 §5: an RFC 8484 GET for ". NS" (id 0, RD) on the default path.
+               "dns-doh": "/dns-query?dns=AAABAAABAAAAAAAAAAACAAE"}
 
 
 def identify(headers: httpx.Headers, body: bytes) -> str | None:
     """Which MRK service produced this response (None = not ours / unknown)."""
     if headers.get("x-mrk-service", "").strip().lower() == "panel":
         return "panel"
+    if headers.get("content-type", "").split(";")[0].strip().lower() == "application/dns-message":
+        return "dns-doh"
     if "verdaccio" in headers.get("x-powered-by", "").lower():
         return "npm"
     if headers.get("server", "").strip() == "MRK" and "x-amz-request-id" in headers:

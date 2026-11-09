@@ -94,7 +94,7 @@ func buildIndex(seq uint64, b *block) *segMeta {
 
 func (m *segMeta) marshalIndex() []byte {
 	var d []byte
-	d = append(d, 1)
+	d = append(d, 2)
 	d = binary.AppendUvarint(d, m.Seq)
 	d = binary.AppendUvarint(d, uint64(m.Rows))
 	d = binary.AppendVarint(d, m.MinTS)
@@ -102,6 +102,7 @@ func (m *segMeta) marshalIndex() []byte {
 	for _, c := range m.Rcodes {
 		d = binary.AppendUvarint(d, uint64(c))
 	}
+	d = binary.AppendUvarint(d, uint64(len(m.Sources)))
 	for _, c := range m.Sources {
 		d = binary.AppendUvarint(d, uint64(c))
 	}
@@ -112,9 +113,11 @@ func (m *segMeta) marshalIndex() []byte {
 
 func parseIndex(d []byte) (*segMeta, error) {
 	r := &reader{b: d}
-	if v := r.bytes(1); r.err != nil || v[0] != 1 {
+	v := r.bytes(1)
+	if r.err != nil || v[0] != 1 && v[0] != 2 {
 		return nil, errCorrupt
 	}
+	version := v[0]
 	m := &segMeta{}
 	m.Seq = r.uvarint()
 	rows := r.uvarint()
@@ -127,8 +130,18 @@ func parseIndex(d []byte) (*segMeta, error) {
 	for i := range m.Rcodes {
 		m.Rcodes[i] = uint32(r.uvarint())
 	}
-	for i := range m.Sources {
-		m.Sources[i] = uint32(r.uvarint())
+	nsrc := uint64(srcCountV1) // version 1 (D2/D3) indexed 8 sources
+	if version >= 2 {
+		nsrc = r.uvarint()
+		if nsrc > 64 {
+			return nil, errCorrupt
+		}
+	}
+	for i := uint64(0); i < nsrc; i++ {
+		c := uint32(r.uvarint())
+		if i < uint64(len(m.Sources)) {
+			m.Sources[i] = c
+		}
 	}
 	m.names = readBloom(r)
 	m.clients = readBloom(r)

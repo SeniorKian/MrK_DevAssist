@@ -11,6 +11,8 @@ import { pick, type Bi } from "./copy";
 import { FriendlyError, NoAccess, Notice, SectionCard, helperProblem, useKit, useUndoSnackbar } from "./kit";
 import { dnsFieldMessages, fetchDnsSettings, saveDnsSettings, type DnsSettings } from "./dns";
 import { withDefaults } from "./dnsLive";
+import { warningsOf, type SettingsWarning } from "./dnsSecure";
+import { SaveWarnings } from "./DnsSecuritySettings";
 
 const COPY = {
   loadFailed: { fa: "تنظیمات خوانده نشد.", en: "The settings didn't load." },
@@ -40,9 +42,11 @@ export type DnsSectionSettingsProps<D extends SectionDraft> = {
   children: (props: { draft: D; update: (mutate: (next: D) => void) => void; problems: Record<string, string>; serverFields: Record<string, string> }) => ReactNode;
   collapsible?: boolean;
   defaultCollapsed?: boolean;
+  /** Called after a successful save (e.g. to reload a status). */
+  onSaved?: () => void;
 };
 
-export function DnsSectionSettings<D extends SectionDraft>({ title, hint, permissions, defaults, validate, children, collapsible, defaultCollapsed }: DnsSectionSettingsProps<D>) {
+export function DnsSectionSettings<D extends SectionDraft>({ title, hint, permissions, defaults, validate, children, collapsible, defaultCollapsed, onSaved }: DnsSectionSettingsProps<D>) {
   const { language } = useKit();
   const canAdmin = hasPermission(permissions, "dns:admin");
   const [full, setFull] = useState<DnsSettings | null>(null);
@@ -52,6 +56,7 @@ export function DnsSectionSettings<D extends SectionDraft>({ title, hint, permis
   const [saveError, setSaveError] = useState<unknown>(null);
   const [conflict, setConflict] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [warnings, setWarnings] = useState<SettingsWarning[]>([]);
   const { notify, snackbar } = useUndoSnackbar();
   const controller = useRef<AbortController | null>(null);
   const keys = useMemo(() => Object.keys(defaults), [defaults]);
@@ -59,7 +64,9 @@ export function DnsSectionSettings<D extends SectionDraft>({ title, hint, permis
   const adopt = useCallback((settings: DnsSettings) => {
     const sections = {} as D;
     for (const key of keys) (sections as SectionDraft)[key] = withDefaults(settings[key], defaults[key]);
-    setFull(clone(settings));
+    const copy = clone(settings);
+    delete copy.warnings;
+    setFull(copy);
     setSaved(clone(sections));
     setDraft(clone(sections));
   }, [defaults, keys]);
@@ -107,10 +114,12 @@ export function DnsSectionSettings<D extends SectionDraft>({ title, hint, permis
     try {
       const body: DnsSettings = { ...full, ...draft, config_version: full.config_version };
       const result = await saveDnsSettings(body);
+      setWarnings(warningsOf(result));
       const next = result && typeof result === "object" ? ((result as { settings?: DnsSettings }).settings ?? (result as DnsSettings)) : null;
       if (next && Array.isArray(next.listen)) adopt(next);
       else await load();
       notify({ message: pick(language, COPY.saved), tone: "success" });
+      onSaved?.();
     } catch (caught) {
       if (caught instanceof ApiError && (caught.code === "dns_config_conflict" || caught.code === "config_conflict" || caught.status === 409)) setConflict(true);
       else setSaveError(caught);
@@ -134,6 +143,7 @@ export function DnsSectionSettings<D extends SectionDraft>({ title, hint, permis
             {pick(language, COPY.conflict)}
           </Notice>
         ) : null}
+        <SaveWarnings warnings={warnings} onClose={() => setWarnings([])} />
         {missingSections ? <Notice tone="info">{pick(language, COPY.notSupported)}</Notice> : null}
         {children({ draft, update, problems, serverFields })}
         {saveError ? <FriendlyError error={saveError} title={pick(language, COPY.saveFailed)} onClose={() => setSaveError(null)} scope="dns" /> : null}

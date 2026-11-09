@@ -626,9 +626,11 @@ type Item struct {
 	Rcode    string  `json:"rcode"`
 	Source   string  `json:"source"`
 	Upstream string  `json:"upstream,omitempty"`
+	Token    string  `json:"token,omitempty"` // DoH token id (docs/40 §4)
 	MS       float64 `json:"ms"`
 	Size     int     `json:"size"`
 	Flags    Flags   `json:"flags"`
+	DNSSEC   string  `json:"dnssec"`
 }
 
 // Flags of an item.
@@ -640,14 +642,23 @@ type Flags struct {
 
 // View converts a row.
 func View(r *Row) Item {
-	return Item{TS: TSString(r.TS), Client: r.Client, Proto: ProtoNames[r.Proto%ProtoCount], Name: r.Name,
+	it := Item{TS: TSString(r.TS), Client: r.Client, Proto: ProtoNames[r.Proto%ProtoCount], Name: r.Name,
 		QType: QTypeName(r.QType), Rcode: RcodeName(r.Rcode), Source: SourceNames[r.Source%SrcCount], Upstream: r.Upstream,
 		MS: float64(r.DurUS) / 1000, Size: int(r.Size),
-		Flags: Flags{TC: r.Flags&FlagTC != 0, Stale: r.Flags&FlagStale != 0, Cached: r.Flags&FlagCached != 0}}
+		Flags:  Flags{TC: r.Flags&FlagTC != 0, Stale: r.Flags&FlagStale != 0, Cached: r.Flags&FlagCached != 0},
+		DNSSEC: DNSSECName(r.Flags)}
+	if id, ok := strings.CutPrefix(r.Upstream, TokenPrefix); ok {
+		it.Upstream, it.Token = "", id
+	}
+	return it
 }
 
+// TokenPrefix marks a DoH token id stored in the upstream slot.
+const TokenPrefix = "t:"
+
 // CSVHeader is the export header.
-var CSVHeader = []string{"ts", "client", "proto", "name", "qtype", "rcode", "source", "upstream", "ms", "size", "tc", "stale", "cached"}
+var CSVHeader = []string{"ts", "client", "proto", "name", "qtype", "rcode", "source", "upstream", "ms", "size", "tc", "stale",
+	"cached", "dnssec"}
 
 // CSV renders an item as CSV fields.
 func (it Item) CSV() []string {
@@ -659,5 +670,5 @@ func (it Item) CSV() []string {
 	}
 	return []string{it.TS, it.Client, it.Proto, it.Name, it.QType, it.Rcode, it.Source, it.Upstream,
 		strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.3f", it.MS), "0"), "."), itoa(it.Size),
-		b(it.Flags.TC), b(it.Flags.Stale), b(it.Flags.Cached)}
+		b(it.Flags.TC), b(it.Flags.Stale), b(it.Flags.Cached), it.DNSSEC}
 }

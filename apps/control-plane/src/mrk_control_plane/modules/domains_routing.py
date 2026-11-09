@@ -54,6 +54,9 @@ class Routing:
         self._detected: tuple[float, dict[str, Any]] | None = None
         self._detect_lock = asyncio.Lock()
         self._background: asyncio.Task[dict[str, Any]] | None = None
+        # service id -> (target host, port) for services outside this container
+        # (dns-doh: the DNS engine on the host network, docs/40 §5).
+        self.service_targets: Any = None
 
     def agent(self) -> Any | None:
         from .home import find_service
@@ -432,6 +435,9 @@ class Routing:
                 },
             )
             entry["hosts"].append(row["host"])
+            target = self.service_targets(row["service_id"]) if self.service_targets else None
+            if target is not None:
+                entry["target_host"], entry["port"] = target
             # One router per service: HTTPS unless every domain of it opted out.
             entry["https"] = bool(entry["https"] and row["https"])
         return {

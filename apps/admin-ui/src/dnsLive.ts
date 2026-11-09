@@ -154,6 +154,8 @@ export type StatsPoint = {
   cache_hit_ratio?: number | null;
   by_rcode?: Record<string, number> | null;
   by_source?: Record<string, number> | null;
+  /** docs/40 §4: validations in this bucket. */
+  dnssec?: { secure?: number | null; insecure?: number | null; bogus?: number | null } | null;
 };
 export type TopName = { name: string; count?: number | null };
 export type TopClient = { client: string; count?: number | null };
@@ -161,7 +163,7 @@ export type DnsStats = {
   range?: string;
   resolution_seconds?: number;
   points?: StatsPoint[];
-  totals?: { queries?: number; by_rcode?: Record<string, number>; by_source?: Record<string, number>; by_qtype?: Record<string, number> } | null;
+  totals?: { queries?: number; by_rcode?: Record<string, number>; by_source?: Record<string, number>; by_qtype?: Record<string, number>; dnssec?: { secure?: number; insecure?: number; bogus?: number } | null } | null;
   top?: { domains?: TopName[]; clients?: TopClient[]; nxdomain?: TopName[]; refused_clients?: TopClient[] } | null;
   top_hidden?: boolean;
 };
@@ -295,6 +297,27 @@ export function eventText(language: Language, event: DnsEvent): string {
     }
     case "querylog.recovered":
       return fa ? "نوشتن لاگ به حالت عادی برگشت." : "Logging is back to normal.";
+    // D4 (docs/40 §3)
+    case "dnssec.trust_anchor_updated":
+      return fa ? "کلید اعتماد ریشه اینترنت به‌روز شد." : "The internet's root trust key was updated.";
+    case "dnssec.trust_anchor_failed":
+      return fa ? "به‌روزرسانی کلید اعتماد ریشه انجام نشد؛ کلید قبلی نگه داشته شد." : "Updating the root trust key failed; the current key was kept.";
+    case "dnssec.bogus_spike": {
+      const count = text("count");
+      return fa ? `جواب‌های زیادی با امضای خراب رسید${count ? ` (${count} در ۵ دقیقه)` : ""}؛ شاید کسی جواب‌ها را دست‌کاری می‌کند.` : `Many answers with broken signatures arrived${count ? ` (${count} in 5 minutes)` : ""}; someone may be tampering with answers.`;
+    }
+    case "tls.certificate_expiring": {
+      const days = text("days_left");
+      return fa ? `گواهی اتصال رمزدار${days ? ` ${days} روز دیگر` : " به‌زودی"} تمام می‌شود.` : `The encrypted connection's certificate ends${days ? ` in ${days} days` : " soon"}.`;
+    }
+    case "tls.certificate_expired":
+      return fa ? "گواهی اتصال رمزدار تمام شد؛ دستگاه‌ها رمزدار وصل نمی‌شوند." : "The encrypted connection's certificate expired; devices can't connect encrypted.";
+    case "resolution.priming_failed":
+      return fa ? "MRK به سرورهای ریشه اینترنت نرسید." : "MRK couldn't reach the internet's root servers.";
+    case "listener.failed": {
+      const address = text("address");
+      return fa ? `DNS نتوانست روی ${address || "یک نشانی"} گوش بدهد.` : `DNS couldn't listen on ${address || "an address"}.`;
+    }
     default:
       return fa ? "یک رخداد دیگر ثبت شد." : "Another event was recorded.";
   }
@@ -302,7 +325,7 @@ export function eventText(language: Language, event: DnsEvent): string {
 
 // ── query log ────────────────────────────────────────────────────────────────
 
-export type LogSource = "authoritative" | "override" | "cache" | "upstream" | "refused" | "rate_limited" | "mitigated" | "forwarder";
+export type LogSource = "authoritative" | "override" | "cache" | "upstream" | "refused" | "rate_limited" | "mitigated" | "forwarder" | "recursive";
 export type QueryLogEntry = {
   ts: number | string;
   client?: string | null;
@@ -315,6 +338,10 @@ export type QueryLogEntry = {
   ms?: number | null;
   size?: number | null;
   flags?: { tc?: boolean; stale?: boolean; cached?: boolean } | null;
+  /** docs/40 §4: "" = not checked. */
+  dnssec?: "secure" | "insecure" | "bogus" | "" | string | null;
+  /** DoH token id when the question came with a token. */
+  token?: string | null;
 };
 export type QueryLogPage = { items: QueryLogEntry[]; next_cursor?: string | null; scanned_segments?: number; truncated?: boolean };
 export type QueryLogStatus = {
@@ -340,6 +367,8 @@ export type LogFilters = {
   source?: string;
   blocked?: boolean;
   min_ms?: number;
+  dnssec?: string;
+  proto?: string;
 };
 
 export function logQuery(filters: LogFilters, extra: Record<string, string | number | undefined> = {}): string {
@@ -369,16 +398,18 @@ export function searchFilter(text: string): Pick<LogFilters, "client" | "name"> 
   return { name: value.replace(/\.$/, "") };
 }
 
-export type ResultChip = "all" | "nxdomain" | "error" | "refused" | "blocked";
-export const RESULT_CHIPS: ResultChip[] = ["all", "nxdomain", "error", "refused", "blocked"];
+export type ResultChip = "all" | "nxdomain" | "error" | "refused" | "blocked" | "bogus";
+export const RESULT_CHIPS: ResultChip[] = ["all", "nxdomain", "error", "refused", "blocked", "bogus"];
 export const RESULT_CHIP_WORDS: Record<ResultChip, Bi> = {
+  bogus: { fa: "امضای خراب", en: "Broken signature" },
   all: { fa: "همه", en: "All" },
   nxdomain: { fa: "پیدا نشد", en: "Not found" },
   error: { fa: "خطا", en: "Errors" },
   refused: { fa: "رد شده", en: "Refused" },
   blocked: { fa: "مسدود", en: "Blocked" }
 };
-export function chipFilter(chip: ResultChip): Pick<LogFilters, "rcode" | "blocked"> {
+export function chipFilter(chip: ResultChip): Pick<LogFilters, "rcode" | "blocked" | "dnssec"> {
+  if (chip === "bogus") return { dnssec: "bogus" };
   if (chip === "nxdomain") return { rcode: "NXDOMAIN" };
   if (chip === "error") return { rcode: "SERVFAIL" };
   if (chip === "refused") return { rcode: "REFUSED" };
@@ -419,13 +450,31 @@ export const LOG_SOURCE_WORDS: Record<string, Bi> = {
   forwarder: { fa: "از سرور دیگر", en: "From another server" },
   refused: { fa: "اجازه نداشت", en: "Not allowed" },
   rate_limited: { fa: "سقف پرسش", en: "Rate limit" },
-  mitigated: { fa: "محدودسازی", en: "A limit" }
+  mitigated: { fa: "محدودسازی", en: "A limit" },
+  recursive: { fa: "خودش از ریشه", en: "From the root" }
 };
 export function logSourceWord(language: Language, source: string | null | undefined): string {
   return (source && LOG_SOURCE_WORDS[source]?.[language]) || (language === "fa" ? "نامشخص" : "Unknown");
 }
 
 export const LOG_SOURCES = Object.keys(LOG_SOURCE_WORDS);
+
+/** docs/40 §4: the DNSSEC column and filter (`none` = not checked). */
+export const LOG_DNSSEC_WORDS: Record<string, { tone: Tone; label: Bi }> = {
+  secure: { tone: "ok", label: { fa: "امضا درست", en: "Signed" } },
+  insecure: { tone: "off", label: { fa: "بدون امضا", en: "Not signed" } },
+  bogus: { tone: "error", label: { fa: "امضای خراب", en: "Broken" } },
+  none: { tone: "off", label: { fa: "بررسی نشده", en: "Not checked" } }
+};
+export const LOG_DNSSEC = ["secure", "insecure", "bogus", "none"];
+export const LOG_PROTOS = ["udp", "tcp", "dot", "doh", "doq"];
+export const LOG_PROTO_WORDS: Record<string, Bi> = {
+  udp: { fa: "معمولی (UDP)", en: "Plain (UDP)" },
+  tcp: { fa: "معمولی (TCP)", en: "Plain (TCP)" },
+  dot: { fa: "رمزدار با TLS", en: "Encrypted with TLS" },
+  doh: { fa: "رمزدار با HTTPS", en: "Encrypted with HTTPS" },
+  doq: { fa: "رمزدار سریع", en: "Encrypted, fast" }
+};
 export const LOG_RCODES = ["NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED", "FORMERR", "NOTIMP"];
 export const LOG_QTYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "PTR", "CAA", "SOA", "HTTPS", "SVCB", "ANY"];
 

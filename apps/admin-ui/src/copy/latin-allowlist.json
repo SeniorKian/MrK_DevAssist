@@ -58,7 +58,20 @@
     "UDP",
     "TCP",
     "Cloudflare",
-    "Quad9"
+    "Quad9",
+    "Android",
+    "iPhone",
+    "iPad",
+    "Mac",
+    "Windows",
+    "Firefox",
+    "Chrome",
+    "Edge",
+    "Wi-Fi",
+    "Ethernet",
+    "VPN",
+    "QR",
+    "RSA"
   ],
   "parenthetical": [
     "upstream",
@@ -81,6 +94,10 @@
     "cron",
     "CIDR",
     "environment",
-    "variable"
+    "variable",
+    "DNSSEC",
+    "DoT",
+    "DoH",
+    "DoQ"
   ]
 }

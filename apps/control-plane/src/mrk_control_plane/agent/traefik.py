@@ -18,12 +18,15 @@ Payload::
      "redirect_middleware": "redirect-to-https@file",
      "services": [{"service": "panel", "hosts": ["mrk.example.com"], "https": true}]}
 
-Ports are fixed per service (panel 8080, npm 4873, pypi 3141, s3 9000) and only
-those four service ids are accepted.
+Ports are fixed per service (panel 8080, npm 4873, pypi 3141, s3 9000). The fifth
+id, ``dns-doh`` (docs/40 §5: plain DoH of the DNS engine, which runs on the host
+network), may carry its own ``target_host`` (an IPv4 address) and ``port``
+(1024..65535, default 8053); no other service may.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -32,7 +35,9 @@ from pathlib import Path
 from typing import Any
 
 FILE_NAME = "mrk-domains.yml"
-SERVICE_PORTS: dict[str, int] = {"panel": 8080, "npm": 4873, "pypi": 3141, "s3": 9000}
+SERVICE_PORTS: dict[str, int] = {"panel": 8080, "npm": 4873, "pypi": 3141, "s3": 9000,
+                                 "dns-doh": 8053}
+OWN_TARGET_SERVICES = frozenset({"dns-doh"})
 MAX_HOSTS = 200
 MAX_FILE_BYTES = 256 * 1024
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
@@ -59,6 +64,15 @@ def resolve_dir() -> Path | None:
     if not path.is_absolute() or ".." in path.parts:
         return None
     return path
+
+
+def _ipv4(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(ipaddress.IPv4Address(value)) == value
+    except ValueError:
+        return False
 
 
 def _name(value: Any, field: str, pattern: re.Pattern[str]) -> str:
@@ -96,11 +110,24 @@ def validate_payload(payload: Any) -> dict[str, Any]:
     seen_hosts: set[str] = set()
     clean: list[dict[str, Any]] = []
     for item in services:
-        if not isinstance(item, dict) or set(item) - {"service", "hosts", "https"}:
+        if not isinstance(item, dict) or set(item) - {
+            "service", "hosts", "https", "target_host", "port"
+        }:
             raise TraefikPayloadError("invalid service entry")
         service = item.get("service")
         if service not in SERVICE_PORTS or service in seen_services:
             raise TraefikPayloadError("invalid service id")
+        own_target = item.get("target_host")
+        own_port = item.get("port")
+        if service not in OWN_TARGET_SERVICES and (own_target is not None or own_port is not None):
+            raise TraefikPayloadError("invalid service entry")
+        if own_target is not None and not _ipv4(own_target):
+            raise TraefikPayloadError("invalid target_host")
+        if own_port is not None and (
+            isinstance(own_port, bool) or not isinstance(own_port, int)
+            or not 1024 <= own_port <= 65535
+        ):
+            raise TraefikPayloadError("invalid port")
         seen_services.add(service)
         hosts = item.get("hosts")
         if not isinstance(hosts, list) or not hosts or len(hosts) > MAX_HOSTS:
@@ -114,7 +141,11 @@ def validate_payload(payload: Any) -> dict[str, Any]:
         https = item.get("https", True)
         if not isinstance(https, bool):
             raise TraefikPayloadError("invalid https flag")
-        clean.append({"service": service, "hosts": normalized, "https": https})
+        entry: dict[str, Any] = {"service": service, "hosts": normalized, "https": https}
+        if service in OWN_TARGET_SERVICES:
+            entry["target_host"] = own_target
+            entry["port"] = own_port or SERVICE_PORTS[service]
+        clean.append(entry)
     return {
         "target_host": target,
         "web": web,
@@ -140,7 +171,8 @@ def render(payload: Any) -> str:
         backend = f"mrk-{service}"
         services[backend] = {
             "loadBalancer": {
-                "servers": [{"url": f"http://{data['target_host']}:{SERVICE_PORTS[service]}"}],
+                "servers": [{"url": f"http://{item.get('target_host') or data['target_host']}:"
+                                    f"{item.get('port') or SERVICE_PORTS[service]}"}],
                 "passHostHeader": True,
             }
         }

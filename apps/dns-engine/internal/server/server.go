@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"runtime"
 	"sort"
@@ -20,8 +21,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/quic-go/quic-go"
+
+	"mrk/dns-engine/internal/acl"
 	"mrk/dns-engine/internal/config"
 	"mrk/dns-engine/internal/engine"
+	"mrk/dns-engine/internal/events"
 	"mrk/dns-engine/internal/metrics"
 )
 
@@ -43,6 +48,12 @@ type listener struct {
 	udp   []*net.UDPConn
 	tcp   net.Listener
 	since time.Time
+	// encrypted listeners (encrypted.go)
+	sig    string // parameters fixed at start (a change restarts the listener)
+	bound  string // bound address
+	http   *http.Server
+	quic   *quic.Listener
+	qconns sync.Map // *quic.Conn -> struct{}
 }
 
 // Server owns the listeners.
@@ -60,6 +71,8 @@ type Server struct {
 	readers  sync.WaitGroup
 	tcpConns atomic.Int64
 	conns    sync.Map // net.Conn -> struct{}
+	enc      encConns
+	trusted  atomic.Pointer[acl.List] // encrypted.doh.trusted_proxies
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -77,8 +90,11 @@ func New(e *engine.Engine, log *slog.Logger) *Server {
 	if !reusePortSupported {
 		n = 1
 	}
-	return &Server{e: e, log: log, listeners: map[key]*listener{}, slow: make(chan struct{}, MaxSlow),
+	s := &Server{e: e, log: log, listeners: map[key]*listener{}, slow: make(chan struct{}, MaxSlow),
 		ctx: ctx, cancel: cancel, Sockets: n}
+	s.enc.perClient = map[netip.Addr]int{}
+	e.SetEncryptedConns(s.EncryptedConns)
+	return s
 }
 
 // Apply reconciles listeners with s: new ones start before removed ones stop,
@@ -86,6 +102,7 @@ func New(e *engine.Engine, log *slog.Logger) *Server {
 func (s *Server) Apply(st config.Settings) {
 	cp := st.Clone()
 	s.settings.Store(&cp)
+	s.setTrusted(cp)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -100,8 +117,14 @@ func (s *Server) Apply(st config.Settings) {
 			want[key{l.Address, "tcp"}] = true
 		}
 	}
+	wantEncrypted(want, st)
 	for k := range want {
-		if l := s.listeners[k]; l == nil || !l.ok {
+		l := s.listeners[k]
+		if l != nil && l.ok && l.sig != encSig(k.proto, &cp) {
+			s.stopListener(l) // DoH/DoQ parameters changed
+			l = nil
+		}
+		if l == nil || !l.ok {
 			s.startLocked(k)
 		}
 	}
@@ -144,15 +167,20 @@ func (s *Server) Run(interval time.Duration) {
 func (s *Server) startLocked(k key) {
 	l := &listener{key: k, since: time.Now()}
 	var err error
-	if k.proto == "udp" {
+	switch {
+	case k.proto == "udp":
 		err = s.startUDP(l)
-	} else {
+	case isEncrypted(k.proto):
+		err = s.startEncrypted(l)
+	default:
 		err = s.startTCP(l)
 	}
 	if err != nil {
 		l.ok, l.err = false, err.Error()
 		if old := s.listeners[k]; old == nil || old.err != l.err {
 			s.log.Warn("listener failed", "address", k.addr, "proto", k.proto, "err", err)
+			s.e.EventRing().Emit(events.ListenerFailed, events.Error,
+				map[string]any{"address": k.addr, "proto": k.proto, "error": l.err})
 		}
 	} else {
 		l.ok = true
@@ -167,6 +195,13 @@ func (s *Server) stopListener(l *listener) {
 	}
 	if l.tcp != nil {
 		l.tcp.Close()
+	}
+	if l.http != nil {
+		l.http.Close()
+	}
+	if l.quic != nil {
+		l.quic.Close()
+		l.qconns.Range(func(k, _ any) bool { _ = k.(*quic.Conn).CloseWithError(doqNoError, ""); return true })
 	}
 	s.log.Info("listener stopped", "address", l.key.addr, "proto", l.key.proto)
 }
@@ -196,6 +231,9 @@ func (s *Server) Addr(proto string) string {
 	for _, l := range s.listeners {
 		if !l.ok || l.key.proto != proto {
 			continue
+		}
+		if l.bound != "" {
+			return l.bound
 		}
 		if proto == "udp" && len(l.udp) > 0 {
 			return l.udp[0].LocalAddr().String()

@@ -504,17 +504,18 @@ func (a *API) routes() {
 
 	// tools
 	a.handle("POST /v1/resolve", func(w http.ResponseWriter, r *http.Request) error {
-		var b struct {
-			Name     string `json:"name"`
-			Type     string `json:"type"`
-			ClientIP string `json:"client_ip"`
-		}
+		var b engine.ResolveRequest
 		if err := decode(r, &b); err != nil {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+		s, _ := a.e.Settings()
+		timeout := time.Duration(s.Resolution.ResolveTimeoutMS)*time.Millisecond + 2*time.Second
+		if b.Trace {
+			timeout += 4 * time.Second // the validator's DS/DNSKEY lookups are traced uncached too
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		res, err := a.e.Resolve(ctx, b.Name, b.Type, b.ClientIP)
+		res, err := a.e.ResolveWith(ctx, b)
 		if err != nil {
 			return err
 		}
@@ -536,4 +537,6 @@ func (a *API) routes() {
 		return nil
 	})
 	a.monitorRoutes()
+	a.d4Routes()
+	a.encryptedRoutes()
 }

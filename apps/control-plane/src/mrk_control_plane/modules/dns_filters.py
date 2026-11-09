@@ -17,9 +17,12 @@ from urllib.parse import urlencode
 
 from .dns_validate import DnsInputError, name_problem
 
-FILTER_KEYS = ("from", "to", "client", "name", "qtype", "rcode", "source", "blocked", "min_ms")
+FILTER_KEYS = ("from", "to", "client", "name", "qtype", "rcode", "source", "blocked", "min_ms",
+               "dnssec", "proto")
 SOURCES = ("authoritative", "override", "cache", "upstream", "refused", "rate_limited",
-           "mitigated", "forwarder")
+           "mitigated", "forwarder", "recursive")
+PROTOS = ("udp", "tcp", "dot", "doh", "doq")
+DNSSEC_STATES = ("secure", "insecure", "bogus", "none")
 RCODES = ("NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED", "FORMERR", "NOTIMP", "YXDOMAIN",
           "YXRRSET", "NXRRSET", "NOTAUTH", "NOTZONE", "BADVERS")
 QTYPES = ("A", "AAAA", "CNAME", "MX", "TXT", "SRV", "NS", "PTR", "CAA", "SOA", "ANY", "HTTPS",
@@ -179,6 +182,14 @@ def query_filters(
             out["source"] = value
         else:
             errors.append(_field("source", "invalid_choice", choices=list(SOURCES)))
+    for key, choices in (("proto", PROTOS), ("dnssec", DNSSEC_STATES)):
+        raw = get(key)
+        if raw not in (None, ""):
+            value = raw.strip().lower()
+            if value in choices:
+                out[key] = value
+            else:
+                errors.append(_field(key, "invalid_choice", choices=list(choices)))
     raw = get("blocked")
     if raw not in (None, ""):
         value = raw.strip().lower()

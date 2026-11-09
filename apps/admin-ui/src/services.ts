@@ -364,6 +364,7 @@ export const SERVICE_REASONS: Record<string, Bi> = {
   firewall_not_configured: { fa: "دیوار آتش هنوز وصل نشده است.", en: "The firewall isn't connected yet." },
   firewall_unreachable: { fa: "دیوار آتش جواب نمی‌دهد؛ مطمئن شوید روشن است.", en: "The firewall isn't answering; make sure it's running." },
   crashed_retrying: { fa: "از کار افتاد؛ پنل خودش با فاصله دوباره روشنش می‌کند. می‌توانید همین حالا «راه‌اندازی دوباره» را بزنید.", en: "It crashed; the panel keeps retrying with growing waits. You can press Restart right now." },
+  doh_plain_disabled: { fa: "برای وصل کردن دامنه، اول در DNS › «اتصال رمزدار» گزینه «پشت Traefik» را روشن کنید.", en: "To connect a domain, first turn on “Behind Traefik” in DNS › Encrypted connections." },
   crashed_no_auto_restart: { fa: "از کار افتاد و روشن کردن خودکار خاموش است؛ «راه‌اندازی دوباره» را بزنید.", en: "It crashed and automatic restart is off; press Restart." },
   not_checked_yet: { fa: "هنوز بررسی نشده؛ چند لحظه صبر کنید.", en: "Not checked yet; give it a moment." },
   dns_not_installed: { fa: "DNS هنوز روی این سرور راه نیفتاده؛ از صفحه DNS، «راه‌اندازی» را باز کنید.", en: "DNS isn't set up on this server yet; open Set up on the DNS page." },

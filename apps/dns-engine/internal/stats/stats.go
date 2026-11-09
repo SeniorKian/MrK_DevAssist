@@ -93,6 +93,8 @@ type cshard struct {
 	source  [querylog.SrcCount]atomic.Uint64
 	qtype   [nQTMax]atomic.Uint64
 	lat     [NLat]atomic.Uint64
+	sec     [3]atomic.Uint64 // secure, insecure, bogus (docs/40 §4)
+	proto   [querylog.ProtoCount]atomic.Uint64
 	_       [64]byte
 }
 
@@ -112,8 +114,17 @@ func NewCounters(n int) *Counters {
 }
 
 // Observe counts one answered (or dropped) query. It never allocates.
-func (c *Counters) Observe(shard uint32, rcode, src uint8, qtype uint16, durUS uint32) {
+// flags are the query-log flags (their DNSSEC bits are counted).
+func (c *Counters) Observe(shard uint32, rcode, src uint8, qtype uint16, durUS uint32, flags uint8) {
 	s := &c.shards[shard&c.mask]
+	switch {
+	case flags&querylog.FlagSecure != 0:
+		s.sec[0].Add(1)
+	case flags&querylog.FlagInsecure != 0:
+		s.sec[1].Add(1)
+	case flags&querylog.FlagBogus != 0:
+		s.sec[2].Add(1)
+	}
 	s.queries.Add(1)
 	s.rcode[rcode&15].Add(1)
 	if src < querylog.SrcCount {
@@ -123,14 +134,23 @@ func (c *Counters) Observe(shard uint32, rcode, src uint8, qtype uint16, durUS u
 	s.lat[LatBucket(durUS)].Add(1)
 }
 
+// ObserveProto counts one query by transport (docs/40 §4).
+func (c *Counters) ObserveProto(shard uint32, proto uint8) {
+	if proto < querylog.ProtoCount {
+		c.shards[shard&c.mask].proto[proto].Add(1)
+	}
+}
+
 // Bucket is one aggregation interval.
 type Bucket struct {
-	TS      int64                     `json:"t"` // unix seconds, start
-	Queries uint64                    `json:"q"`
-	Rcode   [16]uint64                `json:"rc"`
-	Source  [querylog.SrcCount]uint64 `json:"src"`
-	QType   [nQTMax]uint64            `json:"qt"`
-	Lat     [NLat]uint64              `json:"lat"`
+	TS      int64                       `json:"t"` // unix seconds, start
+	Queries uint64                      `json:"q"`
+	Rcode   [16]uint64                  `json:"rc"`
+	Source  [querylog.SrcCount]uint64   `json:"src"`
+	QType   [nQTMax]uint64              `json:"qt"`
+	Lat     [NLat]uint64                `json:"lat"`
+	Sec     [3]uint64                   `json:"sec,omitempty"`
+	Proto   [querylog.ProtoCount]uint64 `json:"pr,omitempty"`
 }
 
 func (b *Bucket) add(o *Bucket) {
@@ -147,6 +167,12 @@ func (b *Bucket) add(o *Bucket) {
 	for i := range b.Lat {
 		b.Lat[i] += o.Lat[i]
 	}
+	for i := range b.Sec {
+		b.Sec[i] += o.Sec[i]
+	}
+	for i := range b.Proto {
+		b.Proto[i] += o.Proto[i]
+	}
 }
 
 func (b *Bucket) sub(o *Bucket) {
@@ -162,6 +188,12 @@ func (b *Bucket) sub(o *Bucket) {
 	}
 	for i := range b.Lat {
 		b.Lat[i] -= o.Lat[i]
+	}
+	for i := range b.Sec {
+		b.Sec[i] -= o.Sec[i]
+	}
+	for i := range b.Proto {
+		b.Proto[i] -= o.Proto[i]
 	}
 }
 
@@ -181,6 +213,12 @@ func (c *Counters) snapshot() Bucket {
 		}
 		for j := range b.Lat {
 			b.Lat[j] += s.lat[j].Load()
+		}
+		for j := range b.Sec {
+			b.Sec[j] += s.sec[j].Load()
+		}
+		for j := range b.Proto {
+			b.Proto[j] += s.proto[j].Load()
 		}
 	}
 	return b
@@ -522,7 +560,18 @@ type Point struct {
 	CacheHitRatio float64           `json:"cache_hit_ratio"`
 	ByRcode       map[string]uint64 `json:"by_rcode"`
 	BySource      map[string]uint64 `json:"by_source"`
+	DNSSEC        SecCounts         `json:"dnssec"`
+	ByProto       map[string]uint64 `json:"by_proto"`
 }
+
+// SecCounts are answers by DNSSEC status (docs/40 §4).
+type SecCounts struct {
+	Secure   uint64 `json:"secure"`
+	Insecure uint64 `json:"insecure"`
+	Bogus    uint64 `json:"bogus"`
+}
+
+func secCounts(s *[3]uint64) SecCounts { return SecCounts{Secure: s[0], Insecure: s[1], Bogus: s[2]} }
 
 // Totals over the range.
 type Totals struct {
@@ -534,6 +583,8 @@ type Totals struct {
 	P95      float64           `json:"p95_ms"`
 	P99      float64           `json:"p99_ms"`
 	CacheHit float64           `json:"cache_hit_ratio"`
+	DNSSEC   SecCounts         `json:"dnssec"`
+	ByProto  map[string]uint64 `json:"by_proto"`
 }
 
 // NameCount and ClientCount are top list items.
@@ -577,6 +628,14 @@ func rcodeMap(rc *[16]uint64) map[string]uint64 {
 	return m
 }
 
+func protoMap(pr *[querylog.ProtoCount]uint64) map[string]uint64 {
+	m := make(map[string]uint64, len(pr))
+	for i, v := range pr {
+		m[querylog.ProtoNames[i]] = v
+	}
+	return m
+}
+
 func sourceMap(src *[querylog.SrcCount]uint64) map[string]uint64 {
 	m := make(map[string]uint64, len(src))
 	for i, v := range src {
@@ -586,7 +645,7 @@ func sourceMap(src *[querylog.SrcCount]uint64) map[string]uint64 {
 }
 
 func hitRatio(src *[querylog.SrcCount]uint64) float64 {
-	d := src[querylog.SrcCache] + src[querylog.SrcUpstream] + src[querylog.SrcForwarder]
+	d := src[querylog.SrcCache] + src[querylog.SrcUpstream] + src[querylog.SrcForwarder] + src[querylog.SrcRecursive]
 	if d == 0 {
 		return 0
 	}
@@ -652,11 +711,12 @@ func (s *Stats) Query(rangeName string) (Result, bool) {
 		out.Points[i] = Point{TS: time.Unix(start+int64(i)*res, 0).UTC().Format(time.RFC3339), Queries: b.Queries,
 			QPS: r3(float64(b.Queries) / float64(res)), P50: r3(Percentile(&b.Lat, 0.5)), P95: r3(Percentile(&b.Lat, 0.95)),
 			P99: r3(Percentile(&b.Lat, 0.99)), CacheHitRatio: hitRatio(&b.Source), ByRcode: rcodeMap(&b.Rcode),
-			BySource: sourceMap(&b.Source)}
+			BySource: sourceMap(&b.Source), DNSSEC: secCounts(&b.Sec), ByProto: protoMap(&b.Proto)}
 	}
 	out.Totals = Totals{Queries: tot.Queries, ByRcode: rcodeMap(&tot.Rcode), BySource: sourceMap(&tot.Source),
 		ByQType: map[string]uint64{}, P50: r3(Percentile(&tot.Lat, 0.5)), P95: r3(Percentile(&tot.Lat, 0.95)),
-		P99: r3(Percentile(&tot.Lat, 0.99)), CacheHit: hitRatio(&tot.Source)}
+		P99: r3(Percentile(&tot.Lat, 0.99)), CacheHit: hitRatio(&tot.Source), DNSSEC: secCounts(&tot.Sec),
+		ByProto: protoMap(&tot.Proto)}
 	for i, v := range tot.QType {
 		if v == 0 || i >= NQType {
 			continue

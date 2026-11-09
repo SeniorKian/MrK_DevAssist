@@ -22,6 +22,8 @@ import (
 	"mrk/dns-engine/internal/acl"
 	"mrk/dns-engine/internal/cache"
 	"mrk/dns-engine/internal/config"
+	"mrk/dns-engine/internal/dnssec"
+	"mrk/dns-engine/internal/iterative"
 	"mrk/dns-engine/internal/limits"
 	"mrk/dns-engine/internal/metrics"
 	"mrk/dns-engine/internal/querylog"
@@ -42,6 +44,10 @@ type Options struct {
 	Now func() time.Time
 	// DiskFree overrides the query log's disk-free probe (tests).
 	DiskFree querylog.DiskFreeFunc
+	// IterTransport replaces the network of the iterative resolver (tests).
+	IterTransport iterative.Transport
+	// TrustAnchors replaces the built-in root trust anchors (tests).
+	TrustAnchors []*dns.DS
 }
 
 // Override is a local answer for a name without owning a zone.
@@ -81,6 +87,8 @@ type policy struct {
 	clientLim     *limits.ClientLimiter
 	rrl           *limits.RRL
 	upstreams     []*resolver.Upstream
+	d4            d4policy
+	enc           encPolicy
 }
 
 func (p *policy) recursionAllowed(a netip.Addr) bool {
@@ -114,6 +122,11 @@ type Engine struct {
 	wg      sync.WaitGroup
 
 	listenerHook atomic.Pointer[func(config.Settings)]
+
+	iter *iterative.Resolver // D4: resolution from the root
+	val  *dnssec.Validator   // D4: DNSSEC validation
+	d4   d4state
+	enc  encState // D4 part B: encrypted transports, certificate, DoH tokens
 
 	actorMu sync.Mutex
 	actor   atomic.Pointer[string]
@@ -177,7 +190,11 @@ func Open(opts Options) (*Engine, error) {
 		e.compiled[z.Name] = c
 	}
 	e.Cache = cache.New(e.settings.Cache.MaxBytes)
+	e.openD4()
 	if err := e.openMonitor(); err != nil {
+		return nil, err
+	}
+	if err := e.openEncrypted(); err != nil {
 		return nil, err
 	}
 	e.mu.Lock()
@@ -186,9 +203,10 @@ func Open(opts Options) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.wg.Add(2)
+	e.wg.Add(3)
 	go e.maintenance()
 	go e.pipeline()
+	go e.d4Loop()
 	return e, nil
 }
 
@@ -220,12 +238,15 @@ func mergeSettings(dst *config.Settings, src config.Settings) {
 	if dst.Pressure.AttackDetection.Mode == "" {
 		dst.Pressure.AttackDetection = config.DefaultPressure().AttackDetection
 	}
+	// D4 sections (resolution, dnssec) are absent from D1-D3 settings files
+	dst.FillD4Defaults()
 }
 
 // Close stops background work and upstream connections.
 func (e *Engine) Close() {
 	e.cancel()
 	e.wg.Wait()
+	e.closeEncrypted()
 	e.closeMonitor()
 	e.mu.Lock()
 	for _, u := range e.upstreams {
@@ -413,6 +434,10 @@ func (e *Engine) rebuildLocked() error {
 	}
 	if e.Cache != nil && e.Cache.MaxBytes() != s.Cache.MaxBytes {
 		e.Cache.SetMaxBytes(s.Cache.MaxBytes)
+	}
+	e.configureD4Locked(p, old)
+	if err := e.configureEncryptedLocked(p); err != nil {
+		return err
 	}
 	e.pol.Store(p)
 	// close transports of upstreams that are gone (after the swap)

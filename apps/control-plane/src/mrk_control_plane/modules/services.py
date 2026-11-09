@@ -38,6 +38,7 @@ from .domains_routing import Routing, RoutingError
 from .domains_settings import ROUTING_MODES, SettingsError, SettingsStore
 from .domains_verify import Probes, default_probes, verify_domain
 from .services_catalog import (
+    CONDITIONAL_SERVICES,
     DOMAIN_SERVICES,
     SERVICE_INDEX,
     SERVICES,
@@ -61,6 +62,7 @@ EMPTY_HEALTH: dict[str, Any] = {
     "problems": [],
 }
 VERIFY_TICK_SECONDS = 300.0
+DOH_SERVICE = "dns-doh"
 
 # Tests may replace these.
 PROBES: Probes | None = None
@@ -149,6 +151,9 @@ class ServicesService:
                 "s3": self._bucket_count,
                 "panel": self._user_count,
             },
+        )
+        self.routing.service_targets = (
+            lambda service_id: self.doh_target() if service_id == DOH_SERVICE else None
         )
         self.lock = asyncio.Lock()
         self.last_sync: dict[str, Any] = {}
@@ -302,6 +307,13 @@ class ServicesService:
                 "This service cannot have a domain",
                 fields=[{"field": "service_id", "reason_code": "invalid_choice"}],
             )
+        if body.service_id == DOH_SERVICE and await self._doh_port() is None:
+            raise ServiceError(
+                "dns_doh_plain_disabled",
+                409,
+                "Turn on DoH without TLS (behind Traefik) in the DNS settings first",
+                fields=[{"field": "service_id", "reason_code": "service_disabled"}],
+            )
         if body.mode not in ROUTING_MODES:
             raise ServiceError(
                 "invalid_routing_mode",
@@ -345,6 +357,11 @@ class ServicesService:
                 )
             detected = await self.routing.detect()
             mode = self.routing.effective_mode(detected, body.mode)
+            if body.service_id == DOH_SERVICE and mode == "dokploy_api":
+                # Dokploy domains route to this container; the DNS engine runs on the
+                # host network, so its DoH needs the Traefik file (or manual) route.
+                file_ok = self.routing.available_modes(detected).get("traefik_file")
+                mode = "traefik_file" if file_ok else "manual"
             available = self.routing.available_modes(detected)
             if not available.get(mode):
                 code = (
@@ -394,8 +411,10 @@ class ServicesService:
                     raise self._routing_failure(exc, "traefik_write_failed") from None
             result: dict[str, Any] = {"domain": domain, "applied": applied}
             if mode == "manual":
-                result["instructions"] = self.routing.instructions(
-                    body.service_id, host, body.https, detected
+                result["instructions"] = (
+                    self._doh_instructions(host)
+                    if body.service_id == DOH_SERVICE
+                    else self.routing.instructions(body.service_id, host, body.https, detected)
                 )
             result["sync"] = await self.sync()
         self._verify_soon(domain["id"])
@@ -769,6 +788,11 @@ class ServicesService:
             return await self._helper_state(service.id)
         if service.id == "dns":
             return await self._dns_state()
+        if service.id == DOH_SERVICE:
+            state, reason, _supervised = await self._dns_state()
+            if state == "running" and await self._doh_port() is None:
+                return "disabled", "doh_plain_disabled", False
+            return state, reason, False
         enabled = {
             "npm": getattr(settings, "npm_enabled", False),
             "pypi": getattr(settings, "pypi_enabled", False),
@@ -856,6 +880,64 @@ class ServicesService:
             return "running", None, False
         return "degraded", "dns_unreachable", False
 
+    async def _doh_port(self) -> int | None:
+        """The plain DoH port when the engine has ``doh.enabled && !doh.tls``."""
+        service = self._dns_service()
+        if service is None:
+            return None
+        try:
+            await service.current_settings()
+        except Exception:  # noqa: BLE001 - engine trouble = not offered
+            return None
+        return service.plain_doh_port()
+
+    def doh_target(self) -> tuple[str, int]:
+        """(address, port) Traefik should send DoH requests to (docs/40 §5)."""
+        service = self._dns_service()
+        port = (service.plain_doh_port() if service else None) or SERVICE_INDEX[
+            DOH_SERVICE].internal_port or 8053
+        target = None
+        settings = (service.cached_settings() if service else None) or {}
+        doh = (settings.get("encrypted") or {}).get("doh") if isinstance(
+            settings.get("encrypted"), dict) else None
+        from .dns_validate_d4 import listen_on
+
+        for item in (doh or {}).get("listen") or []:
+            try:
+                address, listen_port = listen_on(item, 443)
+            except ValueError:
+                continue
+            if listen_port == port and address.version == 4 and not (
+                address.is_loopback or address.is_unspecified
+            ):
+                target = str(address)
+                break
+        if target is None:
+            target = service.effective_target() if service else "172.17.0.1"
+        return target, port
+
+    def _doh_instructions(self, host: str) -> dict[str, Any]:
+        target, port = self.doh_target()
+        upstream = f"http://{target}:{port}"
+        return {
+            "steps_fa": [
+                f"در DNS دامنه، یک رکورد A برای «{host}» به IP عمومی همین سرور بسازید.",
+                "در Traefik (Dokploy → Traefik → File System/Dynamic) یک router با "
+                f"Host(`{host}`) و گواهی Let's Encrypt بسازید که به «{upstream}» برود.",
+                "مسیر /dns-query را تغییر ندهید و هدر Host را نگه دارید.",
+                "در MRK روی «بررسی» بزنید تا DNS، گواهی و رسیدن درخواست بررسی شود.",
+            ],
+            "steps_en": [
+                f"In your DNS, create an A record for “{host}” pointing to this server's "
+                "public IP.",
+                "In Traefik (Dokploy → Traefik → File System/Dynamic) add a router for "
+                f"Host(`{host}`) with a Let's Encrypt certificate that forwards to “{upstream}”.",
+                "Keep the /dns-query path and the Host header unchanged.",
+                "Back in MRK, click Verify to check DNS, the certificate and that requests arrive.",
+            ],
+            "traefik": {"host": host, "upstream": upstream, "path": "/dns-query"},
+        }
+
     async def _sync_dns(self) -> dict[str, Any]:
         service = self._dns_service()
         if service is None:
@@ -868,7 +950,11 @@ class ServicesService:
         stopped = await asyncio.to_thread(read_stopped, self.ctx.data_dir)
         domains = await asyncio.to_thread(self.list_domains)
         items = []
+        doh_port = await self._doh_port()
         for service in SERVICES:
+            own_rows = [item for item in domains if item["service_id"] == service.id]
+            if service.id in CONDITIONAL_SERVICES and doh_port is None and not own_rows:
+                continue  # dns-doh: only while plain DoH is on (or domains remain)
             state, reason, supervised = await self._state(service, status, stopped)
             crash = self.watchdog.record(service.id)
             if crash is not None:
@@ -891,7 +977,9 @@ class ServicesService:
                     "recovery": crash.public() if crash is not None else None,
                     "controllable": controllable,
                     "actions": list(service.actions) if controllable else [],
-                    "internal_port": service.internal_port,
+                    "internal_port": (doh_port or service.internal_port)
+                    if service.id == DOH_SERVICE
+                    else service.internal_port,
                     "usage": usage
                     or {
                         "disk_bytes": None,

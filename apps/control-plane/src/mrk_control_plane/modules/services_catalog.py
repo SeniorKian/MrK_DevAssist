@@ -22,6 +22,7 @@ USAGE_TTL_SECONDS = 60.0
 WALK_BUDGET_SECONDS = 3.0
 WALK_MAX_ENTRIES = 400_000
 STOPPED_FILE = "stopped-services.json"
+DOH_DEFAULT_PORT = 8053  # panel default for plain DoH behind Traefik (docs/40 §2.3)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +132,27 @@ SERVICES: tuple[ServiceDef, ...] = (
         "#/dns/status",
         False,
     ),
+    # docs/40 §5: plain-HTTP DoH of the DNS engine behind Traefik (the public
+    # certificate comes from Traefik). Listed only while ``encrypted.doh`` is on
+    # with ``tls:false`` (or while it still has domains); the port is the engine's
+    # DoH listener (default below).
+    ServiceDef(
+        "dns-doh",
+        "DNS رمزدار (DoH)",
+        "Encrypted DNS (DoH)",
+        "نشانی https برای DNS رمزدار گوشی‌ها و مرورگرها؛ گواهی را Traefik می‌دهد.",
+        "An https address for encrypted DNS on phones and browsers; Traefik provides "
+        "the certificate.",
+        DOH_DEFAULT_PORT,
+        (),
+        (),
+        (),
+        "#/dns/encrypted",
+        True,
+    ),
 )
+# Services whose card appears only while the feature is on (see services_view).
+CONDITIONAL_SERVICES: tuple[str, ...] = ("dns-doh",)
 SERVICE_INDEX: dict[str, ServiceDef] = {item.id: item for item in SERVICES}
 DOMAIN_SERVICES: tuple[str, ...] = tuple(item.id for item in SERVICES if item.domains)
 

@@ -40,6 +40,7 @@ func newEngineClock(t testing.TB, upstream string, ck *fakeClock, mut func(s *co
 	s.Upstreams = []config.Upstream{{ID: "test", Address: upstream, Enabled: true}}
 	s.Limits.ClientQPS, s.Limits.ClientBurst = 0, 0
 	s.Pressure.Enabled = false
+	s.DNSSEC.Mode = config.DNSSECOff
 	if mut != nil {
 		mut(&s)
 	}

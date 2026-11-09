@@ -99,6 +99,8 @@ def test_every_rule_triggers() -> None:
         "agent_not_paired", "no_backup_jobs",
         # need a reachable engine; covered in test_dns_d2.py
         "dns_under_pressure", "dns_attack_detected",
+        # need a reachable engine; covered in test_dns_d4.py
+        "dns_certificate_expiring", "dns_trust_anchor_problem",
     } == set(
         home.ATTENTION_RULES
     )

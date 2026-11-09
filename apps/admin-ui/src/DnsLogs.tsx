@@ -30,7 +30,7 @@ import { useVisibleInterval } from "./polling";
 import { DnsAvailability } from "./DnsPage";
 import { engineReady, isCidr, isDnsName, isIPv4, isIPv6, useDnsStatus } from "./dns";
 import {
-  DEFAULT_QUERYLOG, DEFAULT_STATS, LIVE_MAX_ROWS, LOG_QTYPES, LOG_RCODES, LOG_SOURCES, LOG_SOURCE_WORDS, QTYPE_WORDS, RESULT_CHIPS, RESULT_CHIP_WORDS,
+  DEFAULT_QUERYLOG, DEFAULT_STATS, LIVE_MAX_ROWS, LOG_DNSSEC, LOG_DNSSEC_WORDS, LOG_PROTOS, LOG_PROTO_WORDS, LOG_QTYPES, LOG_RCODES, LOG_SOURCES, LOG_SOURCE_WORDS, QTYPE_WORDS, RESULT_CHIPS, RESULT_CHIP_WORDS,
   chipFilter, degradedReason, deleteLogs, fetchLogStatus, fetchLogs, logExportUrl, logSourceWord, logStreamUrl, rcodeOf, resultWord, searchFilter,
   type LogFilters, type QueryLogEntry, type QueryLogSettings, type QueryLogStatus, type ResultChip, type StatsSettings
 } from "./dnsLive";
@@ -67,6 +67,8 @@ const COPY = {
   took: { fa: "زمان جواب", en: "Took" },
   msValue: { fa: "{ms} میلی‌ثانیه", en: "{ms} ms" },
   proto: { fa: "راه اتصال", en: "Transport" },
+  dnssec: { fa: "امضای امنیتی", en: "Signature" },
+  tokenFlag: { fa: "با کلید «{id}»", en: "with token “{id}”" },
   upstream: { fa: "DNS بیرونی", en: "Outside DNS" },
   size: { fa: "اندازه جواب", en: "Answer size" },
   flags: { fa: "نکته", en: "Notes" },
@@ -183,8 +185,8 @@ function toLocalInput(ms: number) {
   return date.toISOString().slice(0, 16);
 }
 
-type AdvancedFilters = { range: RangePreset; from: string; to: string; qtype: string; rcode: string; source: string; minMs: number | null };
-const EMPTY_ADVANCED: AdvancedFilters = { range: "all", from: "", to: "", qtype: "", rcode: "", source: "", minMs: null };
+type AdvancedFilters = { range: RangePreset; from: string; to: string; qtype: string; rcode: string; source: string; minMs: number | null; dnssec: string; proto: string };
+const EMPTY_ADVANCED: AdvancedFilters = { range: "all", from: "", to: "", qtype: "", rcode: "", source: "", minMs: null, dnssec: "", proto: "" };
 
 function buildFilters(search: string, chip: ResultChip, advanced: AdvancedFilters | null): LogFilters {
   const filters: LogFilters = { ...searchFilter(search), ...chipFilter(chip) };
@@ -201,6 +203,8 @@ function buildFilters(search: string, chip: ResultChip, advanced: AdvancedFilter
   if (advanced.rcode && chip === "all") filters.rcode = advanced.rcode;
   if (advanced.source) filters.source = advanced.source;
   if (advanced.minMs) filters.min_ms = advanced.minMs;
+  if (advanced.dnssec && chip !== "bogus") filters.dnssec = advanced.dnssec;
+  if (advanced.proto) filters.proto = advanced.proto;
   return filters;
 }
 
@@ -630,8 +634,16 @@ export default function DnsLogsTab({ permissions }: { permissions: readonly stri
     { key: "result", header: pick(language, COPY.results), render: (row) => { const word = resultWord(language, row); return <StatusPill tone={word.tone} label={word.label} />; }, hideOnCard: true },
     { key: "source", header: pick(language, COPY.source), render: (row) => logSourceWord(language, row.source) },
     { key: "ms", header: pick(language, COPY.took), render: (row) => (typeof row.ms === "number" ? say(language, COPY.msValue, { ms: formatNumber(row.ms, language, { maximumFractionDigits: row.ms < 10 ? 1 : 0 }) }) : "—"), align: "end" },
+    {
+      key: "dnssec",
+      header: pick(language, COPY.dnssec),
+      render: (row) => {
+        const word = row.dnssec ? LOG_DNSSEC_WORDS[row.dnssec] : undefined;
+        return word ? <StatusPill tone={word.tone} label={pick(language, word.label)} /> : "—";
+      }
+    },
     { key: "proto", header: pick(language, COPY.proto), render: (row) => <Ltr>{(row.proto ?? "").toUpperCase() || "—"}</Ltr>, advancedOnly: true },
-    { key: "upstream", header: pick(language, COPY.upstream), render: (row) => <Ltr mono>{row.upstream || "—"}</Ltr>, advancedOnly: true },
+    { key: "upstream", header: pick(language, COPY.upstream), render: (row) => (row.token ? say(language, COPY.tokenFlag, { id: row.token }) : <Ltr mono>{row.upstream || "—"}</Ltr>), advancedOnly: true },
     { key: "size", header: pick(language, COPY.size), render: (row) => (typeof row.size === "number" ? formatSize(row.size, language) : "—"), advancedOnly: true },
     {
       key: "flags",
@@ -747,6 +759,14 @@ export default function DnsLogsTab({ permissions }: { permissions: readonly stri
               <TextField select size="small" label={pick(language, COPY.source)} value={advanced.source} onChange={(event) => setAdvanced({ ...advanced, source: event.target.value })}>
                 <MenuItem value="">{pick(language, COPY.any)}</MenuItem>
                 {LOG_SOURCES.map((source) => <MenuItem key={source} value={source}>{pick(language, LOG_SOURCE_WORDS[source])}</MenuItem>)}
+              </TextField>
+              <TextField select size="small" label={pick(language, COPY.dnssec)} value={chip === "bogus" ? "" : advanced.dnssec} disabled={chip === "bogus"} onChange={(event) => setAdvanced({ ...advanced, dnssec: event.target.value })}>
+                <MenuItem value="">{pick(language, COPY.any)}</MenuItem>
+                {LOG_DNSSEC.map((key) => <MenuItem key={key} value={key}>{pick(language, LOG_DNSSEC_WORDS[key].label)}</MenuItem>)}
+              </TextField>
+              <TextField select size="small" label={pick(language, COPY.proto)} value={advanced.proto} onChange={(event) => setAdvanced({ ...advanced, proto: event.target.value })}>
+                <MenuItem value="">{pick(language, COPY.any)}</MenuItem>
+                {LOG_PROTOS.map((key) => <MenuItem key={key} value={key}>{pick(language, LOG_PROTO_WORDS[key])}</MenuItem>)}
               </TextField>
               <NumberInput label={pick(language, COPY.minMs)} value={advanced.minMs} onChange={(value) => setAdvanced({ ...advanced, minMs: value })} min={0} max={60_000} integer />
               {JSON.stringify(advanced) !== JSON.stringify(EMPTY_ADVANCED) ? (

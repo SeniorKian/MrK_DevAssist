@@ -3,6 +3,9 @@
  * Every engine setting: listen addresses, who may ask, recursion, outside DNS servers (with ready
  * presets), cache, limits and protections. The whole object is saved with its `config_version`;
  * a 409 `dns_config_conflict` asks the user to load the latest version instead of overwriting it.
+ *
+ * D4 (docs/40 §6): the «روش پیدا کردن نشانی‌ها» and «امضای امنیتی» cards edit the `resolution` and
+ * `dnssec` sections of the same draft. They are the only cards in Simple mode; Advanced shows all.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -17,13 +20,16 @@ import CleaningServicesRoundedIcon from "@mui/icons-material/CleaningServicesRou
 import LockRoundedIcon from "@mui/icons-material/LockRounded";
 import PublicRoundedIcon from "@mui/icons-material/PublicRounded";
 import { ApiError, hasPermission, isAbortError } from "./api";
+import { withDefaults } from "./dnsLive";
+import { DEFAULT_DNSSEC, DEFAULT_RESOLUTION, warningsOf, type DnsD4Status, type DnssecSettings, type ResolutionSettings, type SettingsWarning } from "./dnsSecure";
+import { DnssecCard, ResolutionCard, SaveWarnings, cleanSecuritySections, validateDnssec, validateResolution } from "./DnsSecuritySettings";
 import { errorSentence, pick, say, type Bi } from "./copy";
 import {
   BytesInput, ChoiceCards, DurationInput, FriendlyError, ListInput, Ltr, NoAccess, Notice, NumberInput, SectionCard, helperProblem,
   formatRelative, useConfirmAction, useKit, useUndoSnackbar
 } from "./kit";
 import {
-  PROTO_WORDS, STRATEGY_WORDS, UPSTREAM_PRESETS, buildUpstreamAddress, fetchDnsIntegration, fetchDnsSettings, flushDnsCache, isCidr, isDnsName,
+  PROTO_WORDS, STRATEGY_WORDS, UPSTREAM_PRESETS, buildUpstreamAddress, dnsFieldMessages, fetchDnsIntegration, useDnsStatus, fetchDnsSettings, flushDnsCache, isCidr, isDnsName,
   isIPv4, isIPv6, isListenAddress, presetFor, saveDnsIntegration, saveDnsSettings, type DnsIntegration, type DnsIntegrationSettings, upstreamAddressProblem, upstreamProto, type DnsSettings, type DnsUpstream, type UpstreamProto, type UpstreamStrategy
 } from "./dns";
 
@@ -135,12 +141,24 @@ const COPY = {
   saveTitle: { fa: "تنظیمات DNS ذخیره شود؟", en: "Save the DNS settings?" },
   saveDanger: { fa: "این تغییر ممکن است جواب‌دادن DNS را برای بعضی دستگاه‌ها قطع کند. مطمئنید؟", en: "This change may stop DNS answering some devices. Are you sure?" },
   saveYes: { fa: "بله، ذخیره کن", en: "Yes, save" },
-  version: { fa: "نسخه تنظیمات", en: "Settings version" }
+  version: { fa: "نسخه تنظیمات", en: "Settings version" },
+  moreInAdvanced: { fa: "تنظیمات بیشتر (نشانی‌ها، DNS‌های بیرونی، حافظه، سقف‌ها) در حالت «پیشرفته» است.", en: "More settings (addresses, outside DNS servers, memory, limits) are in Advanced mode." },
+  d4Missing: { fa: "برنامه DNS روی سرور هنوز «روش پیدا کردن نشانی‌ها» و «امضای امنیتی» را ندارد. آن را به‌روز کنید.", en: "The DNS program on the server doesn't have “How addresses are found” and “Security signatures” yet. Update it." },
+  dnssecOffBody: { fa: "با خاموش کردن بررسی امضا، MRK جواب‌های جعلی را تشخیص نمی‌دهد. مطمئنید؟", en: "With signature checks off, MRK won't notice fake answers. Are you sure?" }
 } satisfies Record<string, Bi>;
 
 const OPEN_RANGES = new Set(["0.0.0.0/0", "::/0"]);
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+/** Fill missing keys of the D4 sections (only when the engine sent them) and drop a stray `warnings`. */
+function normalize(settings: DnsSettings): DnsSettings {
+  const next = clone(settings);
+  delete next.warnings;
+  if (next.resolution && typeof next.resolution === "object") next.resolution = withDefaults(next.resolution, DEFAULT_RESOLUTION);
+  if (next.dnssec && typeof next.dnssec === "object") next.dnssec = withDefaults(next.dnssec, DEFAULT_DNSSEC);
+  return next;
+}
 
 /** Paths that differ (`cache.max_ttl`, `upstreams`), for the «n تغییر» counter. */
 function changedPaths(a: unknown, b: unknown, prefix = ""): string[] {
@@ -183,7 +201,7 @@ function AddUpstreamDialog({ existing, onAdd, onClose }: { existing: DnsUpstream
   const have = new Set(existing.map((item) => item.address));
   const address = host.trim() ? buildUpstreamAddress(proto, host, tlsName) : "";
   const problem = address ? (have.has(address) ? pick(language, COPY.duplicate) : upstreamAddressProblem(language, address)) : null;
-  const hostHint = proto === "doh" ? COPY.hostHintDoh : proto === "dot" ? COPY.hostHintDot : COPY.hostHintUdp;
+  const hostHint = proto === "doh" ? COPY.hostHintDoh : proto === "dot" || proto === "doq" ? COPY.hostHintDot : COPY.hostHintUdp;
 
   return (
     <Dialog open onClose={onClose} fullScreen={fullScreen} fullWidth maxWidth="sm">
@@ -226,7 +244,7 @@ function AddUpstreamDialog({ existing, onAdd, onClose }: { existing: DnsUpstream
           <Divider />
           <Typography variant="subtitle2" sx={{ fontWeight: 720 }}>{pick(language, COPY.custom)}</Typography>
           <TextField select label={pick(language, COPY.protocol)} value={proto} onChange={(event) => setProto(event.target.value as UpstreamProto)} fullWidth>
-            {(["dot", "doh", "udp"] as UpstreamProto[]).map((key) => (
+            {(["dot", "doh", "doq", "udp"] as UpstreamProto[]).map((key) => (
               <MenuItem key={key} value={key}>{pick(language, PROTO_WORDS[key])}</MenuItem>
             ))}
           </TextField>
@@ -239,7 +257,7 @@ function AddUpstreamDialog({ existing, onAdd, onClose }: { existing: DnsUpstream
             fullWidth
             slotProps={{ htmlInput: { dir: "ltr", spellCheck: false, autoCapitalize: "none" } }}
           />
-          {proto === "dot" ? (
+          {proto === "dot" || proto === "doq" ? (
             <TextField
               label={pick(language, COPY.tlsName)}
               value={tlsName}
@@ -390,7 +408,9 @@ function IntegrationCard() {
 }
 
 export default function DnsSettingsTab({ permissions }: { permissions: readonly string[] }) {
-  const { language } = useKit();
+  const { language, isAdvanced } = useKit();
+  const { status } = useDnsStatus(30_000);
+  const [warnings, setWarnings] = useState<SettingsWarning[]>([]);
   const canAdmin = hasPermission(permissions, "dns:admin");
   const [saved, setSaved] = useState<DnsSettings | null>(null);
   const [draft, setDraft] = useState<DnsSettings | null>(null);
@@ -410,7 +430,7 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
     const current = new AbortController();
     controller.current = current;
     try {
-      const data = await fetchDnsSettings(current.signal);
+      const data = normalize(await fetchDnsSettings(current.signal));
       setSaved(clone(data));
       setDraft(clone(data));
       setError(null);
@@ -447,6 +467,7 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
       else if (!item.udp && !item.tcp) result[`listen.${index}`] = pick(language, COPY.protoNeeded);
     });
     if (draft.cache && draft.cache.min_ttl > draft.cache.max_ttl) result.ttl = pick(language, COPY.ttlOrder);
+    Object.assign(result, validateResolution(language, draft.resolution as ResolutionSettings | undefined), validateDnssec(language, draft.dnssec as DnssecSettings | undefined));
     return result;
   }, [draft, language]);
   const invalid = Object.keys(problems).length > 0;
@@ -456,10 +477,11 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
   const save = async () => {
     if (!draft || invalid || !changes.length) return;
     const risky = openResolver || changes.some((path) => path.startsWith("listen") || path.startsWith("query_allow") || path.startsWith("recursion"));
-    if (risky) {
+    const dnssecOff = (draft.dnssec as DnssecSettings | undefined)?.mode === "off" && (saved?.dnssec as DnssecSettings | undefined)?.mode !== "off";
+    if (risky || dnssecOff) {
       const ok = await ask({
         title: pick(language, COPY.saveTitle),
-        body: pick(language, COPY.saveDanger),
+        body: pick(language, risky ? COPY.saveDanger : COPY.dnssecOffBody),
         severity: openResolver ? "destructive" : "disruptive",
         confirmLabel: pick(language, COPY.saveYes)
       });
@@ -469,9 +491,13 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
     setSaveError(null);
     setConflict(false);
     try {
-      const result = await saveDnsSettings({ ...draft, config_version: saved?.config_version ?? draft.config_version });
-      const next = result && typeof result === "object" ? ((result as { settings?: DnsSettings }).settings ?? (result as DnsSettings)) : null;
-      if (next && Array.isArray(next.listen)) {
+      const body = clone({ ...draft, config_version: saved?.config_version ?? draft.config_version });
+      cleanSecuritySections(body as { resolution?: ResolutionSettings; dnssec?: DnssecSettings });
+      const result = await saveDnsSettings(body);
+      setWarnings(warningsOf(result));
+      const raw = result && typeof result === "object" ? ((result as { settings?: DnsSettings }).settings ?? (result as DnsSettings)) : null;
+      if (raw && Array.isArray(raw.listen)) {
+        const next = normalize(raw);
         setSaved(clone(next));
         setDraft(clone(next));
       } else {
@@ -519,6 +545,29 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
   const upstreams = draft.upstreams ?? [];
   const flushProblem = flushName.trim() && !isDnsName(flushName.trim()) ? pick(language, COPY.badFlushName) : null;
   const strategy = (draft.upstream_strategy in STRATEGY_WORDS ? draft.upstream_strategy : "fastest") as UpstreamStrategy;
+  const serverFields = dnsFieldMessages(language, saveError);
+  const d4Status = (status?.engine ?? null) as DnsD4Status | null;
+  const securityCards = draft.resolution && draft.dnssec ? (
+    <>
+      <ResolutionCard
+        value={draft.resolution as ResolutionSettings}
+        update={(mutate) => update((next) => { mutate(next.resolution as ResolutionSettings); })}
+        problems={problems}
+        serverFields={serverFields}
+        status={d4Status?.resolution}
+        enabledUpstreams={upstreams.filter((item) => item.enabled !== false).length}
+      />
+      <DnssecCard
+        value={draft.dnssec as DnssecSettings}
+        update={(mutate) => update((next) => { mutate(next.dnssec as DnssecSettings); })}
+        problems={problems}
+        serverFields={serverFields}
+        canAdmin={canAdmin}
+      />
+    </>
+  ) : (
+    <Notice tone="info">{pick(language, COPY.d4Missing)}</Notice>
+  );
 
   return (
     <Stack spacing={2.5} sx={{ pb: changes.length ? 10 : 0 }}>
@@ -528,6 +577,12 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
         </Notice>
       ) : null}
 
+      <SaveWarnings warnings={warnings} onClose={() => setWarnings([])} />
+
+      {!isAdvanced ? securityCards : null}
+      {!isAdvanced ? <Notice tone="info">{pick(language, COPY.moreInAdvanced)}</Notice> : null}
+
+      {isAdvanced ? (<>
       <SectionCard title={pick(language, COPY.listenTitle)} hint={pick(language, COPY.listenHint)}>
         <Stack spacing={1.5}>
           {draft.listen.map((item, index) => (
@@ -621,6 +676,8 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
         </Stack>
       </SectionCard>
 
+      {securityCards}
+
       <SectionCard title={pick(language, COPY.cacheTitle)} hint={pick(language, COPY.cacheHint)}>
         <Stack spacing={2}>
           <Row>
@@ -678,6 +735,7 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
       </SectionCard>
 
       <IntegrationCard />
+      </>) : null}
 
       {saved?.config_version !== undefined ? (
         <Typography variant="caption" color="text.secondary">{pick(language, COPY.version)}: <Ltr mono>{String(saved.config_version)}</Ltr></Typography>

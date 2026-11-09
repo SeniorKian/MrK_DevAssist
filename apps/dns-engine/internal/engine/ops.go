@@ -19,6 +19,7 @@ import (
 	"mrk/dns-engine/internal/fielderr"
 	"mrk/dns-engine/internal/metrics"
 	"mrk/dns-engine/internal/store"
+	"mrk/dns-engine/internal/trace"
 	"mrk/dns-engine/internal/version"
 	"mrk/dns-engine/internal/zone"
 )
@@ -62,6 +63,9 @@ func (e *Engine) PutSettings(s config.Settings, expected int64) (config.Settings
 	if l := s.Validate(); len(l) > 0 {
 		return config.Settings{}, 0, l.Err(CodeSettingsInvalid, "settings are invalid")
 	}
+	if err := e.checkEncryptedLocked(s); err != nil {
+		return config.Settings{}, 0, err
+	}
 	prev, prevVersion := e.settings, e.configVersion
 	e.settings, e.configVersion = s.Clone(), e.configVersion+1
 	if err := e.rebuildLocked(); err != nil {
@@ -77,6 +81,9 @@ func (e *Engine) PutSettings(s config.Settings, expected int64) (config.Settings
 	e.applyMonitorSettings(e.settings)
 	if prev.RebindingProtection != s.RebindingProtection || prev.Cache.MinTTL != s.Cache.MinTTL || prev.Cache.MaxTTL != s.Cache.MaxTTL {
 		e.Cache.Flush("")
+	}
+	if d4FlushNeeded(prev, e.settings) {
+		e.flushD4()
 	}
 	if h := e.listenerHook.Load(); h != nil {
 		go (*h)(e.settings.Clone())
@@ -780,6 +787,9 @@ type ResolveResult struct {
 	Upstream  string          `json:"upstream,omitempty"`
 	Stale     bool            `json:"stale,omitempty"`
 	RTTMS     float64         `json:"rtt_ms"`
+	DNSSEC    ResolveDNSSEC   `json:"dnssec"`
+	EDE       []EDEView       `json:"ede"`
+	Trace     []trace.Step    `json:"trace,omitempty"`
 }
 
 func rrView(rr dns.RR) ResolveAnswer {
@@ -791,6 +801,13 @@ func rrView(rr dns.RR) ResolveAnswer {
 
 // Resolve runs the full pipeline for a test query as if sent by client.
 func (e *Engine) Resolve(ctx context.Context, name, qtype, client string) (ResolveResult, error) {
+	return e.ResolveWith(ctx, ResolveRequest{Name: name, Type: qtype, ClientIP: client})
+}
+
+// ResolveWith is Resolve with the D4 options: DNSSEC records (DO, default
+// on), CD, a step-by-step trace and cache bypass (docs/40 §3).
+func (e *Engine) ResolveWith(ctx context.Context, rq ResolveRequest) (ResolveResult, error) {
+	name, qtype, client := rq.Name, rq.Type, rq.ClientIP
 	var l fielderr.List
 	fq := strings.ToLower(dns.Fqdn(strings.TrimSpace(name)))
 	if _, ok := dns.IsDomainName(fq); !ok || len(fq) > 254 || strings.TrimSpace(name) == "" {
@@ -819,6 +836,16 @@ func (e *Engine) Resolve(ctx context.Context, name, qtype, client string) (Resol
 	req := new(dns.Msg)
 	req.SetQuestion(fq, t)
 	req.RecursionDesired = true
+	do := rq.DNSSEC == nil || *rq.DNSSEC
+	req.SetEdns0(uint16(p.s.Limits.UDPMaxSize), do)
+	req.CheckingDisabled = rq.CD
+	var tr *trace.Trace
+	if rq.Trace {
+		tr = &trace.Trace{}
+	}
+	if rq.Trace || rq.NoCache {
+		ctx = trace.With(ctx, tr, rq.NoCache)
+	}
 	var resp *dns.Msg
 	meta := answerMeta{src: metrics.SrcRefused}
 	if !p.queryACL.Allowed(addr) {
@@ -826,8 +853,12 @@ func (e *Engine) Resolve(ctx context.Context, name, qtype, client string) (Resol
 	} else {
 		resp, meta = e.answer(ctx, p, req, addr, API)
 	}
+	if !do {
+		stripDNSSEC(resp, t)
+	}
 	res := ResolveResult{Rcode: dns.RcodeToString[resp.Rcode], Answers: []ResolveAnswer{}, Source: sourceName(meta.src),
-		Upstream: meta.upstream, Stale: meta.stale, RTTMS: float64(time.Since(start).Microseconds()) / 1000}
+		Upstream: meta.upstream, Stale: meta.stale, RTTMS: float64(time.Since(start).Microseconds()) / 1000,
+		DNSSEC: resolveDNSSECView(p, meta, resp), EDE: edeViews(resp), Trace: tr.Steps()}
 	if resp.Rcode == dns.RcodeRefused && meta.src == metrics.SrcRefused {
 		res.Source = "refused"
 	}
@@ -885,6 +916,9 @@ type Status struct {
 	ConfigVersion int64            `json:"config_version"`
 	Zones         int              `json:"zones"`
 	Overrides     int              `json:"overrides"`
+	Resolution    ResolutionStatus `json:"resolution"`
+	DNSSEC        DNSSECStatus     `json:"dnssec"`
+	Encrypted     EncryptedStatus  `json:"encrypted"`
 }
 
 // Status builds the status document.
@@ -896,7 +930,8 @@ func (e *Engine) Status(listeners []ListenerStatus) Status {
 	st := Status{Version: version.String(), StartedAt: e.started.UTC(), UptimeS: int64(time.Since(e.started).Seconds()),
 		Listeners: listeners, QPS1s: q1, QPS1m: q60, QueriesTotal: e.M.Total(), Cache: e.Cache.Stats(),
 		Upstreams: []UpstreamStatus{}, Pressure: e.PressureLevel(), MemoryBytes: ms.Sys - ms.HeapReleased, Goroutines: runtime.NumGoroutine(),
-		ConfigVersion: p.configVersion, Zones: p.zones.Len(), Overrides: len(e.Overrides())}
+		ConfigVersion: p.configVersion, Zones: p.zones.Len(), Overrides: len(e.Overrides()),
+		Resolution: e.resolutionStatus(p), DNSSEC: e.dnssecStatus(p), Encrypted: e.encryptedStatus()}
 	if st.Listeners == nil {
 		st.Listeners = []ListenerStatus{}
 	}
@@ -935,6 +970,8 @@ func (e *Engine) WritePrometheus(w io.Writer) {
 			Labels: fmt.Sprintf("upstream=%q", u.ID), Value: u.RTT().Seconds()})
 	}
 	g = append(g, e.monitorGauges()...)
+	g = append(g, e.d4Gauges()...)
+	g = append(g, e.encGauges()...)
 	e.M.WritePrometheus(w, g)
 }
 

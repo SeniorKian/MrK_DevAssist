@@ -118,6 +118,13 @@ const COPY = {
   removeYes: { fa: "بله، بردار", en: "Yes, remove" },
   removed: { fa: "محدودیت «{name}» برداشته شد.", en: "The limit on “{name}” was removed." },
   added: { fa: "محدودیت «{name}» گذاشته شد.", en: "A limit was set on “{name}”." },
+  // DNSSEC chart (docs/40 §4)
+  dnssecChart: { fa: "امضای امنیتی جواب‌ها", en: "Answers' security signatures" },
+  dnssecChartHint: { fa: "چند جواب امضای درست داشت، چند تا بدون امضا بود و چند تا امضای خراب (ممکن است جعلی بوده باشد).", en: "How many answers had a good signature, how many weren't signed, and how many had a broken one (possibly fake)." },
+  dnsSecure: { fa: "امضا درست", en: "Signed" },
+  dnsInsecure: { fa: "بدون امضا", en: "Not signed" },
+  dnsBogus: { fa: "امضای خراب", en: "Broken" },
+  dnssecTotals: { fa: "در این بازه: {secure} امضا درست، {insecure} بدون امضا، {bogus} خراب", en: "In this range: {secure} signed, {insecure} not signed, {bogus} broken" },
   // events
   eventsTitle: { fa: "رخدادهای اخیر", en: "Recent events" },
   eventsEmpty: { fa: "هنوز رخدادی ثبت نشده است.", en: "No events yet." },
@@ -162,7 +169,7 @@ const RANGE_WORDS: Record<StatsRange, Bi> = {
   "1y": { fa: "۱ سال", en: "1 year" }
 };
 const POLL_MS: Record<StatsRange, number> = { "1h": 15_000, "6h": 30_000, "24h": 60_000, "7d": 300_000, "30d": 300_000, "1y": 600_000 };
-const COLORS = { qps: "#3b82f6", p95: "#8b5cf6", hit: "#10b981", errors: "#ef4444" };
+const COLORS = { qps: "#3b82f6", p95: "#8b5cf6", hit: "#10b981", errors: "#ef4444", secure: "#16a34a", insecure: "#94a3b8", bogus: "#dc2626" };
 const RANGE_KEY = "mrk-dns-range";
 
 function readRange(allowed: StatsRange[]): StatsRange {
@@ -308,6 +315,7 @@ function ChartsCard({ stats, error, loading, range, ranges, onRange, onRetry }: 
   const common = { times, formatX, formatTooltipX, emptyText: pick(language, COPY.noData), height: 180, words: WORDS[language], showSummary: true };
   const label = pick(language, RANGE_WORDS[range]);
   const total = stats?.totals?.queries;
+  const hasDnssec = points.some((point) => point.dnssec && typeof point.dnssec === "object");
 
   const charts = [
     { key: "qps", title: COPY.qps, hint: null, color: COLORS.qps, values: points.map((point) => point.qps ?? null), format: (value: number) => formatQps(language, value), yMax: undefined },
@@ -341,6 +349,32 @@ function ChartsCard({ stats, error, loading, range, ranges, onRange, onRetry }: 
               />
             </Box>
           ))}
+          {hasDnssec ? (
+            <Box sx={{ minWidth: 0, gridColumn: { md: "1 / -1" } }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 720 }}>{pick(language, COPY.dnssecChart)}</Typography>
+              <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 0.5 }}>{pick(language, COPY.dnssecChartHint)}</Typography>
+              <LineChart
+                {...common}
+                area={false}
+                title={`${pick(language, COPY.dnssecChart)} · ${label}`}
+                series={[
+                  { label: pick(language, COPY.dnsSecure), color: COLORS.secure, values: points.map((point) => point.dnssec?.secure ?? null) },
+                  { label: pick(language, COPY.dnsInsecure), color: COLORS.insecure, values: points.map((point) => point.dnssec?.insecure ?? null) },
+                  { label: pick(language, COPY.dnsBogus), color: COLORS.bogus, values: points.map((point) => point.dnssec?.bogus ?? null) }
+                ]}
+                formatY={(value) => formatNumber(value, language)}
+              />
+              {stats?.totals?.dnssec ? (
+                <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 0.5 }}>
+                  {say(language, COPY.dnssecTotals, {
+                    secure: formatNumber(stats.totals.dnssec.secure ?? 0, language),
+                    insecure: formatNumber(stats.totals.dnssec.insecure ?? 0, language),
+                    bogus: formatNumber(stats.totals.dnssec.bogus ?? 0, language)
+                  })}
+                </Typography>
+              ) : null}
+            </Box>
+          ) : null}
         </Box>
       </Stack>
     </SectionCard>

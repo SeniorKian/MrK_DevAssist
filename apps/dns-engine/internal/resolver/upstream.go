@@ -1,5 +1,5 @@
 // Package resolver forwards queries to upstream resolvers over UDP, TCP, DoT
-// (RFC 7858) and DoH (RFC 8484) with health checks, EWMA latency tracking,
+// (RFC 7858), DoH (RFC 8484) and DoQ (RFC 9250) with health checks, EWMA latency tracking,
 // fastest/parallel/in_order strategies, bounded in-flight exchanges and
 // single-flight coalescing.
 package resolver
@@ -71,6 +71,8 @@ type Upstream struct {
 	bootAddrs []string
 	bootExp   time.Time
 
+	doqc doqClient // DoQ connection
+
 	m *metrics.Upstream
 }
 
@@ -124,6 +126,9 @@ func (u *Upstream) Close() {
 		}
 	}
 done:
+	if u.Addr.Proto == config.ProtoDoQ {
+		u.closeDoQ()
+	}
 	if u.httpc != nil {
 		u.httpc.CloseIdleConnections()
 	}
@@ -195,6 +200,8 @@ func (u *Upstream) Exchange(ctx context.Context, q *dns.Msg) (*dns.Msg, time.Dur
 		r, err = u.stream(ctx, q, true)
 	case config.ProtoDoH:
 		r, err = u.doh(ctx, q)
+	case config.ProtoDoQ:
+		r, err = u.doq(ctx, q)
 	default:
 		err = fmt.Errorf("unknown protocol")
 	}

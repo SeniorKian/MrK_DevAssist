@@ -1,8 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Box, Button, IconButton, InputAdornment, Stack, TextField, Typography, type TextFieldProps } from "@mui/material";
-import HubRoundedIcon from "@mui/icons-material/HubRounded";
-import SecurityRoundedIcon from "@mui/icons-material/SecurityRounded";
-import StorageRoundedIcon from "@mui/icons-material/StorageRounded";
+import { alpha, useTheme } from "@mui/material/styles";
+import TranslateRoundedIcon from "@mui/icons-material/TranslateRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import type { Language } from "./i18n";
@@ -188,13 +187,15 @@ function Logo({ size }: { size: number }) {
       sx={{
         width: size,
         height: size,
-        borderRadius: 1.25,
+        borderRadius: 1.5,
         display: "grid",
         placeItems: "center",
         fontWeight: 850,
-        fontSize: size < 40 ? 12 : 13,
+        fontSize: Math.round(size * 0.3),
+        letterSpacing: "0.02em",
         color: "#042f2e",
         background: "linear-gradient(145deg, #99f6e4, #38bdf8)",
+        boxShadow: "0 8px 24px rgba(45, 212, 191, .25)",
         flexShrink: 0
       }}
     >
@@ -203,108 +204,108 @@ function Logo({ size }: { size: number }) {
   );
 }
 
-/** Two-column frame for sign-in, first-run setup, invite and forced password change. */
+/** Centered, minimal frame for sign-in, first-run setup, invite and forced password change. */
 export function AuthShell({ language, onLanguageChange, children }: AuthShellProps) {
   const t = (key: Parameters<typeof translate>[1]) => translate(language, key);
-  const items = [
-    { icon: SecurityRoundedIcon, label: t("securedSetup") },
-    { icon: StorageRoundedIcon, label: t("localData") },
-    { icon: HubRoundedIcon, label: t("modularPlatform") }
-  ];
+  const theme = useTheme();
+  const dark = theme.palette.mode === "dark";
+  const glow = alpha(theme.palette.primary.main, dark ? 0.16 : 0.12);
+  const dot = dark ? "rgba(148, 183, 194, .13)" : "rgba(30, 64, 75, .11)";
 
   return (
     <Box
       component="main"
       dir={language === "fa" ? "rtl" : "ltr"}
       sx={{
+        position: "relative",
         minHeight: "100vh",
-        display: "grid",
-        gridTemplateColumns: { xs: "1fr", md: "minmax(340px, 0.85fr) minmax(520px, 1.15fr)" },
-        bgcolor: "background.default"
+        display: "flex",
+        flexDirection: "column",
+        bgcolor: "background.default",
+        overflow: "hidden",
+        isolation: "isolate",
+        "&::before": {
+          content: '""',
+          position: "absolute",
+          inset: 0,
+          zIndex: -1,
+          backgroundImage: `radial-gradient(${dot} 1px, transparent 1px)`,
+          backgroundSize: "22px 22px",
+          maskImage: "radial-gradient(ellipse 70% 60% at 50% 40%, #000 30%, transparent 100%)",
+          WebkitMaskImage: "radial-gradient(ellipse 70% 60% at 50% 40%, #000 30%, transparent 100%)"
+        },
+        "&::after": {
+          content: '""',
+          position: "absolute",
+          inset: 0,
+          zIndex: -1,
+          background: `radial-gradient(ellipse 55% 38% at 50% -6%, ${glow}, transparent 70%)`
+        }
       }}
     >
-      <Box
-        sx={{
-          display: { xs: "none", md: "flex" },
-          flexDirection: "column",
-          justifyContent: "space-between",
-          p: { md: 5, lg: 7 },
-          borderInlineEnd: 1,
-          borderColor: "divider",
-          background:
-            "radial-gradient(circle at 30% 20%, rgba(45,212,191,.16), transparent 34%), linear-gradient(160deg, rgba(56,189,248,.06), transparent 52%)"
-        }}
-      >
-        <Stack direction="row" alignItems="center" spacing={1.5}>
-          <Logo size={42} />
-          <Box>
-            <Typography fontWeight={800}>{t("product")}</Typography>
-            <Typography variant="caption" color="text.secondary">
-              {t("subtitle")}
-            </Typography>
+      <Stack direction="row" justifyContent="flex-end" sx={{ p: { xs: 2, sm: 3 } }}>
+        <Button
+          size="small"
+          variant="text"
+          color="inherit"
+          onClick={onLanguageChange}
+          lang={language === "fa" ? "en" : "fa"}
+          startIcon={<TranslateRoundedIcon fontSize="small" />}
+          sx={{ minHeight: 40, px: 1.5, color: "text.secondary", "& .MuiButton-startIcon": { marginInlineStart: 0, marginInlineEnd: 1 } }}
+        >
+          {t("language")}
+        </Button>
+      </Stack>
+
+      <Box sx={{ flex: 1, display: "grid", placeItems: "center", px: 2, pb: { xs: 4, sm: 8 } }}>
+        <Box sx={{ width: "100%", maxWidth: 440 }}>
+          <Stack alignItems="center" spacing={1.5} sx={{ mb: 3.5, textAlign: "center" }}>
+            <Logo size={52} />
+            <Box>
+              <Typography variant="h6" component="p" sx={{ fontWeight: 800, lineHeight: 1.3 }}>
+                {t("product")}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {t("subtitle")}
+              </Typography>
+            </Box>
+          </Stack>
+
+          <Box
+            sx={{
+              p: { xs: 3, sm: 4 },
+              borderRadius: 3,
+              border: 1,
+              borderColor: "divider",
+              bgcolor: alpha(theme.palette.background.paper, dark ? 0.78 : 0.9),
+              backdropFilter: "blur(10px)",
+              boxShadow: dark ? "0 24px 60px rgba(0, 0, 0, .35)" : "0 24px 60px rgba(27, 59, 69, .10)"
+            }}
+          >
+            {children}
           </Box>
-        </Stack>
 
-        <Box sx={{ maxWidth: 500 }}>
-          <Typography variant="h3" component="p" sx={{ fontWeight: 820, lineHeight: 1.35 }}>
-            {t("heroTitle")}
+          <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 3, textAlign: "center" }}>
+            {t("product")} · {t("singleNodeAppliance")}
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 2, lineHeight: 1.9 }}>
-            {t("heroBody")}
-          </Typography>
-          <Stack component="ul" spacing={1.4} sx={{ mt: 4, p: 0, listStyle: "none" }}>
-            {items.map(({ icon: Icon, label }) => (
-              <Stack component="li" key={label} direction="row" alignItems="center" spacing={1.25}>
-                <Box sx={{ width: 34, height: 34, display: "grid", placeItems: "center", border: 1, borderColor: "divider", borderRadius: 1 }}>
-                  <Icon color="primary" sx={{ fontSize: 19 }} aria-hidden />
-                </Box>
-                <Typography variant="body2" fontWeight={620}>
-                  {label}
-                </Typography>
-              </Stack>
-            ))}
-          </Stack>
         </Box>
-        <Typography variant="caption" color="text.secondary">
-          {t("product")} · {t("singleNodeAppliance")}
-        </Typography>
-      </Box>
-
-      <Box sx={{ minWidth: 0, display: "flex", flexDirection: "column", p: { xs: 2, sm: 4, lg: 7 } }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Stack direction="row" alignItems="center" spacing={1.2} sx={{ display: { md: "none" } }}>
-            <Logo size={34} />
-            <Typography fontWeight={780}>{t("subtitle")}</Typography>
-          </Stack>
-          <Box sx={{ display: { xs: "none", md: "block" } }} />
-          <Button size="small" variant="outlined" onClick={onLanguageChange} lang={language === "fa" ? "en" : "fa"} sx={{ minHeight: 40 }}>
-            {t("language")}
-          </Button>
-        </Stack>
-        <Box sx={{ width: "100%", maxWidth: 560, m: "auto", py: { xs: 5, md: 3 } }}>{children}</Box>
       </Box>
     </Box>
   );
 }
 
-/** Icon badge + title + hint at the top of an auth form. */
-export function AuthHeading({ icon, title, hint }: { icon: ReactNode; title: string; hint?: string }) {
+/** Title + hint at the top of an auth form (the icon is kept for callers but not drawn). */
+export function AuthHeading({ title, hint }: { icon?: ReactNode; title: string; hint?: string }) {
   return (
-    <>
-      <Box
-        aria-hidden
-        sx={{ width: 44, height: 44, borderRadius: 1.25, display: "grid", placeItems: "center", color: "primary.contrastText", bgcolor: "primary.main" }}
-      >
-        {icon}
-      </Box>
-      <Typography variant="h4" component="h1" sx={{ mt: 2.5, fontWeight: 780 }}>
+    <Box sx={{ textAlign: "center" }}>
+      <Typography variant="h5" component="h1" sx={{ fontWeight: 780 }}>
         {title}
       </Typography>
       {hint && (
-        <Typography color="text.secondary" sx={{ mt: 1, lineHeight: 1.8 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.8 }}>
           {hint}
         </Typography>
       )}
-    </>
+    </Box>
   );
 }

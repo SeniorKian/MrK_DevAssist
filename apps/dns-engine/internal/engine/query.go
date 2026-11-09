@@ -8,9 +8,12 @@ import (
 
 	"github.com/miekg/dns"
 
+	"mrk/dns-engine/internal/config"
+	"mrk/dns-engine/internal/dnssec"
 	"mrk/dns-engine/internal/limits"
 	"mrk/dns-engine/internal/metrics"
 	"mrk/dns-engine/internal/querylog"
+	"mrk/dns-engine/internal/tokens"
 	"mrk/dns-engine/internal/wire"
 )
 
@@ -30,6 +33,12 @@ func (p Proto) String() string {
 		return "udp"
 	case TCP:
 		return "tcp"
+	case DoT:
+		return "dot"
+	case DoH:
+		return "doh"
+	case DoQ:
+		return "doq"
 	}
 	return "api"
 }
@@ -73,7 +82,7 @@ func (e *Engine) Fast(pkt []byte, client netip.Addr, proto Proto, sc *Scratch) (
 	}
 	udpMax := p.s.Limits.UDPMaxSize
 	name := q.Key[:len(q.Key)-2]
-	if !p.queryACL.Allowed(client) {
+	if !p.admit(client, proto) {
 		return e.fastRefuse(p, pkt, &q, name, client, proto, sc, udpMax, now, querylog.SrcRefused)
 	}
 	// docs/38 §3 order: ACL, mitigation, rate limit, the rest
@@ -91,10 +100,10 @@ func (e *Engine) Fast(pkt []byte, client netip.Addr, proto Proto, sc *Scratch) (
 		}
 		return e.fastRefuse(p, pkt, &q, name, client, proto, sc, udpMax, now, querylog.SrcRateLimited)
 	}
-	if !p.recursionAllowed(client) || e.heavyClient(client) {
+	if !p.recursionFor(client, proto, false) || e.heavyClient(client) {
 		if p.zones.Len() == 0 && !wire.HasSuffix(name, p.local) {
 			src := querylog.SrcRefused
-			if p.recursionAllowed(client) {
+			if p.recursionFor(client, proto, false) {
 				src = querylog.SrcMitigated // refuse_heavy_clients
 			}
 			return e.fastRefuse(p, pkt, &q, name, client, proto, sc, udpMax, now, src)
@@ -109,16 +118,25 @@ func (e *Engine) Fast(pkt []byte, client netip.Addr, proto Proto, sc *Scratch) (
 	if ent == nil || !ent.Fresh(now) {
 		return nil, Slow
 	}
+	t := ent.T
+	validating := p.s.DNSSEC.Mode != config.DNSSECOff
+	if validating && dnssec.State(t.Sec.State) == dnssec.Bogus || t.Sec.HasEDE {
+		return nil, Slow // SERVFAIL+EDE or EDE options are built on the full path
+	}
+	if q.DO && t.DNSSEC != nil {
+		t = t.DNSSEC
+	}
+	ad := validating && dnssec.State(t.Sec.State) == dnssec.Secure && (q.DO || q.Flags&wire.FlagAD != 0)
 	maxSize := 65535
 	if proto == UDP {
 		maxSize = wire.ClientUDPSize(&q, udpMax)
 	}
-	out := ent.T.Render(sc.Out, &wire.RenderOpts{ID: q.ID, ReqFlags: q.Flags, QName: q.QName(pkt),
-		Elapsed: ent.Elapsed(now), EDNS: q.HasEDNS, UDPSize: uint16(udpMax), DO: false, MaxSize: maxSize})
+	out := t.Render(sc.Out, &wire.RenderOpts{ID: q.ID, ReqFlags: q.Flags, QName: q.QName(pkt),
+		Elapsed: ent.Elapsed(now), EDNS: q.HasEDNS, UDPSize: uint16(udpMax), DO: q.DO, AD: ad, MaxSize: maxSize})
 	sc.Out = out[:0]
 	e.M.Source(metrics.SrcCache)
-	e.M.Rcode(ent.T.Rcode)
-	flags := querylog.FlagCached
+	e.M.Rcode(t.Rcode)
+	flags := querylog.FlagCached | secFlags(t.Sec.State)
 	if proto == UDP && len(out) > 0 && out[2]&0x02 != 0 {
 		e.M.Truncated.Add(1)
 		flags |= querylog.FlagTC
@@ -154,6 +172,11 @@ func (e *Engine) fastRefuse(p *policy, pkt []byte, q *wire.Query, name []byte, c
 
 // Slow fully decodes and answers pkt. It returns nil to drop.
 func (e *Engine) Slow(ctx context.Context, pkt []byte, client netip.Addr, proto Proto, checked bool) []byte {
+	return e.slow(ctx, pkt, client, proto, checked, nil)
+}
+
+// slow is Slow; tok is the DoH token admitting the client (SlowToken).
+func (e *Engine) slow(ctx context.Context, pkt []byte, client netip.Addr, proto Proto, checked bool, tok *tokens.Token) []byte {
 	start := time.Now()
 	if len(pkt) < 12 || pkt[2]&0x80 != 0 { // too short or a response: never answer
 		e.M.Drop(metrics.DropMalformed)
@@ -170,7 +193,7 @@ func (e *Engine) Slow(ctx context.Context, pkt []byte, client netip.Addr, proto 
 	req := new(dns.Msg)
 	if err := req.Unpack(pkt); err != nil {
 		e.M.Drop(metrics.DropMalformed)
-		if !checked && !p.queryACL.Allowed(client) {
+		if !checked && tok == nil && !p.admit(client, proto) {
 			return nil
 		}
 		// FORMERR with the header only (RFC 1035 §4.1.1)
@@ -181,19 +204,28 @@ func (e *Engine) Slow(ctx context.Context, pkt []byte, client netip.Addr, proto 
 		e.M.Rcode(dns.RcodeFormatError)
 		return out
 	}
+	tag := ""
+	if tok != nil {
+		tag = tok.Tag()
+		tok.Used(start)
+	}
 	if !checked {
-		if !p.queryACL.Allowed(client) {
+		if tok == nil && !p.admit(client, proto) {
 			resp := refused(req)
 			return e.finish(p, req, resp, client, proto, answerMeta{src: metrics.SrcRefused}, start)
 		}
 		if resp, drop, ok := e.slowMitigate(req, client, proto); ok {
 			if drop {
-				e.recordMsg(req, client, proto, start, dns.RcodeRefused, querylog.SrcMitigated, 0, 0, "")
+				e.recordMsg(req, client, proto, start, dns.RcodeRefused, querylog.SrcMitigated, 0, 0, tag)
 				return nil
 			}
-			return e.finish(p, req, resp, client, proto, answerMeta{src: metrics.SrcMitigated}, start)
+			return e.finish(p, req, resp, client, proto, answerMeta{src: metrics.SrcMitigated, upstream: tag}, start)
 		}
-		if !p.clientLim.Allow(client, time.Now().UnixNano()) {
+		if tok != nil {
+			if !tok.Allow(start.UnixNano()) {
+				return e.tokenLimited(p, req, client, proto, tok, start)
+			}
+		} else if !p.clientLim.Allow(client, time.Now().UnixNano()) {
 			e.M.Drop(metrics.DropClientLimit)
 			if proto == UDP {
 				e.M.Source(metrics.SrcRateLimited)
@@ -206,6 +238,9 @@ func (e *Engine) Slow(ctx context.Context, pkt []byte, client netip.Addr, proto 
 	resp, meta := e.answer(ctx, p, req, client, proto)
 	if resp == nil {
 		return nil
+	}
+	if tag != "" {
+		meta.upstream = tag // docs/40 §4: the token id replaces the upstream
 	}
 	return e.finish(p, req, resp, client, proto, meta, start)
 }
@@ -233,9 +268,11 @@ func (e *Engine) finish(p *policy, req, resp *dns.Msg, client netip.Addr, proto 
 	src := meta.src
 	udpMax := p.s.Limits.UDPMaxSize
 	size := 65535
+	do := false
 	if opt := req.IsEdns0(); opt != nil {
+		do = opt.Do()
 		if resp.IsEdns0() == nil {
-			resp.SetEdns0(uint16(udpMax), false)
+			resp.SetEdns0(uint16(udpMax), do)
 		}
 		if proto == UDP {
 			size = int(opt.UDPSize())
@@ -268,6 +305,9 @@ func (e *Engine) finish(p *policy, req, resp *dns.Msg, client netip.Addr, proto 
 			return b
 		}
 	}
+	if !do && len(req.Question) == 1 {
+		stripDNSSEC(resp, req.Question[0].Qtype)
+	}
 	resp.Compress = true
 	if proto == UDP {
 		resp.Truncate(size)
@@ -295,6 +335,7 @@ func (e *Engine) finish(p *policy, req, resp *dns.Msg, client netip.Addr, proto 
 		if src == metrics.SrcCache || src == metrics.SrcStale {
 			flags |= querylog.FlagCached
 		}
+		flags |= secFlags(meta.sec.State)
 		e.recordMsg(req, client, proto, start, resp.Rcode, qlSource(meta), len(out), flags, meta.upstream)
 	}
 	return out
@@ -315,6 +356,8 @@ func qlSource(m answerMeta) uint8 {
 		return querylog.SrcMitigated
 	case metrics.SrcRateLimited:
 		return querylog.SrcRateLimited
+	case metrics.SrcRecursive:
+		return querylog.SrcRecursive
 	}
 	if m.forwarder {
 		return querylog.SrcForwarder
@@ -361,6 +404,8 @@ func sourceName(src int) string {
 		return "mitigated"
 	case metrics.SrcRateLimited:
 		return "rate_limited"
+	case metrics.SrcRecursive:
+		return "recursive"
 	}
 	return "upstream"
 }
@@ -370,7 +415,9 @@ type answerMeta struct {
 	upstream  string
 	stale     bool
 	forwarder bool
-	mitigated bool // a domain throttle refused upstream work
+	mitigated bool         // a domain throttle refused upstream work
+	sec       wire.SecInfo // DNSSEC status of the answer (D4)
+	ede       uint16       // extended error of a failed resolution
 }
 
 // answer computes the response for a decoded request. nil means drop.
@@ -379,7 +426,8 @@ func (e *Engine) answer(ctx context.Context, p *policy, req *dns.Msg, client net
 	resp := new(dns.Msg)
 	resp.SetReply(req)
 	resp.Authoritative = false
-	recOK := p.recursionAllowed(client)
+	trusted := tokenFrom(ctx) != nil
+	recOK := p.recursionFor(client, proto, trusted)
 	heavy := recOK && e.heavyClient(client) // pressure action refuse_heavy_clients
 	if heavy {
 		recOK = false
@@ -437,7 +485,7 @@ func (e *Engine) answer(ctx context.Context, p *policy, req *dns.Msg, client net
 	qname := strings.ToLower(q.Name)
 
 	// 1. overrides (resolver policy: only for recursion-allowed clients)
-	if len(p.overrides) > 0 && p.recACL.Allowed(client) {
+	if len(p.overrides) > 0 && p.recACLFor(client, proto, trusted) {
 		if rrs, ok := e.override(p, qname); ok {
 			meta.src = metrics.SrcOverride
 			e.fillOverride(ctx, p, resp, qname, q.Qtype, rrs, recOK && req.RecursionDesired, 0)

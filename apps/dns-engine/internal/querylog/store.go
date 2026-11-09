@@ -524,7 +524,7 @@ func (s *Store) Delete(client *Filter, before int64) (DeleteResult, error) {
 
 var (
 	allOnes = [16]uint32{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
-	allSrc  = [SrcCount]uint32{1, 1, 1, 1, 1, 1, 1, 1}
+	allSrc  = [SrcCount]uint32{1, 1, 1, 1, 1, 1, 1, 1, 1}
 )
 
 // SearchResult is the outcome of one search page.

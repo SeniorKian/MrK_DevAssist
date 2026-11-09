@@ -38,6 +38,7 @@ func newEngine(t testing.TB, upstream string, mut func(s *config.Settings)) *Eng
 	}
 	s.Pressure.Enabled = false // keep D1 tests independent of the test machine's CPU load
 	s.Limits.ClientQPS, s.Limits.ClientBurst = 0, 0
+	s.DNSSEC.Mode = config.DNSSECOff // D1/D2 tests count upstream queries; D4 tests enable validation
 	if mut != nil {
 		mut(&s)
 	}

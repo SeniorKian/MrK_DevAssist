@@ -19,11 +19,16 @@ const (
 	SrcRateLimited
 	SrcMitigated
 	SrcForwarder
+	SrcRecursive // resolved from the root (docs/40 §4)
 	SrcCount
 )
 
+// srcCountV1 is the number of sources indexed by D2/D3 segments.
+const srcCountV1 = 8
+
 // SourceNames are the API names of the sources.
-var SourceNames = [SrcCount]string{"authoritative", "override", "cache", "upstream", "refused", "rate_limited", "mitigated", "forwarder"}
+var SourceNames = [SrcCount]string{"authoritative", "override", "cache", "upstream", "refused", "rate_limited", "mitigated",
+	"forwarder", "recursive"}
 
 // Transports.
 const (
@@ -31,18 +36,36 @@ const (
 	ProtoTCP
 	ProtoDoT
 	ProtoDoH
+	ProtoDoQ
 	ProtoCount
 )
 
 // ProtoNames are the API names of the transports.
-var ProtoNames = [ProtoCount]string{"udp", "tcp", "dot", "doh"}
+var ProtoNames = [ProtoCount]string{"udp", "tcp", "dot", "doh", "doq"}
 
-// Flags.
+// Flags. The DNSSEC bits (docs/40 §4) are all clear when the answer was not
+// validated (validation off, local data, errors).
 const (
-	FlagTC     uint8 = 1
-	FlagStale  uint8 = 2
-	FlagCached uint8 = 4
+	FlagTC       uint8 = 1
+	FlagStale    uint8 = 2
+	FlagCached   uint8 = 4
+	FlagSecure   uint8 = 8
+	FlagBogus    uint8 = 16
+	FlagInsecure uint8 = 32
 )
+
+// DNSSECName renders the DNSSEC flag bits ("" when not validated).
+func DNSSECName(flags uint8) string {
+	switch {
+	case flags&FlagSecure != 0:
+		return "secure"
+	case flags&FlagBogus != 0:
+		return "bogus"
+	case flags&FlagInsecure != 0:
+		return "insecure"
+	}
+	return ""
+}
 
 // Hdr is the fixed part of one query record.
 type Hdr struct {

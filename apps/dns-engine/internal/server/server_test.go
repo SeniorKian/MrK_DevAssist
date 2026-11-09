@@ -57,6 +57,7 @@ func start(t *testing.T, mut func(*config.Settings)) *harness {
 	st, v := e.Settings()
 	st.Upstreams = []config.Upstream{{ID: "fake", Address: up.Addr, Enabled: true}}
 	st.Limits.ClientQPS, st.Limits.ClientBurst = 0, 0
+	st.DNSSEC.Mode = config.DNSSECOff // the fake upstream is not DNSSEC aware
 	if mut != nil {
 		mut(&st)
 	}

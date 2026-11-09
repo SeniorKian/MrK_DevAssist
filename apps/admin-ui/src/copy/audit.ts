@@ -133,6 +133,13 @@ export const AUDIT_ACTIONS: Record<string, Bi> = {
   "dns.logs.export": { fa: "{actor} لاگ پرسش‌های DNS را دانلود کرد", en: "{actor} downloaded the DNS question log" },
   "dns.logs.delete": { fa: "{actor} لاگ پرسش‌های DNS[ «{target}»] را پاک کرد", en: "{actor} deleted the DNS question log[ for “{target}”]" },
   "dns.mitigation.create": { fa: "{actor} در DNS برای[ «{target}»] محدودیت گذاشت", en: "{actor} set a DNS limit[ on “{target}”]" },
+  "dns.dnssec.refresh": { fa: "{actor} کلید اعتماد ریشه DNS را به‌روز کرد", en: "{actor} updated DNS's root trust key" },
+  "dns.tls.upload": { fa: "{actor} گواهی اتصال رمزدار DNS را بارگذاری کرد", en: "{actor} uploaded DNS's encrypted connection certificate" },
+  "dns.tls.self_signed": { fa: "{actor} برای اتصال رمزدار DNS گواهی خودامضا ساخت", en: "{actor} made a self-signed certificate for encrypted DNS" },
+  "dns.tls.delete": { fa: "{actor} گواهی اتصال رمزدار DNS را حذف کرد", en: "{actor} removed DNS's encrypted connection certificate" },
+  "dns.doh_token.create": { fa: "{actor} کلید دسترسی DNS رمزدار[ «{target}»] را ساخت", en: "{actor} made the encrypted DNS token[ “{target}”]" },
+  "dns.doh_token.update": { fa: "{actor} کلید دسترسی DNS رمزدار[ «{target}»] را تغییر داد", en: "{actor} changed the encrypted DNS token[ “{target}”]" },
+  "dns.doh_token.delete": { fa: "{actor} کلید دسترسی DNS رمزدار[ «{target}»] را باطل کرد", en: "{actor} cancelled the encrypted DNS token[ “{target}”]" },
   "dns.mitigation.delete": { fa: "{actor} محدودیت DNS[ «{target}»] را برداشت", en: "{actor} removed the DNS limit[ on “{target}”]" },
 
   // File space

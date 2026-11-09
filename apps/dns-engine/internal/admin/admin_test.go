@@ -263,6 +263,27 @@ func TestZonesRecordsOverridesAPI(t *testing.T) {
 	if r := call(t, srv, "POST", "/v1/resolve", `{"name":"panel.mrk.internal","client_ip":"8.8.8.8"}`); r.body["source"] != "refused" {
 		t.Fatal(r.raw)
 	}
+	// D4 fields: dnssec status of local data, EDE list, trace accepted
+	rv = call(t, srv, "POST", "/v1/resolve", `{"name":"panel.mrk.internal","type":"A","dnssec":true,"cd":false,"trace":true,"no_cache":true}`)
+	if d, _ := rv.body["dnssec"].(map[string]any); rv.status != 200 || d["status"] != "insecure" || d["reason"] != "local_zone" ||
+		rv.body["ede"] == nil {
+		t.Fatal(rv.raw)
+	}
+	if r := call(t, srv, "POST", "/v1/resolve", `{"name":"x.example","bogus_field":1}`); r.status == 200 {
+		t.Fatal("unknown resolve field accepted", r.raw)
+	}
+	dv := call(t, srv, "GET", "/v1/dnssec", "")
+	if dv.status != 200 || dv.body["mode"] != "validate" || len(dv.body["trust_anchors"].([]any)) != 2 ||
+		dv.body["negative_trust_anchors"] == nil || dv.body["counters"] == nil {
+		t.Fatal(dv.raw)
+	}
+	st := call(t, srv, "GET", "/v1/status", "")
+	if res, _ := st.body["resolution"].(map[string]any); res["mode"] != "forward" || res["root_priming"] == nil {
+		t.Fatal(st.raw)
+	}
+	if d, _ := st.body["dnssec"].(map[string]any); d["mode"] != "validate" {
+		t.Fatal(st.raw)
+	}
 	if r := call(t, srv, "DELETE", "/v1/overrides/"+oid, ""); r.status != 204 {
 		t.Fatal(r.status)
 	}

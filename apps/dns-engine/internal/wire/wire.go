@@ -199,6 +199,20 @@ type Template struct {
 	MinTTL     uint32 // smallest TTL in the message (0 if no records)
 	Rcode      int
 	Records    int
+	// Sec is the DNSSEC status of the cached answer (docs/40 §2.2).
+	Sec SecInfo
+	// DNSSEC is the variant with RRSIG/NSEC/NSEC3 records for DO=1 clients
+	// (nil when the answer carries none); the template itself is stripped.
+	DNSSEC *Template
+}
+
+// SecInfo is the validation result stored with a cached answer.
+type SecInfo struct {
+	State  uint8 // dnssec.State
+	EDE    uint16
+	HasEDE bool
+	Reason string
+	Text   string
 }
 
 // NewTemplate walks a packed response (which must not contain an OPT record)
@@ -300,6 +314,7 @@ type RenderOpts struct {
 	EDNS     bool
 	UDPSize  uint16 // advertised in OPT
 	DO       bool
+	AD       bool   // set the authenticated-data bit (secure answer, client asked with DO or AD)
 	EDE      uint16 // >0: add an Extended DNS Error option (RFC 8914) with this info code
 	MaxSize  int    // 0 = no limit; over it a TC=1 header+question response is produced
 }
@@ -311,6 +326,9 @@ func (t *Template) Render(dst []byte, o *RenderOpts) []byte {
 	flags := binary.BigEndian.Uint16(out[2:])
 	flags &^= FlagAA | FlagTC | FlagRD | FlagCD | FlagAD
 	flags |= FlagQR | FlagRA | (o.ReqFlags & (FlagRD | FlagCD))
+	if o.AD {
+		flags |= FlagAD
+	}
 	binary.BigEndian.PutUint16(out[2:], flags)
 	if o.QName != nil && len(o.QName) == t.QNameLen {
 		copy(out[HeaderSz:], o.QName)
@@ -370,7 +388,11 @@ func appendOPT(out []byte, size uint16, do bool, ede uint16) []byte {
 
 // Size returns the approximate memory cost of the template.
 func (t *Template) Size() int {
-	return cap(t.Wire) + 6*cap(t.TTLs) + 96
+	n := cap(t.Wire) + 6*cap(t.TTLs) + 96 + len(t.Sec.Reason) + len(t.Sec.Text)
+	if t.DNSSEC != nil {
+		n += t.DNSSEC.Size()
+	}
+	return n
 }
 
 // ErrorResponse appends to dst[:0] a header+question response to a query

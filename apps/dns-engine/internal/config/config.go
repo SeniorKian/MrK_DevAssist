@@ -81,6 +81,9 @@ type Settings struct {
 	QueryLog            QueryLog   `json:"querylog"`
 	Stats               Stats      `json:"stats"`
 	Pressure            Pressure   `json:"pressure"`
+	Resolution          Resolution `json:"resolution"`
+	DNSSEC              DNSSEC     `json:"dnssec"`
+	Encrypted           Encrypted  `json:"encrypted"`
 }
 
 // Strategies.
@@ -130,6 +133,9 @@ func Defaults(listen string) Settings {
 		QueryLog:            DefaultQueryLog(),
 		Stats:               DefaultStats(),
 		Pressure:            DefaultPressure(),
+		Resolution:          DefaultResolution(),
+		DNSSEC:              DefaultDNSSEC(),
+		Encrypted:           DefaultEncrypted(),
 	}
 }
 
@@ -142,6 +148,9 @@ func (s Settings) Clone() Settings {
 	c.Upstreams = append([]Upstream(nil), s.Upstreams...)
 	c.QueryLog.ExcludeNames = append([]string{}, s.QueryLog.ExcludeNames...)
 	c.QueryLog.ExcludeClients = append([]string{}, s.QueryLog.ExcludeClients...)
+	c.Resolution = s.Resolution.clone()
+	c.DNSSEC = s.DNSSEC.clone()
+	c.Encrypted = s.Encrypted.clone()
 	return c
 }
 
@@ -252,6 +261,9 @@ func (s *Settings) Validate() fielderr.List {
 	rng(&l, "limits.udp_max_size", m.UDPMaxSize, 512, 4096)
 	rng(&l, "limits.max_inflight_upstream", m.MaxInflightUpstream, 1, 100_000)
 	validateMonitor(s, &l)
+	validateResolution(s, &l)
+	validateDNSSEC(s, &l)
+	validateEncrypted(s, &l)
 	return l
 }
 
@@ -261,6 +273,7 @@ const (
 	ProtoTCP = "tcp"
 	ProtoDoT = "tls"
 	ProtoDoH = "https"
+	ProtoDoQ = "quic" // DNS over QUIC (RFC 9250), docs/40 §3
 )
 
 // UpstreamAddr is a parsed upstream address.
@@ -277,6 +290,7 @@ type UpstreamAddr struct {
 //	1.1.1.1 | 1.1.1.1:53 | [2606:4700::1111]:53 | udp://1.1.1.1:53 | tcp://1.1.1.1:53
 //	tls://1.1.1.1:853#cloudflare-dns.com   (SNI / certificate name after '#')
 //	https://dns.google/dns-query           (optionally "#8.8.8.8,8.8.4.4" bootstrap IPs)
+//	quic://94.140.14.14:853#dns.adguard-dns.com (DoQ; SNI / certificate name after '#')
 func ParseUpstream(s string) (UpstreamAddr, error) {
 	s = strings.TrimSpace(s)
 	if s == "" || len(s) > 512 {
@@ -317,8 +331,9 @@ func ParseUpstream(s string) (UpstreamAddr, error) {
 			}
 		}
 		return ua, nil
-	case strings.HasPrefix(s, "tls://"):
-		rest, name, _ := strings.Cut(strings.TrimPrefix(s, "tls://"), "#")
+	case strings.HasPrefix(s, "tls://"), strings.HasPrefix(s, "quic://"):
+		scheme, rest0, _ := strings.Cut(s, "://")
+		rest, name, _ := strings.Cut(rest0, "#")
 		ap, err := hostPort(rest, 853)
 		if err != nil {
 			return UpstreamAddr{}, err
@@ -328,7 +343,11 @@ func ParseUpstream(s string) (UpstreamAddr, error) {
 		} else if !validHostname(name) {
 			return UpstreamAddr{}, fmt.Errorf("invalid TLS server name")
 		}
-		return UpstreamAddr{Proto: ProtoDoT, Addr: ap.String(), ServerName: name}, nil
+		proto := ProtoDoT
+		if scheme == "quic" {
+			proto = ProtoDoQ
+		}
+		return UpstreamAddr{Proto: proto, Addr: ap.String(), ServerName: name}, nil
 	case strings.HasPrefix(s, "tcp://"):
 		ap, err := hostPort(strings.TrimPrefix(s, "tcp://"), 53)
 		if err != nil {

@@ -42,7 +42,12 @@ const EVENT_PHRASES: Record<string, Bi> = {
   "dns.attack_detected": { fa: "حمله‌ای به DNS سرور دیده شود", en: "an attack on the server's DNS is seen" },
   "dns.mitigation_auto": { fa: "MRK خودکار دستگاه یا نامی را در DNS کند یا مسدود کند", en: "MRK automatically slows down or blocks a device or name in DNS" },
   "dns.logs_degraded": { fa: "لاگ کامل پرسش‌های DNS موقتاً نوشته نشود", en: "the full DNS question log is paused" },
-  "dns.logs_recovered": { fa: "نوشتن لاگ پرسش‌های DNS به حالت عادی برگردد", en: "the DNS question log is back to normal" }
+  "dns.logs_recovered": { fa: "نوشتن لاگ پرسش‌های DNS به حالت عادی برگردد", en: "the DNS question log is back to normal" },
+  "dns.dnssec_trust_anchor_failed": { fa: "به‌روزرسانی کلید اعتماد ریشه در DNS انجام نشود", en: "updating DNS's root trust key fails" },
+  "dns.dnssec_bogus_spike": { fa: "جواب‌های زیادی با امضای خراب به DNS برسد", en: "many answers with broken signatures reach DNS" },
+  "dns.tls_certificate_expiring": { fa: "گواهی اتصال رمزدار DNS رو به اتمام باشد", en: "DNS's encrypted connection certificate is about to end" },
+  "dns.tls_certificate_expired": { fa: "گواهی اتصال رمزدار DNS تمام شود", en: "DNS's encrypted connection certificate ends" },
+  "dns.priming_failed": { fa: "DNS به سرورهای ریشه اینترنت نرسد", en: "DNS can't reach the internet's root servers" }
 };
 
 const IMPORTANCE: Record<Severity, { label: Bi; hint: Bi; phrase: Bi; any: Bi }> = {

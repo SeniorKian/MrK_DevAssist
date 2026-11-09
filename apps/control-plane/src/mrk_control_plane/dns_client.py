@@ -68,6 +68,14 @@ ENGINE_CODES: dict[str, tuple[str, int]] = {
     "mitigation_not_found": ("dns_mitigation_not_found", 404),
     "querylog_disabled": ("dns_querylog_disabled", 409),
     "limit_reached": ("dns_limit_reached", 409),
+    # D4 (docs/40 §3): certificates, DoH tokens, encrypted listeners.
+    "certificate_required": ("dns_certificate_required", 409),
+    "certificate_in_use": ("dns_certificate_in_use", 409),
+    "tls_invalid": ("dns_tls_invalid", 422),
+    "token_not_found": ("dns_token_not_found", 404),
+    "token_invalid": ("dns_token_invalid", 422),
+    "listen_conflict": ("dns_listen_conflict", 422),
+    "plain_doh_public": ("dns_plain_doh_public", 422),
 }
 
 
@@ -155,9 +163,12 @@ def map_engine_error(status_code: int, body: bytes) -> DnsError:
     except ValueError:
         payload = None
     error = payload.get("error") if isinstance(payload, dict) else None
-    code = message = None
+    code = message = reason_code = None
     fields = None
     if isinstance(error, dict):
+        raw_reason = error.get("reason_code")
+        if isinstance(raw_reason, str) and raw_reason[:64].replace("_", "").isalnum():
+            reason_code = raw_reason[:64]
         code = error.get("code") if isinstance(error.get("code"), str) else None
         message = error.get("message") if isinstance(error.get("message"), str) else None
         raw_fields = error.get("fields")
@@ -197,7 +208,11 @@ def map_engine_error(status_code: int, body: bytes) -> DnsError:
         panel_status = 422
     if not 400 <= panel_status <= 599:
         panel_status = 502
-    return DnsError(panel_code, panel_status, message, fields=fields, engine_code=code or None)
+    if reason_code and not fields:
+        # D4 (tls_invalid …): the reason sits on the error itself.
+        fields = [{"field": "body", "reason_code": reason_code}]
+    return DnsError(panel_code, panel_status, message, fields=fields, engine_code=code or None,
+                    reason_code=reason_code)
 
 
 class DnsClient:
