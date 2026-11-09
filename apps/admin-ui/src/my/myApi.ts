@@ -264,7 +264,16 @@ export const createMyBucket = (name: string) => mutateJson(MY_BUCKETS_BASE, { me
 export const setBucketPublic = (name: string, publicRead: boolean) => mutateJson(`${MY_BUCKETS_BASE}/${enc(name)}`, { method: "PATCH", body: { public_read: publicRead } });
 export const deleteMyBucket = (name: string) => mutateJson(`${MY_BUCKETS_BASE}/${enc(name)}`, { method: "DELETE", body: { confirmation: name, force: true } });
 
-export type BucketDomain = { domain: string; verified: boolean; verification: Verification | null };
+export type BucketRouteState = "ok" | "pending" | "manual" | "failed" | "conflict" | "off" | "unverified";
+export type BucketRoute = { state: BucketRouteState; errorCode: string | null };
+const ROUTE_STATES: BucketRouteState[] = ["ok", "pending", "manual", "failed", "conflict", "off", "unverified"];
+function routeOf(raw: unknown): BucketRoute | null {
+  const item = asObject(raw);
+  const state = asString(item.state) as BucketRouteState;
+  if (!ROUTE_STATES.includes(state)) return null;
+  return { state, errorCode: typeof item.error_code === "string" ? item.error_code : null };
+}
+export type BucketDomain = { domain: string; verified: boolean; verification: Verification | null; route: BucketRoute | null };
 export async function fetchBucketDomains(bucket: string, signal?: AbortSignal): Promise<BucketDomain[]> {
   return itemsOf<unknown>(await getJson(`${MY_BUCKETS_BASE}/${enc(bucket)}/domains?${fresh()}`, signal), "domains").map((raw) => {
     // docs/43 §0.1: `{host, verified, verification:{name, value}}` (a TXT record).
@@ -274,11 +283,13 @@ export async function fetchBucketDomains(bucket: string, signal?: AbortSignal): 
       ? itemsOf<VerificationMethod>(proof.methods)
       : proof.name || proof.value ? [{ kind: "txt", name: asString(proof.name), value: asString(proof.value) }] : [];
     const verified = item.verified === true;
-    return { domain: asString(item.host ?? item.domain ?? item.name), verified, verification: methods.length ? { methods, verified } : null };
+    return { domain: asString(item.host ?? item.domain ?? item.name), verified, verification: methods.length ? { methods, verified } : null, route: routeOf(item.route) };
   }).filter((item) => item.domain);
 }
 export const addBucketDomain = (bucket: string, domain: string) => mutateJson(`${MY_BUCKETS_BASE}/${enc(bucket)}/domains`, { method: "POST", body: { host: domain } });
 export const verifyBucketDomain = (bucket: string, domain: string) => mutateJson(`${MY_BUCKETS_BASE}/${enc(bucket)}/domains/${enc(domain)}/verify`, { method: "POST", body: {} });
+/** Try the public route of a proven domain again (docs/43 §0.1). */
+export const retryBucketRoute = (bucket: string, domain: string) => mutateJson(`${MY_BUCKETS_BASE}/${enc(bucket)}/domains/${enc(domain)}/route`, { method: "POST", body: {} });
 export const removeBucketDomain = (bucket: string, domain: string) => mutateJson(`${MY_BUCKETS_BASE}/${enc(bucket)}/domains/${enc(domain)}`, { method: "DELETE" });
 
 export type KeyTemplate = "read_only" | "read_write" | "admin";

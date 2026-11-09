@@ -107,8 +107,12 @@
   (یک‌بار؛ باکت غیرخودی → 404)؛ `PATCH /my/s3/keys/{id} {enabled?, access?, buckets?}`؛ `DELETE /my/s3/keys/{id}`.
   سیاست را پیشکار می‌سازد (بدون `PutBucketPolicy`/`DeleteBucket`/`CreateBucket`)؛ فیلد `policy` پذیرفته نمی‌شود (422).
 - دامنه باکت (`s3_bucket_domains`): `GET /my/s3/buckets/{b}/domains` → `{items:[{host, verified, verification:{name,
-  value}}]}`؛ `POST … {host}` → 201 (زیر زون تأییدشده خود فضا ⇒ همان لحظه `verified:true`)؛ `POST …/domains/{host}/verify`
-  → `{verified}`؛ `DELETE …/domains/{host}`.
+  value}, route:{state, error_code}}]}`؛ `POST … {host}` → 201 همان شکل (زیر زون تأییدشده خود فضا ⇒ همان لحظه
+  `verified:true` و مسیر ساخته می‌شود؛ host که برنامه‌ای در Dokploy دارد → 409 `domain_unavailable`)؛
+  `POST …/domains/{host}/verify` → `{verified, route}`؛ `POST …/domains/{host}/route` → `{host, route}` (دوباره امتحان؛
+  تأییدنشده → 409 `domain_not_verified`)؛ `DELETE …/domains/{host}` (مسیر هم برداشته می‌شود).
+  `route.state` برای فضا: `ok | pending | manual | failed | conflict | off | unverified` (جزئیات سرور مثل پروژه Dokploy،
+  درگاه یا مراحل دستی هیچ‌وقت به فضا نمی‌رسد).
 - **بسته‌ها**: `GET /my/packages` → `{npm:{enabled, scope:"@<slug>", registry_url, publish_allowed, usage_bytes,
   packages:[{name, versions:[…], bytes}]}, pypi:{enabled, index:"<slug>/dev", index_url, publish_allowed,
   usage_bytes, packages:[{name, versions:[…]}]}}`؛ `GET /my/packages/tokens` → `{items:[{id, ecosystem, name,
@@ -131,8 +135,33 @@
 - فایل‌منیجر `/my/s3` همان کد مدیریت است (`s3.add_file_routes`) با بررسی مالکیت باکت از مسیر.
 - موتور S3: snapshot دو فیلد تازه دارد `quota_groups:[{id, buckets, bytes, objects}]` و `bucket_hosts:{host:
   bucket}` و روی باکت فضای تعلیق‌شده `frozen:true` (موتور هر نوشتن را `AccessDenied` می‌دهد).
-- دامنه باکت در موتور S3 سرو می‌شود (Host → باکت)؛ **مسیردهی آن host در پروکسی/Traefik هنوز خودکار نیست** (مدیر باید
-  دامنه را به سرویس S3 وصل کند).
+- دامنه باکت در موتور S3 سرو می‌شود (Host → باکت). **مسیر عمومی** آن (`modules/bucket_routes.py`) دقیقاً مثل دامنه سرویس
+  S3 ساخته می‌شود: همان روش اتصال (`domains.routing_mode`: Dokploy API / فایل Traefik / دستی)، همان مقصد (درگاه 9000 موتور
+  S3 در همین کانتینر) و TLS با certResolver در Traefik. پیشکار هرگز 80/443 را نمی‌گیرد.
+  - فقط دامنه **تأییدشده** مسیر می‌گیرد (افزودن زیر زون تأییدشده، `…/verify` موفق، یا «دوباره امتحان»). حذف دامنه، حذف باکت،
+    حذف فضا (cleanup `bucket_domain`) مسیر را برمی‌دارد؛ انتقال مالکیت و تغییر فضا (`after_quota_change`) یک reconcile پس‌زمینه
+    می‌زند و حلقه بررسی دامنه‌ها (هر ۵ دقیقه) هم reconcile می‌کند تا مسیر بی‌صاحب نماند.
+  - وضعیت مسیر جدا از ردیف مالکیت در `system_settings["services.bucket_routes"]` (کلید = host) نگه داشته می‌شود تا پس از رفتن
+    ردیف مالکیت هم برداشتنش ممکن باشد: `{bucket, workspace_id, mode, state, https, error_code, upstream_code,
+    dokploy_domain_id, redeploy_required, conflict, updated_at}`. وضعیت‌ها: `ok`، `pending` (Dokploy Compose دامنه را دارد
+    ولی تا Deploy بعدی مدیر فعال نیست؛ پیشکار خودش Deploy نمی‌کند — «دوباره امتحان» مدیر پس از Deploy آن را `ok` می‌کند)،
+    `manual` (مراحل دستی فقط برای مدیر)، `failed` (برگشت داده شد)، `conflict` (هیچ تغییری داده نشد)، `stale` (برداشتن نیمه‌کاره)،
+    `off`.
+  - برگشت در خطا: Dokploy → اگر ثبت وضعیت بعد از `domain.create` شکست بخورد همان دامنه `domain.delete` می‌شود؛ فایل Traefik →
+    اگر نوشتن شکست بخورد مسیر `failed` می‌شود و فایل بدون آن دوباره نوشته می‌شود. خطای مسیر هرگز خود دامنه/تأیید را برنمی‌گرداند.
+  - در حالت فایل Traefik دامنه‌های باکت میزبان‌های اضافه همان ورودی `s3` فایل `mrk-domains.yml` هستند (Agent تغییری نکرد؛
+    سقف `MAX_HOSTS=200` برای کل s3). یک router برای s3 است، پس اگر یک دامنه سرویس S3 بدون HTTPS باشد کل s3 بی‌HTTPS می‌شود.
+  - تداخل: دامنه باکت با دامنه سرویس‌ها (`names_overlap`)، زون/دامنه باکت فضای دیگر و برنامه‌های Dokploy رد می‌شود؛ ساخت دامنه
+    سرویس روی host یک دامنه باکت → 409 `domain_exists` با `owner:{kind:"bucket"}`. اگر تداخل بعداً پیدا شود وضعیت `conflict`.
+  - تنظیم‌ها (registry، گروه server.apps): `domains.route_bucket_domains` (پیش‌فرض روشن؛ خاموش ⇒ همه مسیرها برداشته و
+    `off`)، `domains.bucket_domains_https` (پیش‌فرض روشن؛ برای مسیرهای تازه).
+  - باکت‌های «سامانه» (بی‌فضا) دامنه باکت ندارند؛ مدیر برای آن‌ها دامنه سرویس S3 + virtual-host را به کار می‌برد. مدیر برای
+    دامنه یک فضا از «دیدن به‌جای» با نوشتن استفاده می‌کند.
+  - API مدیر (زیر `/domains`، چون نحوه مسیردهی سرور را نشان می‌دهد): `GET /domains/bucket-routes` (`domains:read`) →
+    `{items:[{host, bucket, verified, workspace_id, workspace_slug, route:{state, mode, error_code, upstream_code,
+    redeploy_required, suggested_action, instructions, https, conflict, updated_at}}], enabled, mode, effective_mode}`؛
+    `POST /domains/bucket-routes/{host}/retry` (`domains:write`) → همان آیتم؛ `POST /domains/bucket-routes/reconcile`
+    (`domains:write`) → `{added, removed, items, …}`.
 - سهمیه حجم npm/PyPI پس از انتشار سنجیده می‌شود: با رسیدن به سقف، انتشار برای آن فضا بسته می‌شود تا نسخه حذف شود.
   scope npm اگر پیش‌تر بسته عمومی کش‌شده داشته باشد → 409 `scope_unavailable`.
 - رد ثبت‌نام حساب در انتظار را حذف می‌کند؛ پذیرفتن آن را فعال و فضای شخصی (با `plan_id` اختیاری) می‌سازد.
@@ -193,6 +222,13 @@
 - ثبت‌نام با تأیید (202 بدون جلسه): App.tsx آن را `signup_pending` برمی‌گرداند و فرم ثبت‌نام همان جمله را نشان می‌دهد
   («ثبت‌نام شما رسید و منتظر تأیید…»)؛ صفحه ورود/ثبت‌نام (Login/AuthShell/Setup) تغییر نکرد.
 - مجوزهای `tenancy:admin` و `tenancy:impersonate_write` به `copy/roles.ts` اضافه شدند (نام ساده برای ماتریس نقش‌ها).
+
+**مسیر دامنه پوشه**
+- «فضای من › فضای فایل»: زیر هر دامنه تأییدشده یک برچسب وضعیت مسیر + یک جمله ساده (`MY_FILES.route_*`/`routeHint_*`)؛ در
+  `failed` دکمه «دوباره امتحان کن» (`POST …/route`). جزئیات فنی (روش، مراحل دستی) به کاربر فضا نشان داده نمی‌شود.
+- صفحه فضای فایل مدیر (زبانه پوشه‌ها، `S3BucketRoutes.tsx`): کارت «دامنه پوشه‌های فضای من» فقط با `domains:read` و وقتی
+  دست‌کم یک دامنه هست؛ هر ردیف: host، پوشه و فضا، روش، وضعیت، دلیل خطا، راهنمای Deploy برای `pending` و «مراحل دستی»
+  (همان `ManualSteps` صفحه سرویس‌ها) برای `manual`؛ «دوباره امتحان کن» و «بررسی دوباره همه» با `domains:write`.
 
 ## 1. مفاهیم
 

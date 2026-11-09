@@ -10,6 +10,7 @@ buckets (``s3_policy.workspace_policy``); a policy document is never accepted.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import secrets
 import time
@@ -22,6 +23,8 @@ from sqlalchemy import select
 
 from ..models import ServiceDomain
 from ..tenancy import TenancyError, WorkspaceContext, names_overlap, not_found
+from . import bucket_routes
+from .bucket_routes import BucketRoutes
 from .dns_validate import DnsInputError, canonical_zone
 from .s3_client import EngineAdmin, EngineError
 from .s3_policy import WORKSPACE_TEMPLATES
@@ -30,6 +33,7 @@ from .s3_store import S3Error, S3Store
 if TYPE_CHECKING:
     from .tenancy import MySpace
 
+LOGGER = logging.getLogger(__name__)
 _KEY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
 
 
@@ -187,6 +191,7 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
         for item in await asyncio.to_thread(store.all_owned, ("bucket_domain",)):
             if item["meta"].get("bucket") == name:
                 await asyncio.to_thread(store.release, "bucket_domain", item["resource_id"])
+                await unroute(item["resource_id"])
 
     @router.delete("/s3/buckets/{name}", response_model=None)
     async def delete_bucket(name: str, request: Request) -> Any:
@@ -367,13 +372,50 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
             names.append(str(suffix))
         return names
 
-    def domain_view(item: dict[str, Any]) -> dict[str, Any]:
+    def domain_view(item: dict[str, Any],
+                    routes: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
         meta = item["meta"]
         from .my_dns import VERIFY_LABEL, VERIFY_PREFIX
 
-        return {"host": item["resource_id"], "verified": bool(meta.get("verified")),
+        verified = bool(meta.get("verified"))
+        record = (routes or {}).get(item["resource_id"])
+        return {"host": item["resource_id"], "verified": verified,
                 "verification": {"name": f"{VERIFY_LABEL}.{item['resource_id']}",
-                                 "value": f"{VERIFY_PREFIX}{meta.get('verify_token', '')}"}}
+                                 "value": f"{VERIFY_PREFIX}{meta.get('verify_token', '')}"},
+                "route": BucketRoutes.public_view(record, verified)}
+
+    async def route_records() -> dict[str, dict[str, Any]]:
+        routes = bucket_routes.active()
+        return await asyncio.to_thread(routes.records) if routes is not None else {}
+
+    async def route(host: str, *, retry: bool = False) -> None:
+        """Route a verified domain; a routing problem never undoes the domain itself."""
+        routes = bucket_routes.active()
+        if routes is None:
+            return
+        try:
+            await routes.ensure(host, retry=retry)
+        except Exception:  # noqa: BLE001 - state stays for the admin page / next tick
+            LOGGER.exception("routing bucket domain %s failed", host)
+
+    async def unroute(host: str) -> None:
+        routes = bucket_routes.active()
+        if routes is None:
+            return
+        try:
+            await routes.remove(host)
+        except Exception:  # noqa: BLE001 - reconcile removes it on the next tick
+            LOGGER.exception("removing the route of %s failed", host)
+            routes.reconcile_soon()
+
+    async def dokploy_owner(host: str) -> bool:
+        from . import services as services_module
+
+        service = services_module.ACTIVE_SERVICE
+        if service is None:
+            return False
+        owner, _check = await service.routing.dokploy_conflict(host)
+        return owner is not None
 
     async def domain_of(wctx: WorkspaceContext, bucket: str, host: str) -> dict[str, Any]:
         item = await asyncio.to_thread(store.require_owned, wctx, "bucket_domain",
@@ -386,7 +428,8 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
     async def list_domains(name: str, request: Request) -> Any:
         async def work(wctx: WorkspaceContext, _body: Any, _owner: Any) -> Any:
             items = await asyncio.to_thread(store.owned, "bucket_domain", wctx.workspace_id)
-            return {"items": [domain_view(item) for item in items
+            routes = await route_records()
+            return {"items": [domain_view(item, routes) for item in items
                               if item["meta"].get("bucket") == name]}
 
         return await run(request, work, scope="my.s3:read", bucket=name)
@@ -411,6 +454,9 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
             for other in [*others, *await asyncio.to_thread(system_names)]:
                 if other and names_overlap(host, other):
                     raise unavailable
+            # A Dokploy app already answers on this host (skipped when Dokploy is down).
+            if await dokploy_owner(host):
+                raise unavailable
             # Inside a verified zone of this workspace = already proven.
             verified = any(
                 (host == zone["resource_id"] or host.endswith("." + zone["resource_id"]))
@@ -420,8 +466,11 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
                                     quota="s3_bucket_domains", meta=meta)
             await asyncio.to_thread(s3().write_snapshot)
             await space.audit(wctx, "my.s3.domain.add", "bucket_domain", f"{host}->{name}")
+            if verified:
+                await route(host)
             item = await asyncio.to_thread(store.require_owned, wctx, "bucket_domain", host)
-            return JSONResponse(status_code=201, content=domain_view(item))
+            return JSONResponse(status_code=201,
+                                content=domain_view(item, await route_records()))
 
         return await run(request, work, scope="my.s3:write", write=True, bucket=name,
                          feature="s3_bucket_domains")
@@ -432,16 +481,19 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
             from .my_dns import txt_verified
 
             item = await domain_of(wctx, name, host)
-            if item["meta"].get("verified"):
-                return {"verified": True}
-            if not await asyncio.to_thread(txt_verified, item["resource_id"],
-                                           item["meta"].get("verify_token", "")):
-                return {"verified": False}
-            await asyncio.to_thread(store.set_meta, "bucket_domain", item["resource_id"],
-                                    {"verified": True, "verified_at": int(time.time())})
-            await asyncio.to_thread(s3().write_snapshot)
-            await space.audit(wctx, "my.s3.domain.verify", "bucket_domain", item["resource_id"])
-            return {"verified": True}
+            host_id = item["resource_id"]
+            if not item["meta"].get("verified"):
+                if not await asyncio.to_thread(txt_verified, host_id,
+                                               item["meta"].get("verify_token", "")):
+                    return {"verified": False, "route": BucketRoutes.public_view(None, False)}
+                await asyncio.to_thread(store.set_meta, "bucket_domain", host_id,
+                                        {"verified": True, "verified_at": int(time.time())})
+                await asyncio.to_thread(s3().write_snapshot)
+                await space.audit(wctx, "my.s3.domain.verify", "bucket_domain", host_id)
+            await route(host_id)
+            return {"verified": True,
+                    "route": BucketRoutes.public_view((await route_records()).get(host_id),
+                                                      True)}
 
         return await run(request, work, scope="my.s3:write", write=True, bucket=name,
                          feature="s3_bucket_domains")
@@ -452,10 +504,25 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
             item = await domain_of(wctx, name, host)
             await asyncio.to_thread(store.release, "bucket_domain", item["resource_id"])
             await asyncio.to_thread(s3().write_snapshot)
+            await unroute(item["resource_id"])
             await space.audit(wctx, "my.s3.domain.delete", "bucket_domain", item["resource_id"])
             return {"deleted": item["resource_id"]}
 
         return await run(request, work, scope="my.s3:write", write=True, bucket=name)
+
+    @router.post("/s3/buckets/{name}/domains/{host}/route", response_model=None)
+    async def retry_route(name: str, host: str, request: Request) -> Any:
+        async def work(wctx: WorkspaceContext, _body: Any, _owner: Any) -> Any:
+            item = await domain_of(wctx, name, host)
+            if not item["meta"].get("verified"):
+                raise TenancyError("domain_not_verified", 409, "Verify the domain first")
+            await route(item["resource_id"], retry=True)
+            await space.audit(wctx, "my.s3.domain.route", "bucket_domain", item["resource_id"])
+            return {"host": item["resource_id"], "route": BucketRoutes.public_view(
+                (await route_records()).get(item["resource_id"]), True)}
+
+        return await run(request, work, scope="my.s3:write", write=True, bucket=name,
+                         feature="s3_bucket_domains")
 
     # ---------------------------------------------------------------- usage / cleanup
     async def usage(workspace_id: str) -> dict[str, Any]:
@@ -495,4 +562,17 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
     space.usage_providers.append(usage)
     space.cleanup["s3_bucket"] = cleanup_bucket
     space.cleanup["s3_identity"] = cleanup_identity
+
+    async def cleanup_domain(item: dict[str, Any]) -> None:
+        await unroute(item["resource_id"])
+
+    space.cleanup["bucket_domain"] = cleanup_domain
+
+    async def reroute() -> None:
+        # Ownership moved or a workspace went away: drop routes nobody owns any more.
+        routes = bucket_routes.active()
+        if routes is not None:
+            routes.reconcile_soon()
+
+    space.after_quota_change.append(reroute)
     space.after_quota_change.append(snapshot)

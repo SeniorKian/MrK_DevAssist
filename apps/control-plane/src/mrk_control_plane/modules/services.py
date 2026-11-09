@@ -33,6 +33,7 @@ from .. import process_control
 from ..components import check_http_component
 from ..models import ServiceDomain, SystemSetting, User
 from ..module_context import Event, ModuleContext
+from .bucket_routes import BucketRoutes
 from .domains_hosts import HostError, canonical_host, display_host
 from .domains_routing import Routing, RoutingError
 from .domains_settings import ROUTING_MODES, SettingsError, SettingsStore
@@ -156,6 +157,8 @@ class ServicesService:
             lambda service_id: self.doh_target() if service_id == DOH_SERVICE else None
         )
         self.lock = asyncio.Lock()
+        # docs/43 §0.1: verified bucket domains routed like S3 service domains.
+        self.bucket_routes = BucketRoutes(self)
         self.last_sync: dict[str, Any] = {}
         self.busy: set[str] = set()
         self._task: asyncio.Task[None] | None = None
@@ -168,6 +171,8 @@ class ServicesService:
     def put_settings(self, payload: Any, actor_user_id: int | None) -> dict[str, Any]:
         value = self.store.put_settings(payload, actor_user_id)
         self.routing.invalidate()
+        if isinstance(payload, dict) and "route_bucket_domains" in payload:
+            self.bucket_routes.reconcile_soon()
         return value
 
     @property
@@ -343,6 +348,14 @@ class ServicesService:
                         "service_id": existing["service_id"],
                         "domain_id": existing["id"],
                     },
+                    fields=[{"field": "host", "reason_code": "in_use"}],
+                )
+            if host in await asyncio.to_thread(self.bucket_routes.bucket_hosts):
+                raise ServiceError(
+                    "domain_exists",
+                    409,
+                    "This domain is already used by a bucket",
+                    owner={"kind": "bucket"},
                     fields=[{"field": "host", "reason_code": "in_use"}],
                 )
             owner, conflict_check = await self.routing.dokploy_conflict(host)
@@ -526,6 +539,7 @@ class ServicesService:
 
     async def _apply_traefik(self, detected: dict[str, Any]) -> None:
         rows = [item for item in self.list_domains() if item["mode"] == "traefik_file"]
+        rows.extend(await asyncio.to_thread(self.bucket_routes.traefik_rows))
         await self.routing.traefik_apply(rows, detected)
 
     @staticmethod
@@ -1164,6 +1178,12 @@ class ServicesService:
                 raise
             except Exception:
                 LOGGER.exception("domain verification loop failed")
+            try:
+                await self.bucket_routes.reconcile()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("bucket route reconcile failed")
             await asyncio.sleep(VERIFY_TICK_SECONDS)
 
     async def start(self) -> None:
@@ -1354,6 +1374,33 @@ def register(ctx: ModuleContext) -> None:
             )
         await audit(principal, "domains.routing.update", "domain_routing", body.mode)
         return await service.routing_view(refresh=True)
+
+    # docs/43 §0.1: routes of verified bucket domains (shown on the admin S3 page).
+    @domains_router.get("/bucket-routes")
+    async def list_bucket_routes(request: Request) -> dict[str, Any]:
+        ctx.require_principal(request, "domains:read")
+        return await service.bucket_routes.admin_list()
+
+    @domains_router.post("/bucket-routes/reconcile", response_model=None)
+    async def reconcile_bucket_routes(request: Request) -> Any:
+        principal = ctx.require_principal(request, "domains:write")
+        ctx.require_csrf(request, principal)
+        result = await service.bucket_routes.reconcile(retry=True)
+        await audit(principal, "domains.bucket_routes.reconcile", "bucket_route", "*")
+        return {**result, **await service.bucket_routes.admin_list()}
+
+    @domains_router.post("/bucket-routes/{host}/retry", response_model=None)
+    async def retry_bucket_route(host: str, request: Request) -> Any:
+        principal = ctx.require_principal(request, "domains:write")
+        ctx.require_csrf(request, principal)
+        host = host.strip().lower().rstrip(".")
+        listed = await service.bucket_routes.admin_list()
+        if not any(item["host"] == host for item in listed["items"]):
+            return ctx.error_payload("domain_not_found", "Domain not found", 404)
+        await service.bucket_routes.ensure(host, retry=True)
+        await audit(principal, "domains.bucket_routes.retry", "bucket_route", host)
+        listed = await service.bucket_routes.admin_list()
+        return next(item for item in listed["items"] if item["host"] == host)
 
     @domains_router.patch("/{domain_id}", response_model=None)
     async def update_domain(domain_id: str, request: Request, body: DomainUpdateRequest) -> Any:

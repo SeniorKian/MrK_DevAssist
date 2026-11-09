@@ -17,6 +17,7 @@ import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
 import LinkRoundedIcon from "@mui/icons-material/LinkRounded";
 import LinkOffRoundedIcon from "@mui/icons-material/LinkOffRounded";
 import FactCheckRoundedIcon from "@mui/icons-material/FactCheckRounded";
+import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 import EditNoteRoundedIcon from "@mui/icons-material/EditNoteRounded";
 import AdminPanelSettingsRoundedIcon from "@mui/icons-material/AdminPanelSettingsRounded";
@@ -31,7 +32,8 @@ import { KeySecretDialog } from "../S3Access";
 import { formatBytes, formatNumber } from "../format";
 import {
   addBucketDomain, createMyBucket, createMyKey, deleteMyBucket, deleteMyIdentity, fetchBucketDomains, fetchMyBuckets, fetchMyIdentities,
-  MY_BUCKETS_BASE, numericLimit, removeBucketDomain, setBucketPublic, verifyBucketDomain, type BucketDomain, type KeyTemplate, type MyBucket,
+  MY_BUCKETS_BASE, numericLimit, removeBucketDomain, retryBucketRoute, setBucketPublic, verifyBucketDomain, type BucketDomain, type BucketRoute,
+  type KeyTemplate, type MyBucket,
   type MyIdentity, type NewS3Key
 } from "./myApi";
 import { useMySpace } from "./MySpaceContext";
@@ -46,6 +48,26 @@ function levelTitle(language: "fa" | "en", level: KeyTemplate) {
 
 // ── folder domains ───────────────────────────────────────────────────────────
 
+const ROUTE_TONE = { ok: "ok", pending: "busy", manual: "info", failed: "error", conflict: "error", off: "off" } as const;
+
+/** Whether a proven domain is reachable from the internet yet (docs/43 §0.1). */
+function RouteState({ route, busy, disabled, canRetry, onRetry }: { route: BucketRoute; busy: boolean; disabled: boolean; canRetry: boolean; onRetry: () => void }) {
+  const { language } = useKit();
+  if (route.state === "unverified") return null;
+  const state = route.state;
+  return (
+    <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
+      <StatusPill tone={ROUTE_TONE[state]} label={pick(language, MY_FILES[`route_${state}` as const])} />
+      <Typography variant="body2" color="text.secondary" sx={{ flex: 1, minWidth: 200 }}>{pick(language, MY_FILES[`routeHint_${state}` as const])}</Typography>
+      {canRetry && state === "failed" && (
+        <Button size="small" disabled={disabled} onClick={onRetry} startIcon={busy ? <CircularProgress size={14} color="inherit" /> : <RefreshRoundedIcon />} sx={{ minHeight: 40 }}>
+          {pick(language, MY_FILES.routeRetry)}
+        </Button>
+      )}
+    </Stack>
+  );
+}
+
 function BucketDomains({ bucket }: { bucket: string }) {
   const { language } = useKit();
   const space = useMySpace();
@@ -56,6 +78,19 @@ function BucketDomains({ bucket }: { bucket: string }) {
   const [checkError, setCheckError] = useState<unknown>(null);
   const { ask, dialog } = useConfirmAction();
   const { notify, snackbar } = useUndoSnackbar();
+
+  const retry = async (domain: string) => {
+    setChecking(domain);
+    setCheckError(null);
+    try {
+      await retryBucketRoute(bucket, domain);
+      reload();
+    } catch (caught) {
+      setCheckError(caught);
+    } finally {
+      setChecking(null);
+    }
+  };
 
   const verify = async (domain: string) => {
     setChecking(domain);
@@ -102,6 +137,9 @@ function BucketDomains({ bucket }: { bucket: string }) {
                 <Button size="small" color="error" startIcon={<LinkOffRoundedIcon />} onClick={() => void remove(item.domain)} sx={{ minHeight: 40 }}>{pick(language, MY.remove)}</Button>
               )}
             </Stack>
+            {item.verified && item.route && (
+              <RouteState route={item.route} busy={checking === item.domain} disabled={checking !== null} canRetry={space.canWrite} onRetry={() => void retry(item.domain)} />
+            )}
             {!item.verified && item.verification && (
               <Stack spacing={1.5} sx={{ mt: 1.5 }}>
                 <VerificationSteps methods={item.verification.methods} />
