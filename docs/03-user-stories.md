@@ -98,6 +98,21 @@ Evidence: test/report/ADR reference
 | US-143 | Done | 2026-11-07 | Gate 10 | bounded load gate و GitHub-hosted soak |
 | US-144 | Done | 2026-11-07 | Gate 10 | Alembic downgrade/upgrade + data preservation |
 
+## بایگانی سندهای طراحی — 2026-11-09
+
+سندهای طراحی/قرارداد زیر پس از پیاده‌سازی حذف شدند. قابلیت، معیار پذیرشِ واقعاً پیاده‌شده (از بخش «پذیرش» و §0
+«تغییرات نسبت به قرارداد اولیه» هر سند)، تصمیم‌ها و محدودیت‌ها در Storyهای ستون سوم آمده است. متن کامل در تاریخچه git:
+
+| سند حذف‌شده | موضوع | Storyها | متن کامل |
+|---|---|---|---|
+| docs/35 | سرویس‌های من و دامنه‌ها | US-157، US-158 (+ US-159 بازیابی crash، بدون سند) | `git show 1a568bf:docs/35-services-and-domains.md` |
+| docs/36 | برنامه جامع موتور DNS بومی (فازهای D0–D6) | US-191 و کل E18 | `git show 1a568bf:docs/36-dns-engine-master-plan.md` |
+| docs/37 | DNS فاز D1 (موتور، زون، راه‌اندازی) | US-175–US-179، US-191، US-198 | `git show 1a568bf:docs/37-dns-d1-contract.md` |
+| docs/38 | DNS فاز D2 (لاگ، آمار، پایش فشار) | US-184، US-192 | `git show 1a568bf:docs/38-dns-d2-contract.md` |
+| docs/39 | DNS فاز D3 — **لغو شد و ساخته نشد** | — | هرگز commit نشد |
+| docs/40 | DNS فاز D4 (حل از ریشه، DNSSEC، DNS رمزدار) | US-180، US-182، US-193، US-194 | `git show 9df9787:docs/40-dns-d4-contract.md` |
+| docs/41 | DNS فاز نهایی D5+D6 و قالب دامنه | US-176، US-180، US-181، US-183، US-195–US-197، US-115 | هنوز commit نشده بود؛ فقط همین خلاصه |
+
 ## Epic E01 — Source Governance و Bootstrap
 
 ### US-001 — ثبت کاندیدای upstream — P0
@@ -779,6 +794,17 @@ Evidence: test/report/ADR reference
 - secret در snippet ظاهر نشود.
 - copy action feedback داشته باشد.
 
+### US-115 — اعلام نسخه تازه پنل — P2
+
+به‌عنوان کاربر پنل می‌خواهم وقتی نسخه تازه پنل روی سرور نصب شد بدانم، بی‌آنکه صفحه خودبه‌خود reload شود.
+
+پذیرش (پیاده‌شده):
+- هر 60 ثانیه، فقط وقتی تب دیده می‌شود، `build.commit`/`ui_version` از `GET /api/v1/system/status` با build جاری مقایسه
+  شود؛ برای نقشی که به آن دسترسی ندارد (403) نام فایل `/assets/index-*.js` در `index.html` سرو‌شده مقایسه شود.
+- نوار «نسخه تازه پنل آمده» با «تازه کردن صفحه» و «بعداً»؛ reload خودکار قبلی حذف شد (`NewVersionBar.tsx`).
+
+وضعیت: انجام‌شده — در درخت کاری، پیش از commit (همراه DNS فاز نهایی)؛ جایگزین docs/41 §7. بررسی: `npm run build` و `check:copy`.
+
 ## Epic E13 — API و Integrations
 
 ### US-120 — Versioned REST API — P0
@@ -932,6 +958,8 @@ Evidence: test/report/ADR reference
 - تغییر route atomic، auditشده و بدون restart کامل Appliance باشد.
 - hostname ناشناخته fail-closed باشد و به admin یا engine fallback نکند.
 
+وضعیت: بخشی — برای پنل، npm، PyPI، S3 و DoH (`dns-doh`) در US-158 انجام‌شده؛ status page هنوز نه.
+
 ### US-151 — Trusted proxy و Host security — P0
 
 به‌عنوان Security Admin می‌خواهم forwarded header فقط از proxyهای مورد اعتماد پذیرفته شود.
@@ -959,6 +987,8 @@ Evidence: test/report/ADR reference
 - manifest نامعتبر load نشود و دلیل امن گزارش شود.
 - module disabled route عمومی فعال نداشته باشد.
 
+وضعیت: بخشی — فهرست سرویس‌ها با وضعیت، مصرف و دامنه‌ها در US-157؛ manifest/schema نسخه‌دار ماژول هنوز نه.
+
 ### US-154 — Restart و crash-loop protection — P0
 
 به‌عنوان Operator می‌خواهم module مشکل‌دار را کنترل‌شده restart کنم.
@@ -969,6 +999,9 @@ Evidence: test/report/ADR reference
 - restart خودکار backoff/jitter/threshold و وضعیت crash-loop داشته باشد.
 - actor، reason، مدت و نتیجه audit شوند.
 
+وضعیت: بخشی — برای npm، PyPI و S3: restart دستی با تأیید و audit (US-157) و restart خودکار با backoff و وضعیت
+`crashed` (US-159)؛ نمایش in-flight work و jitter ساخته نشد.
+
 ### US-155 — Failure isolation — P0
 
 به‌عنوان Platform Admin می‌خواهم خرابی یک module سرویس‌های دیگر را قطع نکند.
@@ -978,6 +1011,8 @@ Evidence: test/report/ADR reference
 - restart uptime یا DNS باعث restart npm/PyPI/control-plane نشود.
 - gateway برای route خراب پاسخ واضح و محدود بدهد.
 
+وضعیت: بخشی — DNS در container جدا با سقف منابع خودش (US-191)؛ crash npm/PyPI/S3 دیگر کانتینر و پنل را نمی‌اندازد (US-159).
+
 ### US-156 — افزودن module آینده — P1
 
 به‌عنوان Maintainer می‌خواهم سرویس جدید بدون fork کردن core اضافه کنم.
@@ -986,6 +1021,65 @@ Evidence: test/report/ADR reference
 - manifest، adapter، permission، route، migration و UI bundle قرارداد نسخه‌دار داشته باشند.
 - یک sample module در contract test ثبت شود.
 - حذف module داده را خودکار پاک نکند.
+
+### US-157 — صفحه «سرویس‌های من» — P0
+
+به‌عنوان Owner می‌خواهم همه سرویس‌ها را در یک صفحه، جدا از هم، با وضعیت، کنترل، مصرف و دامنه‌ها ببینم.
+
+پذیرش (پیاده‌شده):
+- `GET /api/v1/services`: کارت جدا برای پنل، npm، PyPI، S3، Host Agent، فایروال، DNS و `dns-doh`؛ `state`
+  (`running|stopped|starting|degraded|crashed|not_installed|disabled|unknown`) با `reason_code`، پورت داخلی ثابت (پنل `8080`،
+  npm `4873`، PyPI `3141`، S3 `9000`، DNS `53`)، مصرف (حجم پوشه داده با بودجه 3 ثانیه و cache 60 ثانیه، تعداد
+  بسته/سطل/کاربر، آخرین فعالیت)، دامنه‌های متصل و `public_url` (= دامنه اصلی؛ دستورهای اتصال از آن استفاده می‌کنند).
+- start/stop/restart فقط برای npm، PyPI و S3، از راه supervisorctl با فهرست مجاز؛ stop/restart تأیید با شناسه سرویس می‌خواهد.
+  پنل، پایگاه‌داده، Agent، فایروال و DNS (container جدا) از این صفحه کنترل نمی‌شوند.
+- سرویسی که کاربر خاموش کرده پس از restart کانتینر خاموش می‌ماند (`data/control-plane/stopped-services.json`) و
+  `/health/ready` را unhealthy نمی‌کند؛ start/restart آن را پاک می‌کند.
+- مجوزها: `services:read` (همه نقش‌ها)، `services:operate` (owner/admin/operator)؛ CSRF و audit `services.action`.
+  خانه: quick actionهای «سرویس‌های من» و «افزودن دامنه».
+- محدودیت: `requests_24h` اندازه‌گیری نمی‌شود (`null`)؛ بدون socket supervisor (مثلاً محیط توسعه) `controllable:false`.
+
+وضعیت: انجام‌شده — commit `1a568bf`؛ جایگزین docs/35. تست: `test_services_domains.py`.
+
+### US-158 — دامنه‌های سرویس هماهنگ با Dokploy — P0
+
+به‌عنوان Owner می‌خواهم برای هر سرویس چند دامنه اضافه کنم بی‌آنکه با ترافیک Dokploy تداخل کند.
+
+پذیرش (پیاده‌شده):
+- اصل: پیشکار هرگز پورت 80/443 را نمی‌گیرد؛ ورودی مال Traefik خود Dokploy است و پیشکار فقط مسیر «دامنه → سرویس:پورت» را
+  درخواست می‌کند. پیشکار هرگز خودش redeploy نمی‌کند؛ فقط `suggested_action` برمی‌گرداند.
+- چند دامنه بی‌سقف برای هر سرویس (پنل، npm، PyPI، S3)، دقیقاً یکی «اصلی» (اولی خودکار؛ با حذف اصلی، قدیمی‌ترینِ بعدی).
+  نام canonical (IDNA، حروف کوچک، بدون نقطه آخر)، یکتا در کل؛ wildcard، IP، پورت، scheme و مسیر رد می‌شوند.
+- بررسی تداخل پیش از افزودن: با دامنه‌های خود پیشکار (`domain_exists`) و Dokploy (`domain_in_use` با مالک)؛ اگر Dokploy در
+  دسترس نباشد فقط هشدار (`conflict_check:"skipped"`)، با بودجه و cache تا Dokploy زیر بار نرود.
+- سه روش با تشخیص خودکار (`auto` به همین ترتیب): `dokploy_api` (کانتینر خود از label compose از راه Host Agent پیدا و دامنه با
+  API Dokploy v0.31.0 ساخته می‌شود؛ برای Compose `redeploy_required`)، `traefik_file` (اختیاری؛ Agent فقط فایل
+  `mrk-domains.yml` را در یک mount جدای rw می‌نویسد، از ورودی ساخت‌یافته نه YAML خام، atomic و بدون symlink؛ mountهای دیگر Agent
+  فقط‌خواندنی می‌مانند)، `manual` (گام‌به‌گام fa/en). هر دامنه روش خودش را نگه می‌دارد.
+- بررسی DNS (A/AAAA در برابر `MRK_SERVER_PUBLIC_IPS`)، TLS (SNI، زنجیره، انقضا) و رسیدن به **همان** سرویس (از هدر پاسخ)،
+  پس از افزودن و دوره‌ای هر 6 ساعت؛ رویدادهای `domain.unhealthy|cert_expiring|healthy` و قانون خانه `domain_problem`.
+- همگام‌سازی خودکار پس از هر تغییر: میزبان‌های مجاز پنل بدون restart (TrustedHost پویا)، outside-url PyPI (restart کنترل‌شده
+  devpi)، public endpoint و virtual-host S3 (مقدار دستی صفحه S3 حفظ می‌شود)؛ npm نیازی ندارد.
+- مجوزها: `domains:read` (همه)، `domains:write` (owner/admin، verify هم)؛ حذف با تایپ host؛ audit `domain.*` و
+  `domains.routing.update`؛ جدول `service_domains` (migration `20261108_0012`) در بکاپ منطقی هست.
+- محدودیت‌ها: IP عمومی سرور خودکار کشف نمی‌شود؛ `dokploy_api` به Host Agent جفت‌شده نیاز دارد؛ دامنه موجود Dokploy روی خود
+  پیشکار adopt نمی‌شود؛ مسیریابی خودکار برای کانتینر `mrk-mirror` نوشته شده (نصب بومی: بررسی یا حالت دستی).
+
+وضعیت: انجام‌شده — commit `1a568bf`؛ جایگزین docs/35. تست: `test_services_domains.py`.
+
+### US-159 — بازیابی خودکار سرویس از کار افتاده — P0
+
+به‌عنوان Operator می‌خواهم خرابی یک رجیستری کل پنل و کانتینر را پایین نیاورد و خودش برگردد.
+
+پذیرش (پیاده‌شده):
+- فقط از کار افتادن (FATAL) پایگاه‌داده یا پنل کانتینر را بیرون می‌برد تا Docker آن را بالا بیاورد؛ npm، PyPI و S3 را watchdog
+  پنل با تأخیر رو به رشد دوباره راه می‌اندازد (`services.restart_base_delay_seconds` 30 ثانیه، دوبرابر در هر تلاش تا
+  `services.restart_max_delay_seconds` 900؛ خاموش‌شدنی با `services.auto_restart`)؛ پس از 5 دقیقه پایداری تأخیر از اول.
+- وضعیت `crashed` با `recovery` (تعداد تلاش، زمان تلاش بعدی) در «سرویس‌های من»؛ یک اعلان `service.crashed` و یک
+  `service.recovered`. سرویسی که کاربر عمداً خاموش کرده دست نمی‌خورد.
+- راهنمای نصب: سیاست `restart: unless-stopped` یا `always`، نه `on-failure`.
+
+وضعیت: انجام‌شده — commit `1a568bf` (سند طراحی جدا نداشت). تست: `test_services_watchdog.py`.
 
 ## Epic E17 — Uptime Monitoring
 
@@ -1092,6 +1186,11 @@ Evidence: test/report/ADR reference
 
 ## Epic E18 — DNS Management
 
+> تصمیم پایه (docs/36، جایگزین بخش runtime/بودجه docs/23 و §10 docs/25): به‌جای Technitium یا موتور Python، موتور DNS
+> **بومی Go** خود پیشکار (US-191). فازها: D1 پایه و D2 لاگ/پایش (commit `1a568bf`)، D4 حل از ریشه/DNSSEC/رمزدار (commit
+> `9df9787`)، D5+D6 و قالب دامنه (در درخت کاری، پیش از commit). فاز D3 (docs/39) لغو شد و ساخته نشد. بیرون از محدوده
+> (کار DNS بسته است): DHCP، DNS Apps، cluster چندنودی، catalog zones، DNS cookies، ACME داخل موتور، DoH3.
+
 ### US-175 — DNS onboarding ساده — P0
 
 به‌عنوان Admin می‌خواهم با wizard امن DNS را راه‌اندازی کنم.
@@ -1100,6 +1199,13 @@ Evidence: test/report/ADR reference
 - bind/listener، recursion scope، forwarder و transportها خلاصه شوند.
 - open recursion پیش‌فرض یا preset نباشد.
 - query test پیش و پس از apply اجرا شود.
+
+وضعیت: انجام‌شده — commit `1a568bf` (D1)؛ جایگزین docs/37. تب «راه‌اندازی» شش گام دارد (`engine_running`، `port_53_free`،
+`host_resolver`، `docker_daemon`، `verify_from_host`، `verify_from_container`) که از حقایق فقط‌خواندنی Host Agent
+(`GET /v1/dns/facts`) تشخیص داده می‌شوند. پیشکار فایل سیستمی را تغییر نمی‌دهد و کانتینری اجرا نمی‌کند: دستور دقیق (آزاد کردن
+53 از `systemd-resolved`، resolv.conf، `daemon.json` با gateway `172.17.0.1` نه 127.0.0.1) همراه DNS پشتیبان
+(`dns.fallback_servers`) و دستور برگرداندن می‌دهد و بعد بررسی می‌کند؛ restart داکر با برچسب خطر. بدون Agent گام‌ها `unknown`
+با دستورهای کامل‌اند.
 
 ### US-176 — Zone management — P0
 
@@ -1110,6 +1216,17 @@ Evidence: test/report/ADR reference
 - import قبل از apply parse/validate/diff شود.
 - حذف/disable zone impact و rollback snapshot داشته باشد.
 
+وضعیت: انجام‌شده (جز Stub) — Primary و Conditional Forwarder در D1 (commit `1a568bf`)، Secondary در D5 (در درخت کاری، پیش از
+commit)؛ جایگزین docs/37 و docs/41.
+- Primary با SOA/NS خودکار؛ import RFC 1035 پیش از اعمال parse/validate (`$INCLUDE` رد)؛ export؛ تاریخچه 50 نسخه هر زون با
+  rollback (نسخه تازه با serial بزرگ‌تر)؛ حذف زون با تایپ نام زون. عمیق‌ترین زون برنده است.
+- Secondary: بررسی SOA ← IXFR ← در شکست AXFR، با TSIG؛ refresh/retry از SOA، پس از expire SERVFAIL؛ NOTIFY ورودی فقط از
+  primaries/`notify_allow`؛ رکوردها فقط‌خواندنی (`zone_read_only`)؛ «همین حالا بگیر». خانه `dns_secondary_problem`، اعلان
+  `dns.secondary_expired`/`dns.transfer_failed`.
+- انتقال خروجی فقط TCP، پیش‌فرض بسته، حداکثر 10 هم‌زمان، IXFR از history؛ NOTIFY خروجی 5 تلاش با backoff. سقف‌ها: 8 primary،
+  16 هدف notify، 64 مدخل ACL، انتقال ورودی 400k RR / 256MB / 5 دقیقه.
+- محدودیت: Stub و Catalog zone ساخته نشد؛ در پنل ساده فقط primary ساخته می‌شود (secondary/forwarder در پیشرفته).
+
 ### US-177 — Record editor — P0
 
 به‌عنوان DNS Admin می‌خواهم recordها را سریع و امن ویرایش کنم.
@@ -1118,6 +1235,11 @@ Evidence: test/report/ADR reference
 - record typeهای رایج و پیشرفته schema-aware باشند.
 - conflict، apex rule، IP/hostname و TTL validation باشد.
 - bulk edit dry-run و change set atomic داشته باشد.
+
+وضعیت: بخشی — commit `1a568bf` (D1)؛ جایگزین docs/37. انواع A، AAAA، CNAME، MX، TXT (تا 4000 نویسه، شکستن 255 بایتی)، SRV، NS،
+PTR، CAA و SOA (serial خودکار YYYYMMDDnn، با POST ساخته نمی‌شود) با فیلدهای نام‌دار `data`؛ اعتبارسنجی `cname_conflict`،
+`cname_at_apex`، `apex_ns_required`، `occluded_by_delegation`، TTL 0..604800 و TTL یکسان در RRset (RFC 2181). ویرایش گروهی با
+dry-run ساخته نشد؛ تنها مسیر گروهی، preview و اعمال اتمی قالب (US-197) است.
 
 ### US-178 — Simple و Advanced Mode — P0
 
@@ -1128,6 +1250,10 @@ Evidence: test/report/ADR reference
 - تنظیم advanced فعال در Simple Mode badge و summary داشته باشد.
 - capabilityها بر اساس engine version پنهان/نمایش داده شوند، نه hard-code کور.
 
+وضعیت: انجام‌شده — D1 تا D5. همه تب‌های DNS حالت ساده و پیشرفته دارند؛ اگر موتور بخشی از تنظیمات (مثلاً `resolution`/`dnssec`)
+را نفرستد، کارت پیام «به‌روز کنید» نشان می‌دهد و پیش‌فرض نمی‌فرستد. در ساده: وضعیت، دامنه‌ها با قالب، «نام‌های من»، تست،
+مسدودسازی، پشتیبان و دو کارت «روش پیدا کردن نشانی‌ها» و «امضای امنیتی».
+
 ### US-179 — Forwarder و cache — P0
 
 به‌عنوان Operator می‌خواهم forwarderها را تست، مرتب و cache را کنترل کنم.
@@ -1136,6 +1262,11 @@ Evidence: test/report/ADR reference
 - UDP/TCP/DoH/DoT/DoQ طبق engine test شوند.
 - latency، TLS و failure reason جدا گزارش شوند.
 - serve-stale، prefetch و flush با impact/audit مدیریت شوند.
+
+وضعیت: انجام‌شده — D1 (commit `1a568bf`) و `quic://` در D4 (commit `9df9787`)؛ جایگزین docs/37 و docs/40. upstreamها
+`IP[:port]`، `udp://`، `tcp://`، `tls://IP:853#name`، `https://…` و `quic://`، با راهبرد `fastest` (EWMA)|`parallel`|`in_order`،
+health و `rtt_ms`/`last_error` در status؛ cache با سقف بایت، cache منفی، serve-stale (RFC 8767)، prefetch و single-flight؛
+flush با audit `dns.cache.flush`. پیش‌فرض upstream: Cloudflare، Google، Quad9.
 
 ### US-180 — DNSSEC — P0
 
@@ -1146,6 +1277,18 @@ Evidence: test/report/ADR reference
 - sign/unsign/rollover preview و typed confirmation داشته باشد.
 - key/secret خام در API، log یا backup manifest نباشد.
 
+وضعیت: انجام‌شده — اعتبارسنجی در D4 (commit `9df9787`، جایگزین docs/40)، امضای زون در D5 (در درخت کاری، پیش از commit،
+جایگزین docs/41).
+- اعتبارسنجی پیش‌فرض روشن (`validate`؛ `log_only` برای عیب‌یابی) در هر سه حالت حل؛ trust anchor ریشه KSK-2017 و KSK-2024 با
+  به‌روزرسانی RFC 5011؛ NSEC/NSEC3، aggressive NSEC، NTA با انقضا؛ AD/CD/DO طبق RFC؛ bogus ← SERVFAIL + EDE با دلیل ساده در
+  پنل؛ زون‌های محلی، forwarder داخلی و reverse خصوصی خودکار «ناامن ولی مجاز». خانه `dns_trust_anchor_problem`.
+- امضای خودکار هر زون primary: ECDSAP256SHA256 یا ED25519، NSEC یا NSEC3 (iterations ≤100)، تمدید خودکار امضاها، rollover
+  ZSK با پیش‌انتشار و KSK با امضای دوگانه، CDS/CDNSKEY؛ DS آماده کپی با راهنمای ۴ قدمی ثبت‌کننده؛ خاموش کردن با تأیید تایپی و
+  هشدار برداشتن DS. کلیدها 0600 و هرگز در API/audit؛ الگوریتم تا امضا روشن است قفل (`algorithm_locked`). اعلان
+  `dns.dnssec_signing_failed` و خانه `dns_signing_problem`.
+- محدودیت: DS برای delegation امضاشده به زیرزون پشتیبانی نمی‌شود؛ پاسخ‌های view امضا ندارند؛ `kdig`/`delv` در ایمیج نیست و
+  بررسی با اعتبارسنج خود موتور انجام شد.
+
 ### US-181 — ACL، transfer و Dynamic Update — P0
 
 به‌عنوان DNS Admin می‌خواهم دسترسی query/recursion/transfer/update را کنترل کنم.
@@ -1154,6 +1297,13 @@ Evidence: test/report/ADR reference
 - ACL ordered و simulator داشته باشد.
 - default deny برای transfer و update باشد.
 - TSIG rotate/revoke بدون نمایش مجدد secret ممکن باشد.
+
+وضعیت: انجام‌شده — ACL در D1 (commit `1a568bf`)، transfer/UPDATE/TSIG در D5 (در درخت کاری، پیش از commit)؛ جایگزین docs/37 و
+docs/41. ACL ترتیبی با `!` و «اولین تطابق برنده»؛ `0.0.0.0/0`/`::/0` در recursion/query → `open_resolver`؛ تب «تست» با
+`client_ip` نقش simulator را دارد. transfer پیش‌فرض بسته؛ Dynamic Update (RFC 2136) پیش‌فرض خاموش و `require_tsig:false` بدون
+`allow` رد (`open_update`)؛ فقط انواع D1، SOA خودکار، آخرین NS حذف نمی‌شود. کلید TSIG (hmac-sha256/512) secret را فقط یک بار
+نشان می‌دهد و تنظیم آماده `key "…" {…}` برای سرور دیگر دارد؛ چرخش = کلید تازه، جابه‌جایی، حذف قبلی (`tsig_key_in_use` مانع حذف
+کلید در حال استفاده).
 
 ### US-182 — DoH/DoT/DoQ و دامنه DNS — P0
 
@@ -1164,6 +1314,11 @@ Evidence: test/report/ADR reference
 - certificate/SNI و client snippet قابل validate باشند.
 - پنل توضیح دهد DNS کلاسیک روی 53 با Host route نمی‌شود.
 
+وضعیت: انجام‌شده — commit `9df9787` (D4)؛ جایگزین docs/40. DoH ساده پشت Traefik (`doh.tls=false` روی
+`127.0.0.1:8053`/`172.17.0.1:8053`) به‌صورت سرویس `dns-doh` در «سرویس‌های من» دامنه می‌گیرد و گواهی را Traefik می‌دهد؛ چون موتور
+روی host network است، حالت `dokploy_api` برای آن به `traefik_file` یا `manual` تبدیل می‌شود. بررسی دامنه با پرسش DoH واقعی
+(`Content-Type: application/dns-message`). جزئیات DNS رمزدار در US-194.
+
 ### US-183 — Blocklist و policy — P1
 
 به‌عنوان Security Admin می‌خواهم blocklist و bypass را مدیریت کنم.
@@ -1173,6 +1328,15 @@ Evidence: test/report/ADR reference
 - update در فایل staging validate و سپس atomic فعال شود.
 - allow/bypass و false-positive workflow audit شود.
 
+وضعیت: انجام‌شده (بدون bypass؛ فاز D3 لغو شد) — D5، در درخت کاری، پیش از commit؛ جایگزین docs/41. تب «مسدودسازی»:
+- فهرست‌های hosts، domains، adblock و rpz (حداکثر 31، فقط https، به‌روزرسانی هر `update_hours`)؛ ساخت matcher تازه و swap اتمی
+  (پرسش‌ها منتظر نمی‌مانند)؛ شکست ← نسخه قبلی می‌ماند؛ کش فهرست پس از restart بدون شبکه بار می‌شود؛ در فشار critical عقب می‌افتد.
+  status هر فهرست: تعداد، آخرین/بعدی به‌روزرسانی، خطا. (1M نام ≈ 11.7MiB، جست‌وجو ~240ns.)
+- ترتیب: allow (دستی + استثنای فهرست) > `blocked_services` > فهرست‌ها و block دستی > safe search؛ فقط برای کلاینت مجاز به
+  recursion و نام‌های بیرونی (نه override یا زون محلی). پاسخ `nxdomain`|`null_ip`|`refuse` با EDE 15؛ لاگ `source:"blocked"`.
+- «این دامنه چرا بسته شد؟» (`filtering/check`) برای false positive؛ دو پیشنهاد خاموش: StevenBlack hosts و URLhaus. تغییرها با
+  `PUT settings` (audit `dns.settings.update`) و `dns.filtering.refresh`. اعلان `dns.filter_list_failed`.
+
 ### US-184 — Query log و آمار — P1
 
 به‌عنوان SRE می‌خواهم query، response code، client و latency را تحلیل کنم.
@@ -1181,6 +1345,16 @@ Evidence: test/report/ADR reference
 - retention و permission برای client IP/PII جدا باشد.
 - export محدود، auditشده و قابل redaction باشد.
 - dashboard QPS، cache hit، SERVFAIL/NXDOMAIN و top zone داشته باشد.
+
+وضعیت: انجام‌شده — commit `1a568bf` (D2)؛ جایگزین docs/38.
+- مسیر داغ هرگز منتظر لاگ نیست (ring بدون قفل و بدون allocation؛ پر شدن = شمارش `dropped_total`). ذخیره segment ستونی zstd با
+  index و Bloom، WAL با بازیابی پس از crash؛ نگهداری با `max_age_days` و `max_bytes`؛ هرگز دیسک را پر نمی‌کند (فضای کم ←
+  `errors_only` ← `off`، با رویداد و برگشت خودکار).
+- حریم خصوصی IP: `full|mask|hash|none` پیش از ذخیره؛ `exclude_names`/`exclude_clients`. مجوز `dns:logs` جدا (owner/admin)؛ بدون
+  آن top آمار و hot پایش پنهان. جست‌وجو با cursor، جریان زنده SSE (3 برای هر کاربر، 20 در کل)، export CSV/NDJSON (audit
+  `dns.logs.export`)، حذف با تأیید `DELETE LOGS` یا IP کلاینت (`dns:admin`).
+- آمار مستقل از لاگ (دقیقه/ساعت/روز، top با Space-Saving): qps، p50/p95/p99، cache hit، rcode، source، qtype، و از D4 DNSSEC و
+  proto. سنجش: 5M ردیف، صفحه اول 11ms، بدترین اسکن 0.54s.
 
 ### US-185 — DNS change set — P0
 
@@ -1192,6 +1366,10 @@ Evidence: test/report/ADR reference
 - apply idempotent و verification query پس از آن اجرا شود.
 - rollback فقط با revision سازگار فعال باشد.
 
+وضعیت: بخشی — `config_version` جلوی ویرایش هم‌زمان تنظیمات را می‌گیرد (`dns_config_conflict`)، هر تغییر زون نسخه history دارد
+و rollback نسخه تازه می‌سازد، import و قالب (US-197) پیش از اعمال validate/preview می‌شوند. draft، diff عمومی، risk و step-up
+ساخته نشد.
+
 ### US-186 — DNS engine lifecycle — P0
 
 به‌عنوان Operator می‌خواهم DNS را بدون خراب‌کردن کل Appliance مدیریت کنم.
@@ -1200,6 +1378,10 @@ Evidence: test/report/ADR reference
 - config parse و backup قبل از restart انجام شود.
 - restart job دارای drain/timeout/verify و crash-loop protection باشد.
 - safe mode با آخرین config سالم و mutation بسته وجود داشته باشد.
+
+وضعیت: بخشی — موتور در container جدا با healthcheck (`mrk-dns health`) و `restart: unless-stopped` (US-191)؛ نوشتن همه فایل‌ها
+اتمیک، زون خراب از آخرین نسخه history بازیابی می‌شود، تنظیمات بدون restart اعمال می‌شوند و listener ناموفق هر 10 ثانیه دوباره
+امتحان می‌شود؛ پشتیبان/بازگردانی در US-196. پنل موتور را restart نمی‌کند و safe mode ساخته نشد.
 
 ### US-187 — DHCP — P2
 
@@ -1210,6 +1392,8 @@ Evidence: test/report/ADR reference
 - conflict detection و rollback plan وجود داشته باشد.
 - DHCP به‌صورت پیش‌فرض غیرفعال باشد.
 
+وضعیت: بیرون از محدوده — کار DNS بسته شد (فهرست سرآغاز E18).
+
 ### US-188 — DNS Apps — P2
 
 به‌عنوان Advanced Admin می‌خواهم Apps تأییدشده را نصب و مدیریت کنم.
@@ -1218,6 +1402,8 @@ Evidence: test/report/ADR reference
 - فقط catalog allowlist‌شده، hash-pinned و license-reviewed باشد.
 - arbitrary upload از مرورگر ممنوع باشد.
 - permission/network/filesystem هر App نمایش داده شود.
+
+وضعیت: بیرون از محدوده — کار DNS بسته شد (فهرست سرآغاز E18).
 
 ### US-189 — DNS cluster — P2
 
@@ -1228,6 +1414,8 @@ Evidence: test/report/ADR reference
 - quorum/failover drill پیش از ادعای HA لازم باشد.
 - یک Appliance تک‌نودی HA نمایش داده نشود.
 
+وضعیت: بیرون از محدوده — کار DNS بسته شد (فهرست سرآغاز E18)؛ نزدیک‌ترین قابلیت موجود secondary با AXFR/IXFR/NOTIFY است (US-176).
+
 ### US-190 — DNS parity و GPL compliance — P0
 
 به‌عنوان Release Manager می‌خواهم پوشش قابلیت و مجوز Technitium قابل اثبات باشد.
@@ -1237,6 +1425,160 @@ Evidence: test/report/ADR reference
 - gapهای integrity/security P0/P1 صفر باشند.
 - binary، source متناظر، notice و source-offer در artifact انتشار موجود باشند.
 - Legal Gate قبل از image عمومی sign-off شود.
+
+وضعیت: منسوخ — Technitium به کار نرفت؛ موتور بومی clean-room از روی RFCها و مطالعه رفتاری docs/25 نوشته شد (US-191) و
+وابستگی‌هایش فقط مجوز آزاد دارند (`miekg/dns`، `golang.org/x/*`، `klauspost/compress`، `quic-go` همه BSD/MIT، پنل
+`qrcode-generator` MIT)؛ پس ماتریس parity و تعهد GPL موضوعیت ندارد.
+
+### US-191 — موتور DNS بومی و ایزوله — P0
+
+به‌عنوان Platform Admin می‌خواهم یک DNS حرفه‌ای داخل همان ایمیج داشته باشم که فشار یا خرابی آن به پنل، رجیستری‌ها و خود سرور
+نرسد.
+
+پذیرش (پیاده‌شده):
+- موتور Go در `apps/dns-engine` (کتابخانه پروتکل `miekg/dns`؛ منطق سرور، cache، سیاست، لاگ و API کد خود پیشکار) با باینری‌های
+  `mrk-dns` (`serve|health|version`) و `mrk-dnsbench`، داخل همان ایمیج؛ ایمیج جدا ندارد.
+- container جدای `mrk-dns` از همان ایمیج (Compose profile `dns`، `network_mode: host` تا IP واقعی کلاینت و سرعت UDP بماند)،
+  سقف `MRK_DNS_CPUS`=2، `MRK_DNS_MEMORY`=512m، `MRK_DNS_PIDS`=256، `GOMEMLIMIT` خودکار، `read_only`، `no-new-privileges`،
+  `cap_drop: ALL`، healthcheck و `restart: unless-stopped`. DNS به پنل وابسته نیست.
+- **مدل مجوز پورت 53:** چون با `no-new-privileges` file capability نادیده گرفته می‌شود، سرویس با `user: "0:10001"` و فقط
+  `NET_BIND_SERVICE, SETUID, SETGID` شروع می‌شود و موتور پیش از هر کاری روی همه threadها به `MRK_DNS_RUN_AS` (پیش‌فرض
+  `10001:10001`، uid صفر رد) می‌رود و فقط `NET_BIND_SERVICE` را نگه می‌دارد (روی compose واقعی: `Uid 10001`،
+  `CapEff=0x400`). `validate_release.py` نبود `setcap` و همین پیکربندی را بررسی می‌کند.
+- API مدیریتی فقط روی unix socket (`/run/mrk-dns/admin.sock`) با توکن Bearer (`admin.token`)؛ پنل volume `mrk-dns-run` را
+  فقط‌خواندنی دارد. `GET /v1/health` بدون توکن.
+- هرگز open resolver نیست: `/0` در `recursion.allow`/`query_allow` رد (`open_resolver`)، بیرون از ACL ← REFUSED؛ سقف qps هر
+  کلاینت و RRL (فقط UDP و فقط برای بیرون از `recursion.allow`)، UDP 1232، `ANY` حداقلی (RFC 8482)، CHAOS و AXFR بی‌اجازه REFUSED،
+  محافظت DNS rebinding، reverse خصوصی (RFC 6303) و `.invalid` محلی و هرگز به upstream.
+- ذخیره فایل اتمیک (temp + fsync + rename) و `config_version`؛ override «این نام → این آدرس» (A/AAAA/CNAME) فقط برای کلاینت‌های
+  داخل `recursion.allow`.
+- پنل: ماژول `dns` با `dns:read` (همه)، `dns:write` (owner/admin/operator)، `dns:logs` و `dns:admin` (owner/admin) زیر گروه nav
+  «سرور و برنامه‌ها»؛ audit همه تغییرها؛ اعلان `dns.unreachable`/`dns.recovered`، خانه `dns_unreachable` و گام `setup_dns`؛
+  کارت DNS در «سرویس‌های من» (کنترل‌پذیر نیست).
+- سخت‌سازی D6: fuzz برای پارسر پرسش، segment لاگ، فیلتر، فهرست مسدودسازی، UPDATE/NOTIFY/AXFR/IXFR و TSIG، همه در CI (هر کدام
+  20 ثانیه)؛ تست بار 10 دقیقه‌ای job دستی `dns-engine-load` در `soak.yml`.
+
+وضعیت: انجام‌شده — commit `1a568bf` (D1)، سخت‌سازی D6 در درخت کاری پیش از commit؛ جایگزین docs/36 و docs/37. سنجش: ≈87–94 هزار
+qps از cache روی 2 هسته (لاگ روشن یا خاموش). محدودیت‌های D1 (حل از ریشه، DNSSEC، DoT/DoH ورودی) در D4 برطرف شد؛ DNS cookies
+و ECS ساخته نشد.
+
+### US-192 — پایش بحرانی، فشار و مقابله با حمله — P0
+
+به‌عنوان SRE می‌خواهم DNS زیر بار سنگین یا حمله پاسخگو بماند و بدانم چه شده است.
+
+پذیرش (پیاده‌شده):
+- چهار سطح `normal|warning|critical|emergency` بر پایه CPU و حافظه container، `qps_percent` از `capacity_qps` و CPU/حافظه میزبان
+  (از Host Agent هر 10 ثانیه)؛ با hysteresis (ورود پس از دو نمونه، خروج یک سطح در هر بار پس از `dwell_seconds` و margin).
+- اقدام خودکار، برگشت‌پذیر و هرکدام قابل خاموش: warning (نمونه‌برداری لاگ 25٪، بی prefetch، `minimal_any`)، critical
+  (+ لاگ `errors_only`، `prefer_stale`، نصف‌کردن سقف کلاینت، رد recursion کلاینت‌های سنگین — داده authoritative را همچنان
+  می‌گیرند)، emergency (+ لاگ خاموش، یک‌چهارم سقف). اگر `client_qps=0` باشد سقف پایه 2000 qps اعمال می‌شود.
+- تشخیص random-subdomain (HyperLogLog) و NXDOMAIN flood با حالت `off|suggest` (پیش‌فرض)`|auto`؛ محدودسازی دستی/خودکار
+  (`throttle|block|refuse` روی کلاینت یا دامنه، مدت‌دار، حداکثر 10000)؛ throttle دامنه فقط کار upstream را محدود می‌کند و cache
+  همیشه پاسخ می‌دهد.
+- تب «پایش»: جمله وضعیت، نمودارها، پرمصرف‌ترین دامنه‌ها/کلاینت‌ها با «کند کن / مسدود کن» (`dns:write`)، حمله‌ها و محدودسازی‌های
+  فعال؛ بدون `dns:logs` فقط شمار. اعلان‌ها `dns.pressure`، `dns.attack_detected`، `dns.mitigation_auto`، `dns.logs_degraded`/
+  `recovered`؛ خانه `dns_under_pressure` و `dns_attack_detected` (درخواست خانه هرگز موتور را صدا نمی‌زند).
+
+وضعیت: انجام‌شده — commit `1a568bf` (D2)؛ جایگزین docs/38. آزمون بار: سیل 46 هزار qps از یک کلاینت ← emergency در 2 ثانیه،
+کلاینت عادی 7000/7000 NOERROR (p99 34ms)، حافظه ثابت؛ random-subdomain ← تشخیص و محدودسازی خودکار در اولین ارزیابی.
+
+### US-193 — حل مستقل از ریشه — P1
+
+به‌عنوان Admin می‌خواهم DNS بتواند بدون سرور واسط (Cloudflare/Google) نام‌ها را خودش از ریشه پیدا کند.
+
+پذیرش (پیاده‌شده):
+- `resolution.mode`: `forward` (پیش‌فرض؛ رفتار نصب‌های قبلی عوض نشد)، `recursive`، `forward_then_recursive` (forward حداکثر نیمی
+  از `resolve_timeout_ms`؛ NXDOMAIN معتبر به ریشه نمی‌رود). در پنل سه کارت با جمله روزمره.
+- priming ریشه (RFC 8109) در شروع و هر 24 ساعت، QNAME minimisation (`relaxed|strict`)، 0x20 با کنار گذاشتن سرور ناسازگار،
+  bailiwick برای glue، سقف ارجاع/پرسش/زمان، `allow_private_ns:false` (ضد SSRF)، fallback بدون EDNS و infra cache؛ هرگز ارسال
+  به نشانی‌های listen خود موتور.
+- تست «مسیر کامل» گام‌به‌گام ریشه ← TLD ← دامنه (فقط `dns:write`)؛ هشدار غیرمسدودکننده `recursive_needs_outbound_53`؛
+  اعلان `dns.priming_failed`.
+
+وضعیت: انجام‌شده — commit `9df9787` (D4)؛ جایگزین docs/40. واقعی: 312 بررسی هم‌خوان با Unbound و کلاینت عادی زیر سیل نام تصادفی
+در حالت recursive سالم ماند.
+
+### US-194 — DNS رمزدار برای گوشی، لپ‌تاپ و مرورگر — P0
+
+به‌عنوان کاربر می‌خواهم دستگاه‌هایم با DoT، DoH یا DoQ به پیشکار وصل شوند، بی‌آنکه پیشکار open resolver شود.
+
+پذیرش (پیاده‌شده):
+- DoT (RFC 7858، 853/tcp)، DoH (RFC 8484، `/dns-query`، HTTP/2 با TLS یا HTTP ساده پشت Traefik)، DoQ (RFC 9250، 853/udp)؛ سقف
+  اتصال کل و هر کلاینت؛ همه از همان مسیر ACL/فشار/mitigation/لاگ (proto `dot|doh|doq`) می‌گذرند.
+- گواهی: خودامضا (ECDSA P-256، 397 روز، تمدید خودکار) یا بارگذاری؛ بارگذاری بدون restart؛ کلید خصوصی هرگز برنمی‌گردد و در
+  audit نیست. روشن کردن بدون گواهی ← `certificate_required`. اعلان انقضا 14/7/3/1 روز و خانه `dns_certificate_expiring`.
+- `encrypted.allow` برای ورودی رمزدار جای ACLها را می‌گیرد؛ دسترسی از اینترنت فقط با توکن DoH (`/dns-query/<token>`، فقط
+  SHA-256 ذخیره، qps هر توکن، نمایش یک‌باره با QR)؛ DoH ساده روی نشانی عمومی رد (`plain_doh_public`)؛ هشدار
+  `doh_public_needs_token`.
+- تب «اتصال رمزدار»: سه کلید، کارت گواهی، توکن‌ها و راهنمای هر دستگاه (Android، iPhone/Mac با پروفایل `.mobileconfig`،
+  Windows، Firefox/Chrome، Linux). forwarder خروجی `quic://` هم اضافه شد.
+
+وضعیت: انجام‌شده — commit `9df9787` (D4)؛ جایگزین docs/40. محدودیت: پیش‌فرض DoH
+`0.0.0.0:443` روی میزبانی که Traefik دارد `listener.failed` می‌دهد (حالت «پشت Traefik» را به کار ببرید)؛ ACME داخل موتور و
+DoH3 نیست.
+
+### US-195 — گروه‌های دستگاه و پاسخ جدا برای شبکه داخلی — P1
+
+به‌عنوان Network Admin می‌خواهم دستگاه‌های مختلف سیاست جدا بگیرند و نام‌ها برای شبکه داخلی پاسخ دیگری بدهند (split-horizon).
+
+پذیرش (پیاده‌شده):
+- `client_groups` (اولین گروه منطبق): شبکه‌ها، filtering `inherit|on|off`، فهرست‌ها، upstreamهای جدا (فقط forward، با cache جدا
+  تا پاسخ‌ها قاطی نشوند) و `blocked_services`.
+- رکورد با فیلد `view` (شناسه گروه) برای همان گروه جای RRset عمومی همان نام/نوع را می‌گیرد؛ زون همیشه معتبر می‌ماند.
+- محدودیت: پاسخ view امضای DNSSEC ندارد و در AXFR/export نمی‌آید؛ `blocked_services` و اعلام `views` زون در پنل نیست (رکورد
+  دارای `view` = override)؛ گروه‌ها فقط در حالت پیشرفته.
+
+وضعیت: انجام‌شده — D5، در درخت کاری، پیش از commit؛ جایگزین docs/41.
+
+### US-196 — پشتیبان و بازگردانی DNS — P0
+
+به‌عنوان Admin می‌خواهم همه پیکربندی DNS را یک‌جا پشتیبان بگیرم و با اطمینان برگردانم.
+
+پذیرش (پیاده‌شده):
+- دانلود (`dns:admin`) فایل `mrk-dns-backup-*.tar.gz` با manifest نسخه‌دار و sha256 هر فایل: تنظیمات، زون‌ها، overrides،
+  mitigations، توکن‌ها (فقط hash)، گواهی، TSIG و کلیدهای DNSSEC؛ بدون لاگ، آمار، کش فهرست‌ها و داده secondary. audit
+  `dns.backup.download`.
+- بازگردانی با تأیید تایپی؛ اعتبارسنجی کامل پیش از اعمال (هر خطا ← `restore_invalid` و هیچ تغییری)؛ اعمال اتمی با journal و
+  rollback پس از crash؛ بارگذاری دوباره بدون restart و `config_version` بالاتر؛ `restart_required` اگر TSIG/کلیدها عوض شد. audit
+  `dns.restore`.
+- سقف فایل در پنل 128MiB (موتور 1GiB).
+
+وضعیت: انجام‌شده — D6، در درخت کاری، پیش از commit؛ جایگزین docs/41.
+
+### US-197 — قالب دامنه — P1
+
+به‌عنوان Admin می‌خواهم دامنه تازه بدون کار تکراری با رکوردهای پیش‌فرض ساخته شود.
+
+پذیرش (پیاده‌شده):
+- شش قالب آماده و فقط‌خواندنی (قابل کپی): `website` (پیش‌فرض)، `website_email`، `google_workspace`، `microsoft_365`،
+  `dokploy_apps` (wildcard به سرور)، `security_only` (CAA، SPF `-all`، DMARC reject)؛ قالب کاربر در جدول `dns_templates`
+  (migration `20261109_0013`)، سقف 200 قالب / 200 رکورد / 20 متغیر.
+- متغیرهای خودکار `domain`، `domain_dashed`، `server_ipv4`/`server_ipv6` (از `domains.server_public_ips` یا نشانی‌های عمومی Agent)،
+  `mail_host`، `dkim_value`؛ رکوردی که متغیرش خالی است ساخته نمی‌شود (skipped)؛ IPv4 نامعلوم ← هشدار `server_ipv4_unknown`.
+- ساخت دامنه تازه قالب پیش‌فرض (`dns.default_template_id`) را خودکار اعمال می‌کند؛ کاربر قالب دیگر یا «بدون قالب» را انتخاب
+  می‌کند و فقط متغیرهای غیرخودکار پرسیده می‌شوند. اگر import قالب شکست بخورد زون می‌ماند و پیام روشن داده می‌شود.
+- اعمال روی دامنه موجود: preview (تازه / تکراری / ناجور / ساخته نمی‌شود) و اعمال اتمی با import موتور (یک نسخه history)؛ تعارض
+  بدون «جایگزین کن» رد می‌شود.
+- مجوزها: خواندن `dns:read`، تغییر قالب `dns:admin`، اعمال `dns:write`؛ audit `dns.template.*` و `dns.zone.apply_template`؛
+  مقدار متغیرها هرگز در audit نیست.
+- محدودیت: در حالت جایگزینی comment رکوردهای باقی‌مانده از بین می‌رود و اگر رکورد خاموش یا دارای `view` بماند اعمال رد می‌شود
+  (`dns_template_replace_unsafe`).
+
+وضعیت: انجام‌شده — در درخت کاری، پیش از commit؛ جایگزین docs/41. build و `check:copy` پنل سبز؛ پنل فقط با پاسخ‌های ساختگی در مرورگر
+بررسی شد و هنوز با بک‌اند واقعی سرتاسری امتحان نشده است.
+
+### US-198 — DNS برای دامنه‌های «سرویس‌های من» — P1
+
+به‌عنوان Operator می‌خواهم containerهای روی سرور دامنه‌های سرویس‌ها را مستقیم به خود سرور حل کنند.
+
+پذیرش (پیاده‌شده):
+- `dns.services_overrides` (پیش‌فرض خاموش): برای هر دامنه سرویس override A/AAAA با TTL 60 و `source:"services"` به
+  `dns.services_override_target` (پیش‌فرض gateway داکر)؛ override کاربر روی همان نام دست نمی‌خورد (`skipped`) و override
+  مدیریت‌شده را کاربر عوض/حذف نمی‌کند (`dns_override_managed`).
+- زون داخلی اختیاری `mrk.internal` با `panel|npm|pypi|s3`؛ با خاموش کردن فقط رکوردهای مدیریت‌شده حذف می‌شوند.
+- همگام‌سازی پس از هر تغییر دامنه؛ نتیجه در `sync.dns` پاسخ‌های دامنه؛ بدون موتور هم تنظیم ذخیره می‌شود.
+
+وضعیت: انجام‌شده — commit `1a568bf` (D1)؛ جایگزین docs/37.
 
 ## Definition of Done برای همه Storyها
 
