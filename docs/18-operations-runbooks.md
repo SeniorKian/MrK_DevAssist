@@ -58,13 +58,17 @@ Restore یک عملیات آفلاین است و از داخل API یا پنل �
    ```sh
    docker compose run --rm --no-deps \
      -v "$PWD/restore-passphrase:/run/secrets/mrk-restore-passphrase:ro" \
-     --entrypoint mrk-restore mrk-mirror apply \
+     --entrypoint mrk-restore mrk-panel apply \
      --plan '<plan-id>' \
      --passphrase-file /run/secrets/mrk-restore-passphrase \
      --confirmation 'APPLY <backup-id>' \
      --offline-confirm I_HAVE_STOPPED_MRK
    ```
 
+   در نصب جدا (سند 44) داده npm و PyPI روی volumeهای جدای `mrk-npm-data` و `mrk-pypi-data` است؛ چون
+   بازگردانی آفلاین پوشه‌ها را با rename جابه‌جا می‌کند و rename از مرز mount رد نمی‌شود، این دو پوشه را
+   رد می‌کند. پیش از بازگردانی آن‌ها، Stackهای `mrk-npm` و `mrk-pypi` را متوقف کنید و محتوای backup را با
+   `docker run --rm -v mrk-npm-data:/v ...` در همان volume کپی کنید.
 7. receipt داخل `/data/control-plane/restore-receipts` و backup rollback داخل
    `/data/backups/restore-rollbacks` را بررسی کنید؛ سپس فایل passphrase موقت را امن حذف کنید.
 8. سرویس را بالا بیاورید و readiness، ورود Owner، package catalog، Integrity Scan و نصب یک پکیج
@@ -99,9 +103,9 @@ PGlite در حالت single-user اجرا می‌شود و autovacuum ندارد
 به‌مرور bloat می‌شوند. ماهانه یا پس از purgeهای بزرگ، در یک پنجره نگهداری:
 
 ```sh
-docker compose exec mrk-mirror supervisorctl -c /opt/mrk/supervisord.conf stop control-plane
-docker compose exec mrk-mirror python -c "import psycopg; c = psycopg.connect('postgresql://postgres:postgres@127.0.0.1:5433/postgres?sslmode=disable', autocommit=True); c.execute('VACUUM (ANALYZE)'); c.close()"
-docker compose exec mrk-mirror supervisorctl -c /opt/mrk/supervisord.conf start control-plane
+docker compose exec mrk-panel supervisorctl -c /opt/mrk/supervisord.conf stop control-plane
+docker compose exec mrk-panel python -c "import psycopg; c = psycopg.connect('postgresql://postgres:postgres@127.0.0.1:5433/postgres?sslmode=disable', autocommit=True); c.execute('VACUUM (ANALYZE)'); c.close()"
+docker compose exec mrk-panel supervisorctl -c /opt/mrk/supervisord.conf start control-plane
 ```
 
 (PGlite فقط یک اتصال می‌پذیرد، پس control plane باید در این مدت متوقف باشد.)

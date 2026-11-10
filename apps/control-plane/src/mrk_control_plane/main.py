@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import __version__
+from . import __version__, remote_services
 from .auth import (
     AuthStore,
     FieldError,
@@ -435,6 +435,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         apply_startup_overrides()
     active_settings = settings or Settings.from_env()
     configure_logging(active_settings.log_level)
+    # npm / PyPI connected from the add-service wizard (docs/44).
+    remote_services.apply(active_settings)
     database = Database(active_settings.data_dir, active_settings.database_url)
     auth_store = AuthStore(
         active_settings.data_dir,
@@ -701,6 +703,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def npm_is_ready() -> bool:
         if not active_settings.npm_enabled or stopped_on_purpose("npm"):
             return True
+        if remote_services.is_remote("npm"):
+            return True  # its own container: shown in My services, never gates the panel
         return await asyncio.to_thread(
             check_http_component,
             active_settings.npm_health_host,
@@ -710,6 +714,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     async def pypi_is_ready() -> bool:
         if not active_settings.pypi_enabled or stopped_on_purpose("pypi"):
+            return True
+        if remote_services.is_remote("pypi"):
             return True
         if (
             active_settings.pypi_bootstrap_state_file is not None

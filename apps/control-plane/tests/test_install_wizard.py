@@ -61,11 +61,11 @@ def test_catalog_lists_ready_and_planned_services(tmp_path: Path, agent_backend)
         items = {item["id"]: item for item in client.get("/api/v1/install/catalog").json()["items"]}
     ready = {key for key, value in items.items() if value["availability"] == "ready"}
     planned = {key for key, value in items.items() if value["availability"] == "planned"}
-    assert {"agent", "dns", "firewall", "s3"} <= ready and {"npm", "pypi"} <= planned
+    assert ready == {"agent", "dns", "firewall", "s3", "npm", "pypi"} and planned == set()
     assert items["agent"]["image"] == "ghcr.io/seniorkian/mrk-agent:latest"
     assert items["agent"]["connection"] == "not_connected"
     assert items["agent"]["methods"] == ["dokploy", "coolify", "compose"]
-    assert items["npm"]["image"] is None and items["npm"]["connection"] == "planned"
+    assert items["npm"]["image"] == "ghcr.io/seniorkian/mrk-npm:latest"
 
 
 def test_bundle_then_connect_pairs_the_agent(tmp_path: Path, agent_backend, monkeypatch) -> None:
@@ -114,12 +114,9 @@ def test_bundle_then_connect_pairs_the_agent(tmp_path: Path, agent_backend, monk
         assert key_text not in client.get("/api/v1/install/catalog").text
 
 
-def test_planned_and_unknown_services_cannot_be_bundled(tmp_path: Path, agent_backend) -> None:
+def test_unknown_services_cannot_be_bundled(tmp_path: Path, agent_backend) -> None:
     with TestClient(create_app(Settings.for_test(tmp_path / "cp"))) as client:
         headers = {"X-CSRF-Token": str(login_owner(client)["csrf_token"])}
-        planned = client.post("/api/v1/install/npm/bundle", headers=headers, json={})
-        assert planned.status_code == 409
-        assert planned.json()["error"]["code"] == "service_not_installable_yet"
         unknown = client.post("/api/v1/install/nope/bundle", headers=headers, json={})
         assert unknown.status_code == 404
 
@@ -143,9 +140,14 @@ def test_every_ready_template_is_valid_compose() -> None:
         (service,) = compose["services"].values()
         assert service["image"].startswith("${MRK_IMAGE:?")
         assert service["read_only"] is True and service["cap_drop"] == ["ALL"]
-        if item.id == "s3":
-            # Only the S3 API, and on loopback unless the operator changes it.
-            assert service["ports"] == ["${MRK_S3_BIND:-127.0.0.1}:${MRK_S3_PORT:-9000}:9000"]
+        published = {
+            "s3": "${MRK_S3_BIND:-127.0.0.1}:${MRK_S3_PORT:-9000}:9000",
+            "npm": "${MRK_NPM_BIND:-127.0.0.1}:${MRK_NPM_PORT:-4873}:4873",
+            "pypi": "${MRK_PYPI_BIND:-127.0.0.1}:${MRK_PYPI_PORT:-3141}:3141",
+        }
+        if item.id in published:
+            # Only the client-facing port, and on loopback unless the operator changes it.
+            assert service["ports"] == [published[item.id]]
         else:
             assert "ports" not in service  # nothing is published to the Internet
         if item.pairing_env:

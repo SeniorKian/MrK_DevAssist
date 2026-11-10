@@ -5,7 +5,7 @@
 # Only the panel is native: the same two programs as the `panel` image target of
 # deploy/images/Dockerfile (PGlite + control plane, deploy/images/panel/supervisord.conf),
 # built from this checkout with the versions of versions.lock.yaml:
-#   * Python in a venv with apps/control-plane and deploy/appliance/requirements.txt
+#   * Python in a venv with apps/control-plane and deploy/images/requirements.txt
 #     (pins checked like the Dockerfile);
 #   * Node for PGlite (`npm ci`, lockfile hashes enforced) and the built admin UI.
 # Every other service (agent, DNS, firewall, S3, npm, PyPI) runs in Docker and is
@@ -43,8 +43,8 @@ readonly EXEC_HELPER="/usr/local/sbin/devassist-exec"
 readonly RUN_USER="devassist"
 # uid/gid of the service images: Docker services write their sockets as 10001.
 readonly PREFERRED_ID=10001
-# Data layout of the panel image (deploy/images/Dockerfile, deploy/appliance/entrypoint.py).
-readonly DATA_SUBDIRS=(database control-plane modules)
+# Data layout of the panel image (deploy/images/Dockerfile, deploy/images/panel/entrypoint.py).
+readonly DATA_SUBDIRS=(database control-plane modules tmp tmp/pypi-router npm npm/config npm/storage npm/auth pypi pypi/server pypi/auth)
 # Host directories the DNS and firewall containers bind-mount for their sockets.
 readonly SOCKET_DIRS=(/run/mrk-dns /run/mrk-firewall)
 # Units of older native installs (before docs/44); only ever removed.
@@ -486,9 +486,9 @@ build_python_env() {
     fi
     # Same install line and pin check as the python-base stage of deploy/images/Dockerfile.
     run env PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_CACHE_DIR="$CACHE_DIR/pip" "$venv/bin/python" -m pip install \
-        "${pip_args[@]}" "$REPO_ROOT/apps/control-plane" -r "$REPO_ROOT/deploy/appliance/requirements.txt"
+        "${pip_args[@]}" "$REPO_ROOT/apps/control-plane" -r "$REPO_ROOT/deploy/images/requirements.txt"
     run "$venv/bin/python" -c "import importlib.metadata as md, sys; pins = [line.strip().split('==') for line in open(sys.argv[1]) if '==' in line and not line.startswith('#')]; bad = [(name, want, md.version(name)) for name, want in pins if md.version(name) != want]; sys.exit(f'runtime pin mismatch: {bad}' if bad else 0)" \
-        "$REPO_ROOT/deploy/appliance/requirements.txt"
+        "$REPO_ROOT/deploy/images/requirements.txt"
     run "$venv/bin/python" -m pip uninstall --yes pip wheel
 }
 
@@ -679,6 +679,8 @@ install_config() {
     fi
     # Panel-only facts, also enforced on env files of older installs.
     set_env MRK_PANEL_RUNTIME native
+    # Host path of /data: the wizard bind-mounts npm/ and pypi/ from here (docs/44).
+    set_env MRK_HOST_DATA_DIR "$DATA_DIR"
     set_env MRK_NPM_ENABLED false
     set_env MRK_PYPI_ENABLED false
     set_env MRK_BUILD_COMMIT "$COMMIT"

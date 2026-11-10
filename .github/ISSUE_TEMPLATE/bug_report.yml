@@ -70,7 +70,7 @@ body:
     id: logs
     attributes:
       label: Logs / لاگ‌ها
-      description: "`docker compose logs --tail=200 mrk-mirror` or `journalctl -u devassist -n 200`"
+      description: "`docker compose logs --tail=200 mrk-panel` or `journalctl -u devassist -n 200`"
       render: text
   - type: textarea
     id: extra

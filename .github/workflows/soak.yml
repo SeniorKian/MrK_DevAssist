@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  appliance-soak:
+  panel-soak:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -31,10 +31,11 @@ jobs:
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          file: deploy/appliance/Dockerfile
+          file: deploy/images/Dockerfile
+          target: panel
           push: false
           load: true
-          tags: mrk/package-mirror:soak
+          tags: mrk-panel:soak
           build-args: |
             VCS_REF=${{ github.sha }}
             BUILD_DATE=soak
@@ -49,9 +50,9 @@ jobs:
           --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE
           --security-opt no-new-privileges:true
           --mount source=mrk-soak-data,target=/data
-          --entrypoint python mrk/package-mirror:soak
+          --entrypoint python mrk-panel:soak
           /opt/mrk/entrypoint.py --prepare-only
-      - name: Start hardened appliance
+      - name: Start hardened panel
         run: >-
           docker run --detach --name mrk-soak --network mrk-soak-network
           --user 10001:10001
@@ -59,7 +60,7 @@ jobs:
           --env MRK_LOG_LEVEL=WARNING
           --read-only --tmpfs /tmp:size=64m,mode=1777,noexec,nosuid,nodev
           --cap-drop ALL --security-opt no-new-privileges:true
-          --mount source=mrk-soak-data,target=/data mrk/package-mirror:soak
+          --mount source=mrk-soak-data,target=/data mrk-panel:soak
       - name: Wait for readiness
         run: >-
           docker exec --env MRK_HEALTHCHECK_ATTEMPTS=30 mrk-soak

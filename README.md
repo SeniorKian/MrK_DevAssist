@@ -53,7 +53,8 @@ Then open <http://localhost:8080> through `ssh -L 8080:127.0.0.1:8080 you@your-s
 | DNS | `ghcr.io/seniorkian/mrk-dns` |
 | Firewall | `ghcr.io/seniorkian/mrk-firewall` |
 | File storage (S3) | `ghcr.io/seniorkian/mrk-s3` |
-| npm / PyPI mirrors | coming as their own images; for now `deploy/appliance/compose.yaml` |
+| npm registry | `ghcr.io/seniorkian/mrk-npm` |
+| PyPI registry | `ghcr.io/seniorkian/mrk-pypi` |
 
 More: [Docker install](docs/install-docker.md) · [Native install](docs/install-native.md)
 

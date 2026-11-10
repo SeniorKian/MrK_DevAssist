@@ -10,6 +10,14 @@ LOGGER = logging.getLogger(__name__)
 
 def restart_verdaccio_if_managed() -> bool:
     """Restart Verdaccio under supervisor. Raises RuntimeError on any failure."""
+    from .remote_services import refresh_npm
+
+    try:
+        if refresh_npm():
+            # Verdaccio in mrk-npm (docs/44): its runner restarts on the new config.
+            return True
+    except OSError as exc:
+        raise RuntimeError("the npm config could not be written") from exc
     if os.getenv("MRK_NPM_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}:
         # The panel-only image has no Verdaccio to restart (docs/44).
         return False

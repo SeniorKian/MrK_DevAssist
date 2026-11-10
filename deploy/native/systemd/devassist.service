@@ -72,7 +72,7 @@ RemoveIPC=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 # Same ceilings as compose.yaml (MRK_MEM_LIMIT, MRK_CPUS, pids_limit, nofile).
-MemoryMax=1G
+MemoryMax=2G
 MemorySwapMax=0
 CPUQuota=100%
 TasksMax=256

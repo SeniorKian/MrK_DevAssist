@@ -55,19 +55,15 @@ def _check_workflows(root: Path, dockerfile: str, failures: list[str]) -> None:
             if digest and expected:
                 _require(
                     digest == expected,
-                    f"{name}: {image} digest differs from deploy/appliance/Dockerfile",
+                    f"{name}: {image} digest differs from deploy/images/Dockerfile",
                     failures,
                 )
 
 
-# (Compose file, service holding PGlite). The root compose.yaml is the panel-only
-# stack (docs/44); the deploy/appliance files are the legacy all-in-one stack.
-_DATABASE_SERVICES = (
-    ("compose.yaml", "mrk-panel"),
-    ("deploy/appliance/compose.yaml", "mrk-mirror"),
-    ("deploy/appliance/compose.production.yaml", "mrk-mirror"),
-)
-_LEGACY_COMPOSE = ("deploy/appliance/compose.yaml", "deploy/appliance/compose.production.yaml")
+# (Compose file, service holding PGlite): the panel-only stack (docs/44). The
+# service stacks are rendered by the panel's wizard and checked by its tests.
+_DATABASE_SERVICES = (("compose.yaml", "mrk-panel"),)
+_LEGACY_COMPOSE: tuple[str, ...] = ()
 
 
 def _check_runtime_limits(root: Path, failures: list[str]) -> None:
@@ -95,13 +91,13 @@ def _check_runtime_limits(root: Path, failures: list[str]) -> None:
 
 
 def _check_runtime_pins(root: Path, failures: list[str]) -> None:
-    requirements = root / "deploy/appliance/requirements.txt"
+    requirements = root / "deploy/images/requirements.txt"
     lines = [
         line.strip()
         for line in requirements.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    _require(bool(lines), "deploy/appliance/requirements.txt is empty", failures)
+    _require(bool(lines), "deploy/images/requirements.txt is empty", failures)
     loose = [line for line in lines if not re.fullmatch(r"[A-Za-z0-9_.-]+==[\w.]+", line)]
     _require(not loose, f"runtime requirements must be exact == pins: {loose}", failures)
 
@@ -114,9 +110,7 @@ def _check_line_endings(root: Path, failures: list[str]) -> None:
         ".gitattributes must force LF for *.sh",
         failures,
     )
-    for path in sorted(
-        [*(root / "deploy/appliance").glob("*"), *(root / "deploy/images").rglob("*")]
-    ):
+    for path in sorted((root / "deploy/images").rglob("*")):
         if path.is_file() and path.suffix in {".sh", ".conf", ".py", ""}:
             _require(
                 b"\r\n" not in path.read_bytes(),
@@ -235,9 +229,9 @@ def _check_dns_service(root: Path, dockerfile: str, failures: list[str]) -> None
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    dockerfile = (root / "deploy/appliance/Dockerfile").read_text(encoding="utf-8")
+    dockerfile = (root / "deploy/images/Dockerfile").read_text(encoding="utf-8")
     compose: dict[str, object] = yaml.safe_load(
-        (root / "deploy/appliance/compose.production.yaml").read_text(encoding="utf-8")
+        (root / "compose.yaml").read_text(encoding="utf-8")
     )
     versions = (root / "versions.lock.yaml").read_text(encoding="utf-8")
     license_text = (root / "LICENSE").read_text(encoding="utf-8")
@@ -248,13 +242,13 @@ def main() -> int:
             root / "apps/control-plane/src/mrk_control_plane/config.py",
             root / "apps/control-plane/src/mrk_control_plane/main.py",
             root / ".env.example",
-            root / "deploy/appliance/compose.production.yaml",
+            root / "compose.yaml",
         )
     )
     failures: list[str] = []
 
-    split_dockerfile = (root / "deploy/images/Dockerfile").read_text(encoding="utf-8")
-    for target in ("panel", "agent", "firewall", "dns", "s3"):
+    split_dockerfile = dockerfile
+    for target in ("panel", "agent", "firewall", "dns", "s3", "npm", "pypi"):
         _require(
             re.search(rf"^FROM\s+\S+\s+AS\s+{target}$", split_dockerfile, re.MULTILINE)
             is not None,
@@ -274,7 +268,11 @@ def main() -> int:
         failures,
     )
 
-    from_lines = re.findall(r"^FROM\s+(\S+)", dockerfile, flags=re.MULTILINE)
+    stages = set(re.findall(r"^FROM\s+\S+\s+AS\s+(\S+)", dockerfile, flags=re.MULTILINE))
+    from_lines = [
+        image for image in re.findall(r"^FROM\s+(\S+)", dockerfile, flags=re.MULTILINE)
+        if image not in stages  # a later stage built on an earlier one
+    ]
     _require(bool(from_lines), "Dockerfile has no FROM lines", failures)
     _require(
         all("@sha256:" in image for image in from_lines),
@@ -306,11 +304,15 @@ def main() -> int:
     )
 
     services = compose.get("services", {})
-    service = services.get("mrk-mirror", {}) if isinstance(services, dict) else {}
-    _require(isinstance(service, dict), "production service is missing", failures)
+    service = services.get("mrk-panel", {}) if isinstance(services, dict) else {}
+    _require(isinstance(service, dict), "compose.yaml: service mrk-panel is missing", failures)
     if isinstance(service, dict):
-        _require("build" not in service, "production Compose must pull, not build", failures)
-        _require("ports" not in service, "production Compose must not publish host ports", failures)
+        _require(
+            [str(item) for item in service.get("ports") or []]
+            == ["${MRK_ADMIN_BIND:-127.0.0.1}:${MRK_ADMIN_PORT:-8080}:8080"],
+            "compose.yaml: the panel may publish only 8080, on loopback by default",
+            failures,
+        )
         _require(service.get("read_only") is True, "root filesystem must be read-only", failures)
         _require(service.get("user") == "10001:10001", "runtime user must be 10001", failures)
         _require(
@@ -318,16 +320,11 @@ def main() -> int:
             "all Linux capabilities must be dropped",
             failures,
         )
-        _require(
-            str(service.get("image", "")).startswith("${MRK_IMAGE:?"),
-            "MRK_IMAGE must be mandatory and supplied as a digest",
-            failures,
-        )
         environment = service.get("environment", {})
         if isinstance(environment, dict):
             _require(
                 not any(key.startswith("MRK_INITIAL_ADMIN") for key in environment),
-                "production Compose must not contain initial-admin credentials",
+                "compose.yaml must not contain initial-admin credentials",
                 failures,
             )
         security_options = service.get("security_opt", [])

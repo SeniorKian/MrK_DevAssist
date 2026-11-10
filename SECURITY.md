@@ -43,7 +43,7 @@ In scope:
 
 - the code in this repository: `apps/control-plane` (API, auth, modules, PyPI router, S3 engine,
   Host Agent, firewall helper, restore CLI), `apps/admin-ui`, `apps/dns-engine`;
-- the image build and runtime configuration (`deploy/appliance`, Compose files) and the native
+- the image build and runtime configuration (`deploy/images`, Compose files) and the native
   install (`scripts/install-native.sh`, `deploy/native`);
 - privilege boundaries: escaping the unprivileged user, the Host Agent's Docker API allowlist,
   the firewall helper's nftables scope, DNS acting as an open resolver or amplifier, S3 signature

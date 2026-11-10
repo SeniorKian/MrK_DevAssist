@@ -760,7 +760,7 @@ def test_permissions_by_role(app_client) -> None:
 
 
 def test_pypi_outside_url_file_is_read_by_devpi_start_script() -> None:
-    script = (Path(__file__).resolve().parents[3] / "deploy" / "appliance" /
+    script = (Path(__file__).resolve().parents[3] / "deploy" / "images" / "pypi" /
               "devpi-start.sh").read_text(encoding="utf-8")
     assert 'outside_url="${MRK_PYPI_OUTSIDE_URL:-}"' in script
     assert '/pypi/outside-url"' in script and "--outside-url" in script

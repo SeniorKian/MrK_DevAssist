@@ -10,9 +10,15 @@
  *
  * Data: `GET /api/v1/install/catalog` (services:read); `POST /api/v1/install/{id}/bundle` and
  * `POST /api/v1/install/{id}/connect` (services:operate + the service's own write permission).
+ *
+ * Automatic install (docs/44 phase 6): `GET /api/v1/install/targets` lists the connected Dokploy /
+ * Coolify with their projects, environments and servers; `POST /api/v1/install/{id}/auto` creates,
+ * configures and deploys the stack there and pairs it; the wizard follows
+ * `GET /api/v1/install/auto/jobs/{job}` and can retry the pairing with `.../connect`.
+ * Coolify's URL and token are saved inline with `PUT /api/v1/coolify/config`.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, Button, Card, CardActions, CardContent, Grid, Skeleton, Stack, TextField, Typography } from "@mui/material";
+import { Box, Button, Card, CardActions, CardContent, Grid, LinearProgress, MenuItem, Skeleton, Stack, TextField, Typography } from "@mui/material";
 import type { SvgIconComponent } from "@mui/icons-material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import SupportAgentRoundedIcon from "@mui/icons-material/SupportAgentRounded";
@@ -59,6 +65,39 @@ type CatalogItem = {
 
 type Bundle = { id: string; image: string; compose: string; env: string; pairing: boolean };
 
+type Choice = Method | "auto";
+type AutoTarget = "dokploy" | "coolify";
+type TargetEnv = { id: string | null; name: string };
+type TargetProject = { id: string; name: string; environments: TargetEnv[]; legacy?: boolean };
+type TargetServer = { id: string; name: string; local: boolean; reachable: boolean | null };
+type TargetState = {
+  configured: boolean;
+  allowed: boolean;
+  reachable: boolean | null;
+  error_code: string | null;
+  projects: TargetProject[];
+};
+type Targets = {
+  dokploy: TargetState & { panel_url: string | null };
+  coolify: TargetState & { url: string | null; servers: TargetServer[] };
+  same_host_required: boolean;
+};
+type JobPhase = "preparing" | "creating" | "configuring" | "deploying" | "waiting" | "connecting" | "done";
+type AutoJob = {
+  id: string;
+  status: "running" | "succeeded" | "failed";
+  phase: JobPhase;
+  error_code: string | null;
+  message: string | null;
+  connection: Connection | null;
+  deployed: boolean;
+  reused: boolean;
+  resource_url: string | null;
+  warnings: string[];
+};
+
+const NEW_PROJECT = "__new__";
+
 // ── copy ─────────────────────────────────────────────────────────────────────
 
 const COPY = {
@@ -94,9 +133,59 @@ const COPY = {
   composeBody: { fa: "دو فایل را در یک پوشه روی سرور می‌گذارید و یک دستور اجرا می‌کنید.", en: "Put two files in a folder on the server and run one command." },
   auto: { fa: "نصب خودکار از طرف پنل", en: "Automatic install by the panel" },
   autoBody: {
-    fa: "پنل خودش با کلید دسترسی Dokploy یا Coolify سرویس را می‌سازد و بالا می‌آورد. در به‌روزرسانی بعدی.",
-    en: "The panel creates and starts the service itself with your Dokploy or Coolify key. In the next update."
+    fa: "پنل خودش در Dokploy یا Coolify سرویس را می‌سازد، فایل‌ها را در آن می‌گذارد، بالا می‌آورد و وصل می‌کند.",
+    en: "The panel creates the service in Dokploy or Coolify, puts the files in, starts it and connects to it."
   },
+  autoNotReady: {
+    fa: "اول Dokploy یا Coolify را به پنل وصل کنید؛ در قدم بعد راهش را می‌بینید.",
+    en: "Connect Dokploy or Coolify to the panel first; the next step shows how."
+  },
+  autoLoading: { fa: "در حال بررسی Dokploy و Coolify…", en: "Checking Dokploy and Coolify…" },
+  ready: { fa: "آماده", en: "Ready" },
+  stepTarget: { fa: "کجا ساخته شود؟", en: "Where to create it?" },
+  stepTargetHint: { fa: "ابزار و پروژه‌ای را انتخاب کنید که پنل سرویس را در آن بسازد.", en: "Pick the tool and project the panel creates the service in." },
+  targetLabel: { fa: "ابزار نصب", en: "Install tool" },
+  targetOff: { fa: "وصل نیست", en: "Not connected" },
+  targetDown: { fa: "جواب نمی‌دهد", en: "Not answering" },
+  targetNoPermission: { fa: "اجازه انتشار در Dokploy را ندارید", en: "You can't deploy to Dokploy" },
+  dokployAutoBody: { fa: "یک سرویس Compose در پروژه انتخابی ساخته و منتشر می‌شود.", en: "A Compose service is created and deployed in the project you pick." },
+  coolifyAutoBody: { fa: "یک منبع Compose روی سرور انتخابی ساخته و اجرا می‌شود.", en: "A Compose resource is created and started on the server you pick." },
+  connectDokploy: {
+    fa: "Dokploy هنوز به پنل وصل نیست. نشانی و کلید دسترسی آن را در صفحه «برنامه‌های Dokploy» وارد کنید و برگردید.",
+    en: "Dokploy isn't connected yet. Enter its address and access key on the “Dokploy apps” page, then come back."
+  },
+  openDokploy: { fa: "رفتن به برنامه‌های Dokploy", en: "Open Dokploy apps" },
+  connectCoolify: {
+    fa: "برای Coolify نشانی آن و یک کلید دسترسی را وارد کنید (در Coolify از بخش «Keys & Tokens» بسازید). کلید فقط رمزشده در پنل می‌ماند.",
+    en: "For Coolify, enter its address and an access key (create one in Coolify under “Keys & Tokens”). The key stays encrypted in the panel only."
+  },
+  coolifyUrl: { fa: "نشانی Coolify", en: "Coolify address" },
+  coolifyToken: { fa: "کلید دسترسی Coolify", en: "Coolify access key" },
+  saveCoolify: { fa: "ذخیره و بررسی", en: "Save and check" },
+  project: { fa: "پروژه", en: "Project" },
+  newProject: { fa: "پروژه تازه «MrK DevAssist»", en: "New project “MrK DevAssist”" },
+  environment: { fa: "محیط", en: "Environment" },
+  server: { fa: "سرور", en: "Server" },
+  thisServer: { fa: "(همین سرور)", en: "(this server)" },
+  pickTarget: { fa: "یک ابزار وصل‌شده را انتخاب کنید.", en: "Pick a connected tool." },
+  pickServer: { fa: "سروری را که پنل روی آن است انتخاب کنید.", en: "Pick the server the panel runs on." },
+  sameHostAuto: {
+    fa: "سرویس به شبکه داخلی پنل وصل می‌شود، پس Dokploy یا Coolify باید آن را روی همان سرور پنل اجرا کند.",
+    en: "The service joins the panel's internal network, so Dokploy or Coolify must run it on the panel's own server."
+  },
+  serverNotLocal: {
+    fa: "این سرور، سرور خود Coolify نیست. اگر پنل روی آن نیست، پنل به سرویس وصل نمی‌شود.",
+    en: "This isn't Coolify's own server. If the panel doesn't run there, it can't reach the service."
+  },
+  installNow: { fa: "نصب", en: "Install" },
+  stepProgress: { fa: "نصب", en: "Install" },
+  stepProgressHint: { fa: "پنل سرویس را می‌سازد، بالا می‌آورد و به آن وصل می‌شود. چند دقیقه طول می‌کشد.", en: "The panel creates the service, starts it and connects to it. This takes a few minutes." },
+  stillWorking: { fa: "هنوز در حال نصب است؛ کمی صبر کنید.", en: "Still installing; please wait." },
+  retryConnect: { fa: "اتصال دوباره", en: "Connect again" },
+  openThere: { fa: "دیدن در همان ابزار", en: "Open it there" },
+  reused: { fa: "سرویس قبلی با همین نام به‌روز شد.", en: "The existing service with this name was updated." },
+  autoFailed: { fa: "نصب خودکار کامل نشد.", en: "The automatic install didn't finish." },
+  finish: { fa: "تمام", en: "Done" },
   stepSettings: { fa: "تنظیمات", en: "Settings" },
   stepSettingsHint: { fa: "مقدارهای پیش‌فرض برای بیشتر سرورها درست است؛ فقط اگر لازم است عوض کنید.", en: "The defaults suit most servers; change them only if you need to." },
   noSettings: { fa: "این بخش تنظیمی لازم ندارد.", en: "This part needs no settings." },
@@ -170,6 +259,38 @@ const CONNECTION: Record<Connection, { tone: "ok" | "warn" | "off" | "info"; lab
   unavailable: { tone: "off", label: { fa: "در دسترس نیست", en: "Unavailable" } }
 };
 
+const PHASES: { key: JobPhase; label: Bi }[] = [
+  { key: "creating", label: { fa: "ساختن سرویس", en: "Creating the service" } },
+  { key: "configuring", label: { fa: "گذاشتن فایل‌ها", en: "Adding the files" } },
+  { key: "deploying", label: { fa: "شروع انتشار", en: "Starting the deployment" } },
+  { key: "waiting", label: { fa: "صبر تا بالا آمدن", en: "Waiting for it to start" } },
+  { key: "connecting", label: { fa: "اتصال و امتحان", en: "Connecting and checking" } },
+  { key: "done", label: { fa: "تمام شد", en: "Done" } }
+];
+
+const JOB_ERRORS: Record<string, Bi> = {
+  deploy_failed: {
+    fa: "انتشار ناموفق بود. گزارش انتشار همان سرویس را در Dokploy ببینید.",
+    en: "The deployment failed. Check that service's deployment log in Dokploy."
+  },
+  deploy_timeout: { fa: "بالا آمدن سرویس خیلی طول کشید. گزارش‌های آن را در همان ابزار ببینید.", en: "The service took too long to start. Check its logs in that tool." },
+  connect_failed: {
+    fa: "سرویس بالا آمد ولی هنوز به پنل جواب نمی‌دهد. چند ثانیه بعد «اتصال دوباره» را بزنید و مطمئن شوید روی همین سرور اجرا شده است.",
+    en: "The service started but doesn't answer the panel yet. Press “Connect again” in a few seconds, and make sure it runs on this server."
+  },
+  server_required: { fa: "Coolify چند سرور دارد؛ سروری را که پنل روی آن است انتخاب کنید.", en: "Coolify has several servers; pick the one the panel runs on." },
+  server_not_found: { fa: "این سرور در Coolify پیدا نشد.", en: "That server wasn't found in Coolify." },
+  project_not_found: { fa: "این پروژه پیدا نشد؛ فهرست را تازه کنید.", en: "That project wasn't found; refresh the list." },
+  environment_not_found: { fa: "این محیط پیدا نشد؛ فهرست را تازه کنید.", en: "That environment wasn't found; refresh the list." },
+  environment_required: { fa: "یک محیط از پروژه Dokploy انتخاب کنید.", en: "Pick an environment of the Dokploy project." },
+  dokploy_auth_failed: { fa: "Dokploy کلید دسترسی را نپذیرفت.", en: "Dokploy didn't accept the access key." },
+  coolify_auth_failed: { fa: "Coolify کلید دسترسی را نپذیرفت یا دسترسی برنامه‌ها در تنظیمات آن خاموش است.", en: "Coolify didn't accept the access key, or its API is turned off in its settings." },
+  dokploy_unreachable: { fa: "Dokploy در دسترس نیست.", en: "Dokploy can't be reached." },
+  coolify_unreachable: { fa: "Coolify در دسترس نیست.", en: "Coolify can't be reached." },
+  dokploy_rejected: { fa: "Dokploy درخواست را نپذیرفت.", en: "Dokploy refused the request." },
+  coolify_rejected: { fa: "Coolify درخواست را نپذیرفت.", en: "Coolify refused the request." }
+};
+
 const METHOD_STEPS: Record<Method, Bi[]> = {
   dokploy: [
     { fa: "در Dokploy پروژه‌ای را باز کنید (یا بسازید) و «Create Service» و بعد «Compose» را بزنید.", en: "In Dokploy open (or create) a project and choose “Create Service”, then “Compose”." },
@@ -240,10 +361,108 @@ function CodeBlock({ title, value, fileName }: { title: string; value: string; f
 
 // ── wizard ───────────────────────────────────────────────────────────────────
 
+function targetIssue(state: TargetState | undefined): Bi | null {
+  if (!state || !state.configured) return COPY.targetOff;
+  if (!state.allowed) return COPY.targetNoPermission;
+  if (state.reachable === false) return COPY.targetDown;
+  return null;
+}
+
+function JobProgress({ job }: { job: AutoJob | null }) {
+  const { language } = useKit();
+  if (!job) return <LinearProgress />;
+  const current = PHASES.findIndex((phase) => phase.key === job.phase);
+  const failed = job.status === "failed";
+  const errorCopy = job.error_code ? JOB_ERRORS[job.error_code] : undefined;
+  return (
+    <Stack spacing={2}>
+      {job.status === "running" ? <LinearProgress /> : null}
+      <Box component="ol" sx={{ m: 0, ps: 3, "& li": { mb: 0.75 } }}>
+        {PHASES.map((phase, index) => {
+          const tone = index < current || job.status === "succeeded" ? "ok" : index === current ? (failed ? "warn" : "busy") : "off";
+          return (
+            <li key={phase.key}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography sx={{ flex: 1 }}>{pick(language, phase.label)}</Typography>
+                {tone !== "off" ? <StatusPill tone={tone} label={pick(language, tone === "ok" ? COPY.ready : tone === "warn" ? COPY.autoFailed : COPY.stillWorking)} /> : null}
+              </Stack>
+            </li>
+          );
+        })}
+      </Box>
+      {job.reused ? <Notice tone="info">{pick(language, COPY.reused)}</Notice> : null}
+      {job.warnings.includes("server_not_local") ? <Notice tone="warning">{pick(language, COPY.serverNotLocal)}</Notice> : null}
+      {job.status === "succeeded" ? <Notice tone="success">{pick(language, COPY.connected)}</Notice> : null}
+      {failed ? (
+        <Notice tone={job.error_code === "connect_failed" ? "warning" : "error"}>
+          {errorCopy ? pick(language, errorCopy) : pick(language, COPY.autoFailed)}
+          {!errorCopy && job.message ? <Box sx={{ mt: 0.5 }}><Ltr>{job.message}</Ltr></Box> : null}
+        </Notice>
+      ) : null}
+      {job.resource_url ? (
+        <Box>
+          <Button href={job.resource_url} target="_blank" rel="noopener noreferrer" sx={{ minHeight: 44 }}>{pick(language, COPY.openThere)}</Button>
+        </Box>
+      ) : null}
+    </Stack>
+  );
+}
+
+function CoolifyInlineForm({ onSaved }: { onSaved: () => void }) {
+  const { language } = useKit();
+  const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await mutateJson("/api/v1/coolify/config", { method: "PUT", body: { url: url.trim(), token: token.trim() } });
+      setToken("");
+      onSaved();
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Stack spacing={1.5}>
+      <Typography variant="body2" color="text.secondary">{pick(language, COPY.connectCoolify)}</Typography>
+      <TextField
+        label={pick(language, COPY.coolifyUrl)}
+        value={url}
+        onChange={(event) => setUrl(event.target.value)}
+        placeholder="http://coolify.lan:8000"
+        slotProps={{ htmlInput: { dir: "ltr", spellCheck: false } }}
+        size="small"
+        fullWidth
+      />
+      <TextField
+        label={pick(language, COPY.coolifyToken)}
+        value={token}
+        onChange={(event) => setToken(event.target.value)}
+        type="password"
+        autoComplete="off"
+        slotProps={{ htmlInput: { dir: "ltr", spellCheck: false } }}
+        size="small"
+        fullWidth
+      />
+      {error !== null ? <FriendlyError error={error} scope="services" /> : null}
+      <Box>
+        <Button variant="outlined" disabled={busy || url.trim().length < 8 || token.trim().length < 16} onClick={() => void save()} sx={{ minHeight: 44 }}>
+          {pick(language, COPY.saveCoolify)}
+        </Button>
+      </Box>
+    </Stack>
+  );
+}
+
 function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClose: () => void; onChanged: () => void }) {
   const { language } = useKit();
   const name = serviceName(language, item.id);
-  const [method, setMethod] = useState<Method | null>(item.methods[0] ?? null);
+  const [method, setMethod] = useState<Choice | null>(item.methods[0] ?? null);
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(item.env.map((entry) => [entry.name, entry.default]))
   );
@@ -252,6 +471,69 @@ function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClos
   const [connection, setConnection] = useState<Connection | null>(null);
   const [connectError, setConnectError] = useState<unknown>(null);
   const [connecting, setConnecting] = useState(false);
+  // automatic install
+  const [targets, setTargets] = useState<Targets | null>(null);
+  const [targetsError, setTargetsError] = useState<unknown>(null);
+  const [target, setTarget] = useState<AutoTarget | null>(null);
+  const [projectId, setProjectId] = useState(NEW_PROJECT);
+  const [environmentId, setEnvironmentId] = useState("");
+  const [environmentName, setEnvironmentName] = useState("production");
+  const [serverId, setServerId] = useState("");
+  const [job, setJob] = useState<AutoJob | null>(null);
+
+  const autoSupported = item.methods.includes("dokploy") || item.methods.includes("coolify");
+  const usable = (key: AutoTarget) => item.methods.includes(key) && targetIssue(targets?.[key]) === null;
+
+  const loadTargets = useCallback(async (refresh = false, signal?: AbortSignal) => {
+    try {
+      const payload = await getJson<Targets>(`/api/v1/install/targets${refresh ? "?refresh=true" : ""}`, signal);
+      setTargets(payload);
+      setTargetsError(null);
+    } catch (caught) {
+      if (!isAbortError(caught)) setTargetsError(caught);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!autoSupported) return;
+    const controller = new AbortController();
+    void loadTargets(false, controller.signal);
+    return () => controller.abort();
+  }, [autoSupported, loadTargets]);
+
+  // Pick sensible defaults once the lists arrive.
+  useEffect(() => {
+    if (!targets) return;
+    setTarget((current) => current ?? (usable("dokploy") ? "dokploy" : usable("coolify") ? "coolify" : null));
+    const local = targets.coolify.servers.find((server) => server.local) ?? (targets.coolify.servers.length === 1 ? targets.coolify.servers[0] : undefined);
+    setServerId((current) => current || local?.id || "");
+  }, [targets]);
+
+  const projects = target ? targets?.[target].projects ?? [] : [];
+  const project = projects.find((entry) => entry.id === projectId);
+
+  useEffect(() => {
+    if (target === "dokploy") setEnvironmentId(project?.environments[0]?.id ?? "");
+    if (target === "coolify") {
+      const names = project?.environments.map((env) => env.name) ?? [];
+      setEnvironmentName((current) => (names.length === 0 || names.includes(current) ? current : names[0]));
+    }
+  }, [target, project]);
+
+  // Follow the running job.
+  useEffect(() => {
+    if (!job || job.status !== "running") return;
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await getJson<AutoJob>(`/api/v1/install/auto/jobs/${job.id}`);
+        setJob(next);
+        if (next.status === "succeeded") onChanged();
+      } catch {
+        setJob({ ...job });
+      }
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [job, onChanged]);
 
   const connect = async () => {
     setConnecting(true);
@@ -272,78 +554,188 @@ function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClos
     }
   };
 
+  const startAuto = async () => {
+    if (!target) throw new Error(pick(language, COPY.pickTarget));
+    const body: Record<string, unknown> = { target, env: values };
+    if (projectId !== NEW_PROJECT) body.project_id = projectId;
+    if (target === "dokploy" && projectId !== NEW_PROJECT && environmentId) body.environment_id = environmentId;
+    if (target === "coolify") {
+      body.environment_name = environmentName || "production";
+      if (serverId) body.server_id = serverId;
+    }
+    if (item.default_url && url.trim() && url.trim() !== item.default_url) body.url = url.trim();
+    setJob(null);
+    const started = await mutateJson<AutoJob>(`/api/v1/install/${item.id}/auto`, { method: "POST", body });
+    setJob(started);
+  };
+
+  const autoReady = targets !== null && (usable("dokploy") || usable("coolify"));
   const methodOptions = [
     ...item.methods.map((key) => ({
-      key,
+      key: key as Choice,
       icon: key === "dokploy" ? RocketLaunchRoundedIcon : key === "coolify" ? CloudQueueRoundedIcon : TerminalRoundedIcon,
       title: pick(language, COPY[key]),
       body: pick(language, key === "dokploy" ? COPY.dokployBody : key === "coolify" ? COPY.coolifyBody : COPY.composeBody)
     })),
-    {
-      key: "auto" as const,
-      icon: AutoModeRoundedIcon,
-      title: pick(language, COPY.auto),
-      body: pick(language, COPY.autoBody),
-      badges: <StatusPill tone="info" label={pick(language, COPY.soon)} />,
-      disabled: true
-    }
+    ...(autoSupported
+      ? [
+          {
+            key: "auto" as Choice,
+            icon: AutoModeRoundedIcon,
+            title: pick(language, COPY.auto),
+            body: pick(language, targets === null && targetsError === null ? COPY.autoLoading : autoReady ? COPY.autoBody : COPY.autoNotReady),
+            badges: autoReady ? <StatusPill tone="ok" label={pick(language, COPY.ready)} /> : undefined,
+            disabled: targets === null
+          }
+        ]
+      : [])
   ];
 
-  const steps: WizardStep[] = [
-    {
-      key: "method",
-      title: pick(language, COPY.stepMethod),
-      hint: pick(language, COPY.stepMethodHint),
-      validate: () => (method ? null : pick(language, COPY.stepMethodHint)),
-      render: () => (
-        <Stack spacing={2}>
-          {item.same_host ? <Notice tone="info">{pick(language, COPY.sameHost)}</Notice> : null}
-          <ChoiceCards
-            label={pick(language, COPY.methodLabel)}
-            options={methodOptions}
-            value={method}
-            onChange={(key) => {
-              if (key !== "auto") setMethod(key);
-            }}
+  const settingsStep = (auto: boolean): WizardStep => ({
+    key: "settings",
+    title: pick(language, COPY.stepSettings),
+    hint: pick(language, COPY.stepSettingsHint),
+    nextLabel: pick(language, auto ? COPY.installNow : COPY.makeFiles),
+    onNext: auto
+      ? startAuto
+      : async () => {
+          const result = await mutateJson<Bundle>(`/api/v1/install/${item.id}/bundle`, {
+            method: "POST",
+            body: { env: values, method: method === "auto" || !method ? "compose" : method }
+          });
+          setBundle(result);
+          setConnection(null);
+        },
+    render: () => (
+      <Stack spacing={2}>
+        {item.env.length === 0 ? <Typography color="text.secondary">{pick(language, COPY.noSettings)}</Typography> : null}
+        {item.env.map((entry) => (
+          <TextField
+            key={entry.name}
+            label={<Ltr>{entry.name}</Ltr>}
+            value={values[entry.name] ?? ""}
+            onChange={(event) => setValues((current) => ({ ...current, [entry.name]: event.target.value }))}
+            helperText={text(language, entry.help_fa, entry.help_en)}
+            disabled={!entry.editable}
+            slotProps={{ htmlInput: { dir: "ltr", spellCheck: false } }}
+            size="small"
+            fullWidth
           />
-        </Stack>
-      )
+        ))}
+        {auto && (item.id === "agent" || item.id === "s3") ? (
+          <TextField
+            label={pick(language, COPY.url)}
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            helperText={pick(language, COPY.urlHelp)}
+            slotProps={{ htmlInput: { dir: "ltr", spellCheck: false } }}
+            size="small"
+            fullWidth
+          />
+        ) : null}
+        {(language === "fa" ? item.notes_fa : item.notes_en).map((note) => (
+          <Notice key={note} tone="info">{note}</Notice>
+        ))}
+      </Stack>
+    )
+  });
+
+  const methodStep: WizardStep = {
+    key: "method",
+    title: pick(language, COPY.stepMethod),
+    hint: pick(language, COPY.stepMethodHint),
+    validate: () => (method ? null : pick(language, COPY.stepMethodHint)),
+    render: () => (
+      <Stack spacing={2}>
+        {item.same_host ? <Notice tone="info">{pick(language, COPY.sameHost)}</Notice> : null}
+        <ChoiceCards label={pick(language, COPY.methodLabel)} options={methodOptions} value={method} onChange={(key) => setMethod(key)} />
+      </Stack>
+    )
+  };
+
+  const targetOptions = (["dokploy", "coolify"] as const)
+    .filter((key) => item.methods.includes(key))
+    .map((key) => {
+      const issue = targetIssue(targets?.[key]);
+      return {
+        key,
+        icon: key === "dokploy" ? RocketLaunchRoundedIcon : CloudQueueRoundedIcon,
+        title: pick(language, COPY[key]),
+        body: pick(language, key === "dokploy" ? COPY.dokployAutoBody : COPY.coolifyAutoBody),
+        badges: <StatusPill tone={issue ? "off" : "ok"} label={pick(language, issue ?? COPY.ready)} />,
+        disabled: key === "dokploy" && issue !== null
+      };
+    });
+
+  const selectedServer = targets?.coolify.servers.find((server) => server.id === serverId);
+  const coolifyNeedsSetup = target === "coolify" && !targets?.coolify.configured;
+
+  const targetStep: WizardStep = {
+    key: "target",
+    title: pick(language, COPY.stepTarget),
+    hint: pick(language, COPY.stepTargetHint),
+    validate: () => {
+      if (!target || !usable(target)) return pick(language, COPY.pickTarget);
+      if (target === "coolify" && !serverId) return pick(language, COPY.pickServer);
+      return null;
     },
-    {
-      key: "settings",
-      title: pick(language, COPY.stepSettings),
-      hint: pick(language, COPY.stepSettingsHint),
-      nextLabel: pick(language, COPY.makeFiles),
-      onNext: async () => {
-        const result = await mutateJson<Bundle>(`/api/v1/install/${item.id}/bundle`, {
-          method: "POST",
-          body: { env: values, method: method ?? "compose" }
-        });
-        setBundle(result);
-        setConnection(null);
-      },
-      render: () => (
-        <Stack spacing={2}>
-          {item.env.length === 0 ? <Typography color="text.secondary">{pick(language, COPY.noSettings)}</Typography> : null}
-          {item.env.map((entry) => (
-            <TextField
-              key={entry.name}
-              label={<Ltr>{entry.name}</Ltr>}
-              value={values[entry.name] ?? ""}
-              onChange={(event) => setValues((current) => ({ ...current, [entry.name]: event.target.value }))}
-              helperText={text(language, entry.help_fa, entry.help_en)}
-              disabled={!entry.editable}
-              slotProps={{ htmlInput: { dir: "ltr", spellCheck: false } }}
-              size="small"
-              fullWidth
-            />
-          ))}
-          {(language === "fa" ? item.notes_fa : item.notes_en).map((note) => (
-            <Notice key={note} tone="info">{note}</Notice>
-          ))}
-        </Stack>
-      )
-    },
+    render: () => (
+      <Stack spacing={2}>
+        <Notice tone="info">{pick(language, COPY.sameHostAuto)}</Notice>
+        {targetsError !== null ? <FriendlyError error={targetsError} scope="services" onRetry={() => void loadTargets(true)} /> : null}
+        <ChoiceCards label={pick(language, COPY.targetLabel)} options={targetOptions} value={target} onChange={(key) => setTarget(key)} />
+        {targets && !targets.dokploy.configured && item.methods.includes("dokploy") ? (
+          <Notice tone="info" action={<Button color="inherit" size="small" href="#/server/apps" onClick={onClose} sx={{ minHeight: 40 }}>{pick(language, COPY.openDokploy)}</Button>}>
+            {pick(language, COPY.connectDokploy)}
+          </Notice>
+        ) : null}
+        {coolifyNeedsSetup ? <CoolifyInlineForm onSaved={() => void loadTargets(true)} /> : null}
+        {target && usable(target) ? (
+          <Stack spacing={2}>
+            <TextField select label={pick(language, COPY.project)} value={projectId} onChange={(event) => setProjectId(event.target.value)} size="small" fullWidth>
+              <MenuItem value={NEW_PROJECT}>{pick(language, COPY.newProject)}</MenuItem>
+              {projects.map((entry) => (
+                <MenuItem key={entry.id} value={entry.id}>{entry.name}</MenuItem>
+              ))}
+            </TextField>
+            {target === "dokploy" && project && !project.legacy && project.environments.length > 0 ? (
+              <TextField select label={pick(language, COPY.environment)} value={environmentId} onChange={(event) => setEnvironmentId(event.target.value)} size="small" fullWidth>
+                {project.environments.map((env) => (
+                  <MenuItem key={env.id ?? env.name} value={env.id ?? ""}>{env.name}</MenuItem>
+                ))}
+              </TextField>
+            ) : null}
+            {target === "coolify" && project && project.environments.length > 0 ? (
+              <TextField select label={pick(language, COPY.environment)} value={environmentName} onChange={(event) => setEnvironmentName(event.target.value)} size="small" fullWidth>
+                {project.environments.map((env) => (
+                  <MenuItem key={env.name} value={env.name}>{env.name}</MenuItem>
+                ))}
+              </TextField>
+            ) : null}
+            {target === "coolify" ? (
+              <TextField select label={pick(language, COPY.server)} value={serverId} onChange={(event) => setServerId(event.target.value)} size="small" fullWidth>
+                {(targets?.coolify.servers ?? []).map((server) => (
+                  <MenuItem key={server.id} value={server.id}>
+                    {server.name} {server.local ? pick(language, COPY.thisServer) : ""}
+                  </MenuItem>
+                ))}
+              </TextField>
+            ) : null}
+            {target === "coolify" && selectedServer && !selectedServer.local ? <Notice tone="warning">{pick(language, COPY.serverNotLocal)}</Notice> : null}
+          </Stack>
+        ) : null}
+      </Stack>
+    )
+  };
+
+  const progressStep: WizardStep = {
+    key: "progress",
+    title: pick(language, COPY.stepProgress),
+    hint: pick(language, COPY.stepProgressHint),
+    render: () => <JobProgress job={job} />
+  };
+
+  const manualSteps: WizardStep[] = [
     {
       key: "files",
       title: pick(language, COPY.stepFiles),
@@ -353,7 +745,7 @@ function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClos
           <Stack spacing={2}>
             <Typography variant="subtitle2">{pick(language, COPY.stepsTitle)}</Typography>
             <Box component="ol" sx={{ m: 0, ps: 3, "& li": { mb: 1, lineHeight: 1.9 } }}>
-              {METHOD_STEPS[method ?? "compose"].map((step) => (
+              {METHOD_STEPS[method === "auto" || !method ? "compose" : method].map((step) => (
                 <li key={step.en}>{say(language, step, { id: item.id })}</li>
               ))}
             </Box>
@@ -391,14 +783,34 @@ function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClos
     }
   ];
 
+  const auto = method === "auto";
+  const steps: WizardStep[] = auto ? [methodStep, targetStep, settingsStep(true), progressStep] : [methodStep, settingsStep(false), ...manualSteps];
+
+  const finishAuto = async () => {
+    if (!job || job.status === "running") throw new Error(pick(language, COPY.stillWorking));
+    if (job.status === "succeeded") return;
+    if (job.deployed) {
+      const next = await mutateJson<AutoJob>(`/api/v1/install/auto/jobs/${job.id}/connect`, { method: "POST", body: {} });
+      setJob(next);
+      if (next.status === "succeeded") {
+        onChanged();
+        return;
+      }
+      throw new Error(pick(language, JOB_ERRORS.connect_failed));
+    }
+    const errorCopy = job.error_code ? JOB_ERRORS[job.error_code] : undefined;
+    throw new Error(pick(language, errorCopy ?? COPY.autoFailed));
+  };
+
   return (
     <ActionWizard
       open
       title={say(language, COPY.wizardTitle, { name })}
       steps={steps}
-      finishLabel={pick(language, COPY.connectNow)}
+      finishLabel={pick(language, auto ? (job?.status === "failed" && job.deployed ? COPY.retryConnect : COPY.finish) : COPY.connectNow)}
       onClose={onClose}
       onFinish={async () => {
+        if (auto) return finishAuto();
         const result = connection === "connected" ? connection : await connect();
         if (result !== "connected") {
           throw new Error(pick(language, result === "not_connected" ? COPY.notFoundHelp : COPY.unreachableHelp));

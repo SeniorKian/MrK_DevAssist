@@ -17,8 +17,7 @@ and you follow the [Code of Conduct](CODE_OF_CONDUCT.md). Security problems go t
 | `apps/control-plane` | FastAPI control plane (panel API, modules, PyPI router, S3 engine, Host Agent, firewall helper), Python 3.13 |
 | `apps/admin-ui` | React 19 + TypeScript + Material UI admin panel (Persian/RTL first) |
 | `apps/dns-engine` | Go DNS engine (`mrk-dns`, `mrk-dnsbench`) |
-| `deploy/images` | the split images: one Dockerfile, one target per service (panel, agent, firewall, dns, s3) |
-| `deploy/appliance` | legacy all-in-one image (still carries npm and PyPI), entrypoint, runtime pins |
+| `deploy/images` | the images: one Dockerfile, one target per service (panel, agent, firewall, dns, s3, npm, pypi), runtime pins |
 | `deploy/native` | systemd unit and helpers for the native (panel-only) install |
 | `deploy/verdaccio`, `deploy/pglite` | pinned npm packages of Verdaccio and PGlite |
 | `scripts` | CI checks, smoke/e2e tests, release validation, `install-native.sh` |
@@ -33,7 +32,7 @@ and you follow the [Code of Conduct](CODE_OF_CONDUCT.md). Security problems go t
 python3.13 -m venv .venv
 . .venv/bin/activate                      # Windows: .venv\Scripts\activate
 pip install -e "./apps/control-plane[dev]"
-pip install -r deploy/appliance/requirements.txt
+pip install -r deploy/images/requirements.txt
 ```
 
 Run it against a local SQLite database in `./.data` (no PGlite needed):
@@ -165,7 +164,7 @@ Larger features follow the workflow used for every gate so far:
 2. **Implement** against the contract, with tests.
 3. **Record changes** in the contract's "changes" section (a «changes» section at the top) when the
    implementation differs, so the doc stays true.
-4. **Update user-facing docs** (README, install guides, `deploy/appliance/README.md`) and the
+4. **Update user-facing docs** (README, install guides) and the
    settings registry. Completed gates are later summarised into `docs/03-user-stories.md`
    and the finished design doc is deleted (its full text stays in git history).
 
@@ -189,5 +188,5 @@ Small fixes do not need a design doc.
 
 Use the issue templates. For bugs include the install type (Docker or native), the version or
 commit, the OS, what you expected, what happened and the relevant logs
-(`docker compose logs mrk-mirror` or `journalctl -u devassist`). Remove secrets, tokens and
+(`docker compose logs mrk-panel` or `journalctl -u devassist`). Remove secrets, tokens and
 domain names you do not want to share before posting.

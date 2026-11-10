@@ -1,6 +1,6 @@
 # Runtime packages installed into the appliance image next to the control plane.
-# Single source of truth for deploy/appliance/Dockerfile and the CI workflows;
-# Dependabot (pip, /deploy/appliance) proposes updates. The image build fails if
+# Single source of truth for deploy/images/Dockerfile and the CI workflows;
+# Dependabot (pip, /deploy/images) proposes updates. The image build fails if
 # the control plane's own requirements resolve any of these to another version.
 # Versions only, no hashes yet (see the TODO in the Dockerfile).
 supervisor==4.3.0

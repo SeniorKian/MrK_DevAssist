@@ -30,7 +30,7 @@ jobs:
           cache: pip
           cache-dependency-path: apps/control-plane/pyproject.toml
       - run: python -m pip install -e "./apps/control-plane[dev]"
-      - run: python -m pip install -r deploy/appliance/requirements.txt
+      - run: python -m pip install -r deploy/images/requirements.txt
       - uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
           inputs: ./apps/control-plane
@@ -177,7 +177,7 @@ jobs:
           cache: npm
           cache-dependency-path: deploy/verdaccio/package-lock.json
       - run: python -m pip install -e "./apps/control-plane[dev]"
-      - run: python -m pip install -r deploy/appliance/requirements.txt
+      - run: python -m pip install -r deploy/images/requirements.txt
       - run: npm ci --omit=dev --ignore-scripts
         working-directory: deploy/verdaccio
       - name: Exercise real npm and PyPI engines across restart and offline download
@@ -191,7 +191,7 @@ jobs:
 
   dns-engine:
     runs-on: ubuntu-latest
-    # Same pinned toolchain as the dns-builder stage of deploy/appliance/Dockerfile
+    # Same pinned toolchain as the dns-builder stage of deploy/images/Dockerfile
     # (scripts/validate_release.py checks the digests match).
     container:
       image: golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80
@@ -231,148 +231,12 @@ jobs:
           CGO_ENABLED=0 go build -trimpath -o /tmp/mrk-dnsbench ./cmd/mrk-dnsbench
           /tmp/mrk-dns version
 
-  image-build:
-    runs-on: ubuntu-latest
-    needs: [control-plane, admin-ui, verdaccio, pglite, pglite-database, lockfile-hosts, engine-e2e, dns-engine]
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-      - name: Validate development compose file
-        run: docker compose -f deploy/appliance/compose.yaml config --quiet
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: deploy/appliance/Dockerfile
-          push: false
-          load: true
-          tags: mrk/package-mirror:ci
-          build-args: |
-            VCS_REF=${{ github.sha }}
-            BUILD_DATE=ci
-            SOURCE_URL=https://github.com/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - run: docker run --rm --entrypoint python mrk/package-mirror:ci -c "import mrk_control_plane"
-      - name: DNS engine drops to uid 10001 keeping only NET_BIND_SERVICE
-        run: |
-          docker run --rm --entrypoint mrk-dns mrk/package-mirror:ci version
-          docker run --detach --name mrk-ci-dns --init --user 0:10001 --read-only \
-            --cap-drop ALL --cap-add NET_BIND_SERVICE --cap-add SETUID --cap-add SETGID \
-            --security-opt no-new-privileges:true --env MRK_DNS_LISTEN=127.0.0.1:53 \
-            --tmpfs /var/lib/mrk-dns:uid=10001,gid=10001 --tmpfs /run/mrk-dns:uid=10001,gid=10001 \
-            --entrypoint mrk-dns mrk/package-mirror:ci serve
-          sleep 3
-          docker logs mrk-ci-dns
-          docker exec mrk-ci-dns mrk-dns health
-          pid=$(docker exec mrk-ci-dns sh -c 'for p in /proc/[0-9]*; do [ "$(cat $p/comm)" = mrk-dns ] && [ "$(awk "/^Uid/{print \$2}" $p/status)" = 10001 ] && basename $p; done' | head -1)
-          docker exec mrk-ci-dns grep -E '^(Uid|Gid|CapPrm|CapEff|CapInh|CapAmb):' /proc/$pid/status
-          docker exec mrk-ci-dns grep -qE '^CapEff:\s+0000000000000400$' /proc/$pid/status
-          docker exec mrk-ci-dns grep -qE '^CapPrm:\s+0000000000000400$' /proc/$pid/status
-          docker rm --force mrk-ci-dns
-      - name: Scan image for known vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: mrk/package-mirror:ci
-          version: v0.76.1
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
-      - run: docker volume create mrk-ci-data
-      - run: docker network create mrk-ci-online
-      - run: >-
-          docker run --detach --name mrk-ci --network mrk-ci-online --read-only
-          --env MRK_TRUSTED_HOSTS=mrk-ci,127.0.0.1,localhost
-          --env MRK_LOG_LEVEL=WARNING
-          --tmpfs /tmp:size=64m,mode=1777 --mount source=mrk-ci-data,target=/data
-          mrk/package-mirror:ci
-      - run: >-
-          docker exec --env MRK_HEALTHCHECK_ATTEMPTS=20 mrk-ci
-          python -m mrk_control_plane.healthcheck
-      - run: >-
-          docker run --rm --network mrk-ci-online
-          node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573
-          npm pack is-number@7.0.0 --registry http://mrk-ci:4873
-      - run: >-
-          docker run --rm --network mrk-ci-online
-          python:3.13-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
-          python -m pip download --no-deps --dest /tmp/pypi-online
-          --index-url http://mrk-ci:3141/root/pypi/+simple/
-          --trusted-host mrk-ci
-          sampleproject==4.0.0
-      - run: >-
-          docker run --rm --network mrk-ci-online
-          --mount type=bind,source=${{ github.workspace }}/tests/e2e/pypi-clients.sh,target=/test.sh,readonly
-          python:3.13-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
-          /bin/sh /test.sh
-          http://mrk-ci:3141/root/pypi/+simple/ mrk-ci
-      - name: Bounded control-plane load gate
-        run: >-
-          docker run --rm --network mrk-ci-online
-          --mount type=bind,source=${{ github.workspace }}/scripts/load_probe.py,target=/load_probe.py,readonly
-          python:3.13-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
-          python /load_probe.py --url http://mrk-ci:8080/health/live
-          --duration 20 --concurrency 8 --max-error-rate 0.001 --max-p95-ms 500
-      - run: docker rm --force mrk-ci
-      - run: docker network rm mrk-ci-online
-      - run: docker network create --internal mrk-ci-offline
-      - run: >-
-          docker run --detach --name mrk-ci --network mrk-ci-offline --read-only
-          --env MRK_TRUSTED_HOSTS=mrk-ci,127.0.0.1,localhost
-          --env MRK_LOG_LEVEL=WARNING
-          --tmpfs /tmp:size=64m,mode=1777 --mount source=mrk-ci-data,target=/data
-          mrk/package-mirror:ci
-      - run: >-
-          docker exec --env MRK_HEALTHCHECK_ATTEMPTS=20 mrk-ci
-          python -m mrk_control_plane.healthcheck
-      - run: >-
-          docker run --rm --network mrk-ci-offline
-          node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573
-          npm pack is-number@7.0.0 --registry http://mrk-ci:4873
-          --fetch-retries=0 --fetch-timeout=10000
-      - run: >-
-          docker run --rm --network mrk-ci-offline
-          python:3.13-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
-          python -m pip download --no-deps --dest /tmp/pypi-offline
-          --index-url http://mrk-ci:3141/root/pypi/+simple/
-          --trusted-host mrk-ci --retries 0 --timeout 10 sampleproject==4.0.0
-      # mrk-ci publishes no host ports, so the compose stack (127.0.0.1:8080/4873/3141)
-      # can start alongside it; the always() steps below clean both up.
-      - name: Start development compose stack from the CI image
-        run: |
-          docker tag mrk/package-mirror:ci mrk/package-mirror:dev
-          docker compose -f compose.yaml up --detach --no-build --wait --wait-timeout 240
-      - name: Probe development compose stack
-        run: curl --fail --silent --show-error --retry 5 --retry-delay 2 http://127.0.0.1:8080/health/live
-      - if: always()
-        continue-on-error: true
-        run: docker compose -f compose.yaml logs --no-color
-      - if: always()
-        continue-on-error: true
-        run: docker compose -f compose.yaml down --volumes --remove-orphans
-      - if: always()
-        continue-on-error: true
-        run: docker logs mrk-ci
-      - if: always()
-        continue-on-error: true
-        run: docker rm --force mrk-ci
-      - if: always()
-        continue-on-error: true
-        run: docker network rm mrk-ci-online
-      - if: always()
-        continue-on-error: true
-        run: docker network rm mrk-ci-offline
-      - if: always()
-        continue-on-error: true
-        run: docker volume rm mrk-ci-data
-
-  # docs/44: the split images. The panel must boot alone, and the agent must pair
-  # with the key the panel's wizard put in its .env.
+  # docs/44: the split images. Each one builds and passes the vulnerability scan,
+  # and the whole stack works end to end: the panel boots alone, the wizard's
+  # files deploy npm, PyPI and S3, and real packages install through them.
   split-images:
     runs-on: ubuntu-latest
-    needs: [control-plane, admin-ui, pglite, dns-engine]
+    needs: [control-plane, admin-ui, verdaccio, pglite, pglite-database, lockfile-hosts, engine-e2e, dns-engine]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -382,33 +246,43 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Build every split image
         run: |
-          for target in panel agent firewall dns s3; do
+          for target in panel agent firewall dns s3 npm pypi; do
             docker buildx build --load --file deploy/images/Dockerfile --target "$target" \
               --build-arg VCS_REF=${{ github.sha }} --build-arg BUILD_DATE=ci --build-arg IMAGE_TAG=ci \
               --cache-from type=gha --cache-to type=gha,mode=max \
               --tag "mrk-$target:ci" .
           done
       - run: docker run --rm --entrypoint mrk-dns mrk-dns:ci version
-      - run: docker run --rm --entrypoint python mrk-agent:ci -c "import mrk_control_plane.agent.main"
       - run: docker run --rm --entrypoint nft mrk-firewall:ci --version
-      - name: The panel starts alone and reports ready
+      - name: DNS engine drops to uid 10001 keeping only NET_BIND_SERVICE
         run: |
-          docker network create mrk-net-ci
-          docker run --detach --name mrk-panel-ci --network mrk-net-ci --read-only --user 10001:10001 \
-            --cap-drop ALL --security-opt no-new-privileges:true \
-            --env MRK_TRUSTED_HOSTS=mrk-panel-ci,127.0.0.1,localhost --env MRK_LOG_LEVEL=WARNING \
-            --tmpfs /tmp:size=64m,mode=1777,noexec,nosuid,nodev \
-            --mount source=mrk-panel-ci-data,target=/data mrk-panel:ci
-          docker exec --env MRK_HEALTHCHECK_ATTEMPTS=60 mrk-panel-ci python -m mrk_control_plane.healthcheck
-          docker exec mrk-panel-ci python -c "import os; assert os.environ['MRK_IMAGE_TAG'] == 'ci'"
-      - name: Panel logs
-        if: always()
-        continue-on-error: true
-        run: docker logs mrk-panel-ci
-      - name: Remove the panel
-        if: always()
-        continue-on-error: true
+          docker run --detach --name mrk-ci-dns --init --user 0:10001 --read-only \
+            --cap-drop ALL --cap-add NET_BIND_SERVICE --cap-add SETUID --cap-add SETGID \
+            --security-opt no-new-privileges:true --env MRK_DNS_LISTEN=127.0.0.1:53 \
+            --tmpfs /var/lib/mrk-dns:uid=10001,gid=10001 --tmpfs /run/mrk-dns:uid=10001,gid=10001 \
+            mrk-dns:ci serve
+          sleep 3
+          docker exec mrk-ci-dns mrk-dns health
+          pid=$(docker exec mrk-ci-dns sh -c 'for p in /proc/[0-9]*; do [ "$(cat $p/comm)" = mrk-dns ] && [ "$(awk "/^Uid/{print \$2}" $p/status)" = 10001 ] && basename $p; done' | head -1)
+          docker exec mrk-ci-dns grep -qE '^CapEff:\s+0000000000000400$' /proc/$pid/status
+          docker exec mrk-ci-dns grep -qE '^CapPrm:\s+0000000000000400$' /proc/$pid/status
+          docker rm --force mrk-ci-dns
+      - name: Scan every image for known vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: mrk-panel:ci
+          version: v0.76.1
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Scan the service images
         run: |
-          docker rm --force mrk-panel-ci || true
-          docker network rm mrk-net-ci || true
-          docker volume rm mrk-panel-ci-data || true
+          for target in agent firewall dns s3 npm pypi; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              aquasec/trivy:0.76.1 image --exit-code 1 --ignore-unfixed \
+              --severity HIGH,CRITICAL --no-progress "mrk-$target:ci"
+          done
+      - name: Whole stack end to end (panel, then npm, PyPI and S3 from the wizard)
+        run: python3 scripts/smoke_split_stack.py --tag ci --services npm,pypi,s3

@@ -59,7 +59,8 @@ type Decision = { id: number; occurred_at: number; action: string; ip: string | 
 type Preview = { mode: Mode; would_apply: { allow: string[]; blocks: { cidr: string; expires_at: number | null }[] }; ruleset: string; simulated: Block[] };
 
 const API = "/api/v1/firewall";
-const COMPOSE = "docker compose -f deploy/appliance/compose.production.yaml";
+// Run in the folder (or Dokploy/Coolify stack) where the firewall was deployed.
+const COMPOSE = "docker compose";
 const SIGNALS = ["ssh_failed_password", "ssh_invalid_user", "mrk_login_failure", "http_401", "http_403", "http_404", "http_sensitive_path"];
 
 const COPY = {
@@ -102,6 +103,11 @@ const COPY = {
   helperOk: { fa: "نگهبان وصل است و جواب می‌دهد.", en: "The helper is connected and answering." },
   helperEnv: { fa: "اتصال نگهبان در فایل Compose تنظیم شده؛ اگر جواب نمی‌دهد همان‌جا را بررسی کنید.", en: "The helper connection is set in the Compose file; if it isn't answering, check there." },
   pair1: { fa: "۱. این دستور را روی سرور اجرا کنید تا نگهبان روشن شود:", en: "1. Run this on the server to start the helper:" },
+  pairWizard: {
+    fa: "فایروال را از «سرویس‌های من ← افزودن سرویس» نصب کنید؛ آن‌جا کلید اتصال خودکار ساخته و وصل می‌شود. قدم‌های زیر فقط برای وصل کردن نگهبانی است که از قبل نصب شده.",
+    en: "Install the firewall from My services → Add a service; it creates the key and connects by itself. The steps below are only for a helper that is already installed."
+  },
+  pairWizardButton: { fa: "افزودن سرویس", en: "Add a service" },
   pair2: { fa: "۲. کد اتصال را از گزارش نگهبان بردارید:", en: "2. Get the pairing code from the helper's log:" },
   pair3: { fa: "۳. کد را این‌جا بچسبانید:", en: "3. Paste the code here:" },
   commandStart: { fa: "دستور روشن کردن", en: "Start command" },
@@ -672,8 +678,10 @@ function PairFields({ status, keyValue, onKey, url, onUrl }: { status: FwStatus;
   if (status.source === "env") return <Notice>{pick(language, COPY.helperEnv)}</Notice>;
   return (
     <Stack spacing={1.5}>
-      <Typography variant="body2">{pick(language, COPY.pair1)}</Typography>
-      <CopyField label={pick(language, COPY.commandStart)} value={`${COMPOSE} --profile firewall up -d mrk-firewall`} multiline />
+      <Notice>{pick(language, COPY.pairWizard)}</Notice>
+      <Box>
+        <Button variant="contained" href="#/services/add" sx={{ minHeight: 44 }}>{pick(language, COPY.pairWizardButton)}</Button>
+      </Box>
       <Typography variant="body2">{pick(language, COPY.pair2)}</Typography>
       <CopyField label={pick(language, COPY.commandKey)} value={`${COMPOSE} logs mrk-firewall | grep "pairing key"`} multiline />
       <Typography variant="body2">{pick(language, COPY.pair3)}</Typography>

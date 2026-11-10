@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start/stop a throwaway pglite-server for CI, mirroring the appliance's
-# supervisord command line (deploy/appliance/supervisord.conf).
+# supervisord command line (deploy/images/panel/supervisord.conf).
 #
 #   scripts/ci_pglite_server.sh start <db-dir> [log-file]
 #   scripts/ci_pglite_server.sh stop  <db-dir>

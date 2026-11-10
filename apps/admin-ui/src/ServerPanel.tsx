@@ -70,7 +70,7 @@ type Props = { language: Language; permissions: string[]; onUnauthorized?: () =>
 
 const BASE = "/api/v1/agent";
 const DEFAULT_URL = "http://mrk-agent:7070";
-const UP_COMMAND = "docker compose --profile agent up -d mrk-agent";
+// Run in the folder (or Dokploy/Coolify stack) where the agent was deployed.
 const LOG_COMMAND = "docker compose logs mrk-agent | grep pairing";
 const INTERVALS = [15, 30, 60, 0] as const;
 
@@ -89,6 +89,11 @@ const COPY = {
   step1: { fa: "روشن کردن", en: "Turn on" },
   step1Hint: { fa: "این دستور را در پوشه DevAssist روی سرور اجرا کنید تا دستیار سرور روشن شود.", en: "Run this in the DevAssist folder on the server to turn the helper on." },
   step1Label: { fa: "دستور روشن کردن", en: "Command to turn it on" },
+  step1Wizard: {
+    fa: "دستیار را از «سرویس‌های من ← افزودن سرویس» نصب کنید؛ آن‌جا کلید اتصال خودکار ساخته و وصل می‌شود. این مسیر فقط برای وصل کردن دستیاری است که از قبل نصب شده.",
+    en: "Install the agent from My services → Add a service; it creates the key and connects by itself. This path is only for an agent that is already installed."
+  },
+  step1WizardButton: { fa: "افزودن سرویس", en: "Add a service" },
   step1Note: { fa: "دستیار سرور از قبل در فایل Compose هست؛ فقط باید روشنش کنید.", en: "The helper is already in the Compose file; you only need to turn it on." },
   step2: { fa: "کپی کد", en: "Copy the code" },
   step2Hint: { fa: "این دستور را اجرا کنید. در خروجی، کد اتصال را پیدا و کپی کنید.", en: "Run this command. Find the pairing code in the output and copy it." },
@@ -299,7 +304,10 @@ function PairWizard({ open, hasKey, initialUrl, onClose, onPaired }: { open: boo
           hint: t(language, "step1Hint"),
           render: () => (
             <Stack spacing={1.5}>
-              <CopyField label={t(language, "step1Label")} value={UP_COMMAND} multiline />
+              <Notice tone="info">{t(language, "step1Wizard")}</Notice>
+              <Box>
+                <Button variant="contained" href="#/services/add" sx={{ minHeight: 44 }}>{t(language, "step1WizardButton")}</Button>
+              </Box>
               <Typography variant="body2" color="text.secondary">{t(language, "step1Note")}</Typography>
             </Stack>
           )

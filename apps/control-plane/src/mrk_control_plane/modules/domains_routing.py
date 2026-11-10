@@ -29,7 +29,8 @@ from .services_catalog import SERVICE_INDEX
 
 LOGGER = logging.getLogger(__name__)
 DETECT_TTL_SECONDS = 300.0
-FALLBACK_TARGET = "mrk-mirror"
+# The panel's Compose service name (compose.yaml).
+FALLBACK_TARGET = "mrk-panel"
 
 
 class RoutingError(Exception):
@@ -39,6 +40,45 @@ class RoutingError(Exception):
         self.status_code = status_code
         self.message = message
         self.extra = extra
+
+
+def own_stack(data_dir: Any, service_id: str) -> dict[str, Any] | None:
+    """Where a service that runs in its OWN stack is (docs/44), or None.
+
+    ``{"host", "port", "service_name", "compose_id"}``; ``compose_id`` is known only
+    when the panel installed the stack itself through the Dokploy API.
+    """
+    import json
+    from pathlib import Path
+    from urllib.parse import urlsplit
+
+    from .. import remote_services
+
+    host: str | None = None
+    port: int | None = None
+    if service_id in {"npm", "pypi"}:
+        entry = remote_services.load(Path(data_dir)).get(service_id)
+        if entry:
+            host, port = entry["host"], int(entry["port"])
+    elif service_id == "s3":
+        from .s3_client import remote_config
+
+        remote = remote_config()
+        if remote:
+            parts = urlsplit(remote["engine_url"])
+            host, port = parts.hostname, parts.port or 9000
+    if host is None or port is None:
+        return None
+    compose_id = None
+    try:
+        state = json.loads((Path(data_dir) / "control-plane" / "install.json").read_text("utf-8"))
+        deployment = (state.get(service_id) or {}).get("deployment") or {}
+        if deployment.get("target") == "dokploy" and isinstance(deployment.get("compose_id"), str):
+            compose_id = deployment["compose_id"]
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {"host": host, "port": port, "service_name": f"mrk-{service_id}",
+            "compose_id": compose_id}
 
 
 def _dokploy() -> Any | None:
@@ -234,7 +274,12 @@ class Routing:
             or detected.get("compose_service")
             or (self.target_host(detected))
         )
-        compose_service = detected.get("compose_service") or "mrk-mirror"
+        compose_service = detected.get("compose_service") or FALLBACK_TARGET
+        own = own_stack(self.ctx.data_dir, service_id)
+        if own is not None:
+            # Its own stack (docs/44): the domain belongs on that stack, not the panel's.
+            target = compose_service = own["service_name"]
+            port = own["port"]
         cert = "Let's Encrypt" if https else "None"
         steps_fa = [
             f"در DNS دامنه، یک رکورد A برای «{host}» به IP عمومی همین سرور بسازید.",
@@ -328,6 +373,16 @@ class Routing:
     ) -> dict[str, Any]:
         settings = self.settings()
         port = SERVICE_INDEX[service_id].internal_port
+        own = own_stack(self.ctx.data_dir, service_id)
+        if own is not None:
+            if own["compose_id"] is None:
+                raise RoutingError(
+                    "service_in_own_stack", 409,
+                    "This service runs in its own stack: add the domain there "
+                    f"(service {own['service_name']}, port {own['port']})",
+                    service_name=own["service_name"], port=own["port"],
+                )
+            port = own["port"]
         resolver = settings["cert_resolver"]
         body: dict[str, Any] = {
             "host": host,
@@ -340,10 +395,14 @@ class Routing:
         }
         if https and resolver != "letsencrypt":
             body["customCertResolver"] = resolver
-        if detected["dokploy_service_type"] == "compose":
+        if own is not None:
+            body["domainType"] = "compose"
+            body["composeId"] = own["compose_id"]
+            body["serviceName"] = own["service_name"]
+        elif detected["dokploy_service_type"] == "compose":
             body["domainType"] = "compose"
             body["composeId"] = detected["dokploy_service_id"]
-            body["serviceName"] = detected.get("compose_service") or "mrk-mirror"
+            body["serviceName"] = detected.get("compose_service") or FALLBACK_TARGET
         else:
             body["domainType"] = "application"
             body["applicationId"] = detected["dokploy_service_id"]

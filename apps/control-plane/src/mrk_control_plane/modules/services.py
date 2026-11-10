@@ -153,9 +153,7 @@ class ServicesService:
                 "panel": self._user_count,
             },
         )
-        self.routing.service_targets = (
-            lambda service_id: self.doh_target() if service_id == DOH_SERVICE else None
-        )
+        self.routing.service_targets = self._service_target
         self.lock = asyncio.Lock()
         # docs/43 §0.1: verified bucket domains routed like S3 service domains.
         self.bucket_routes = BucketRoutes(self)
@@ -815,7 +813,17 @@ class ServicesService:
                 if await self._health_fallback("s3"):
                     return "running", None, False
                 return "degraded", "s3_unreachable", False
-        if status is not None and not any(name in status for name in service.programs):
+        if service.id in {"npm", "pypi"}:
+            from ..remote_services import is_remote as registry_is_remote
+
+            if await asyncio.to_thread(registry_is_remote, service.id):
+                # Its own container (docs/44); the panel keeps only the PyPI router.
+                if await self._health_fallback(service.id):
+                    return "running", None, False
+                return "degraded", f"{service.id}_unreachable", False
+        # The panel image runs the PyPI router itself, so a service counts as part
+        # of this install only when ALL its programs are here.
+        if status is not None and not all(name in status for name in service.programs):
             # The panel image runs alone (docs/44): a service whose programs this
             # supervisor does not have is not part of this install.
             return "not_installed", "not_installed_here", False
@@ -916,6 +924,15 @@ class ServicesService:
         except Exception:  # noqa: BLE001 - engine trouble = not offered
             return None
         return service.plain_doh_port()
+
+    def _service_target(self, service_id: str) -> tuple[str, int] | None:
+        """(host, port) for services outside the panel container (Traefik file mode)."""
+        if service_id == DOH_SERVICE:
+            return self.doh_target()
+        from .domains_routing import own_stack
+
+        own = own_stack(self.ctx.data_dir, service_id)
+        return (own["host"], own["port"]) if own is not None else None
 
     def doh_target(self) -> tuple[str, int]:
         """(address, port) Traefik should send DoH requests to (docs/40 §5)."""

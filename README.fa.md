@@ -50,7 +50,7 @@
 ## نصب
 
 DevAssist یک **پنل** است به‌علاوه چند **سرویس** اختیاری. مهم‌ترین بخش پنل است و تنها چیزی است که دستی نصب
-می‌کنید؛ بقیه سرویس‌ها بعداً از داخل خود پنل، دستی یا (به‌زودی) خودکار، نصب می‌شوند.
+می‌کنید؛ بقیه سرویس‌ها بعداً از داخل خود پنل، دستی یا خودکار، نصب می‌شوند.
 
 **۱. پنل** — یک فرمان روی سرور لینوکس با Docker:
 
@@ -77,7 +77,8 @@ cd devassist && docker compose up -d
 | DNS | `ghcr.io/seniorkian/mrk-dns` |
 | فایروال | `ghcr.io/seniorkian/mrk-firewall` |
 | فضای فایل (S3) | `ghcr.io/seniorkian/mrk-s3` |
-| مخزن npm و PyPI | به‌زودی image جدا؛ فعلاً `deploy/appliance/compose.yaml` |
+| مخزن npm | `ghcr.io/seniorkian/mrk-npm` |
+| مخزن PyPI | `ghcr.io/seniorkian/mrk-pypi` |
 
 بیشتر: [نصب با Docker](docs/install-docker.fa.md) · [نصب بدون Docker](docs/install-native.fa.md)
 

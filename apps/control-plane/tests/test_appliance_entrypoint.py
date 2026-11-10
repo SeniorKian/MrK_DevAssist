@@ -10,7 +10,7 @@ import pytest
 
 def _load_entrypoint() -> ModuleType:
     entrypoint_path = (
-        Path(__file__).resolve().parents[3] / "deploy" / "appliance" / "entrypoint.py"
+        Path(__file__).resolve().parents[3] / "deploy" / "images" / "panel" / "entrypoint.py"
     )
     spec = importlib.util.spec_from_file_location("mrk_appliance_entrypoint", entrypoint_path)
     assert spec is not None and spec.loader is not None

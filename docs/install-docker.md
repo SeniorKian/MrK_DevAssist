@@ -8,7 +8,7 @@ ready `compose.yaml` and `.env` for it and connects to it afterwards.
 
 ## 1. Panel (required)
 
-Requirements: Linux server (amd64/arm64) with Docker and the Compose plugin, 1 GB free RAM.
+Requirements: Linux server (amd64/arm64) with Docker and the Compose plugin, 2 GB free RAM for the panel (each service shows its own needs on its card).
 
 ```bash
 git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist
@@ -32,7 +32,8 @@ To give it a domain later, add it in the panel (My services → Add a domain).
 
 Open **My services → Add a service**, pick a service and where to run it (Dokploy, Coolify or plain
 `docker compose`). The wizard shows the files, the exact steps for that tool, and then checks the
-connection. Automatic install through the Dokploy/Coolify API is coming next.
+connection. Or pick **Automatic install**: with Dokploy or Coolify connected, the panel creates the
+service through their API, deploys it and connects it by itself.
 
 | Service | What it does | Image |
 |---|---|---|
@@ -40,10 +41,12 @@ connection. Automatic install through the Dokploy/Coolify API is coming next.
 | DNS | DNS server for the host, containers and network, with blocking | `mrk-dns` |
 | Firewall | Spots attacks and failed logins, blocks the addresses (dry-run first) | `mrk-firewall` |
 | File storage (S3) | S3-compatible buckets for apps and backups | `mrk-s3` |
-| npm / PyPI mirrors | Package caches — still in the older all-in-one stack, `deploy/appliance/compose.yaml`, until they get their own images | — |
+| npm registry | Private npm registry and cache, with upstream failover | `mrk-npm` |
+| PyPI registry | Private PyPI mirror; fetches through the panel (failover, proxies, quarantine) | `mrk-pypi` |
 
-Images are `ghcr.io/seniorkian/mrk-<name>` with the same version as the panel. The agent, DNS,
-firewall and S3 run on the same server as the panel (they share its internal network `mrk-net`).
+Images are `ghcr.io/seniorkian/mrk-<name>` with the same version as the panel. Every service runs
+on the same server as the panel (they share its internal network `mrk-net`; npm and PyPI also share
+their data folders with it).
 
 ## 3. Upgrade
 

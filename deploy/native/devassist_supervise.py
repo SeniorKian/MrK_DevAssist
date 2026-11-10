@@ -8,7 +8,7 @@ a socket through ``/dev/fd`` (ENXIO), so supervisord would fail to start its
 programs. This wrapper gives supervisord a pipe, copies everything to its own
 stdout (the journal), forwards stop signals unchanged, and exits with status 1
 when the FATAL listener stopped supervisord, like the panel image's
-``deploy/appliance/entrypoint.py``.
+``deploy/images/panel/entrypoint.py``.
 """
 
 from __future__ import annotations

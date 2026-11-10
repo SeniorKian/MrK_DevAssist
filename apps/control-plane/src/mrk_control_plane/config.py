@@ -21,7 +21,7 @@ ALLOWED_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 OVERRIDES_FILE = "settings-overrides.json"
 # Names that locate the overrides file itself; they can only come from the environment.
 BOOTSTRAP_ENV_NAMES = frozenset({"MRK_ENV", "MRK_DATA_DIR"})
-# Dockerfile ENV defaults (deploy/appliance/Dockerfile). An environment value equal
+# Dockerfile ENV defaults (deploy/images/Dockerfile). An environment value equal
 # to one of these is treated as "default", so a panel override still applies.
 IMAGE_ENV_DEFAULTS: dict[str, str] = {
     "MRK_ADMIN_UI_DIR": "/opt/mrk/admin-ui",

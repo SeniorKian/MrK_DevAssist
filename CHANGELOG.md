@@ -15,6 +15,13 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
   `mrk-firewall` and `mrk-dns` from `deploy/images/Dockerfile`, published to GHCR with the panel's
   version. The agent and firewall take their pairing key from the wizard's `.env`
   (`MRK_AGENT_PAIRING_KEY`, `MRK_FIREWALL_PAIRING_KEY`) instead of printing it in their logs.
+- npm (`mrk-npm`) and PyPI (`mrk-pypi`) as their own images, added from the wizard. They share
+  their data volumes with the panel, which writes Verdaccio's config (the container restarts
+  Verdaccio on change) and keeps the PyPI router; devpi mirrors through it over `mrk-net`.
+  Domains of separate services route to their own containers. The old all-in-one image
+  (`deploy/appliance`) is gone; CI builds, scans and smoke-tests the whole split stack.
+- Automatic install: with Dokploy or Coolify connected, the panel creates, deploys and connects
+  a service itself through their API (`/api/v1/install/{id}/auto`).
 - The native install (`scripts/install-native.sh`) installs only the panel; every other
   service is Docker, from the wizard, which adapts its stacks to a native panel
   (`MRK_PANEL_RUNTIME=native`: loopback ports and host socket folders instead of `mrk-net`).

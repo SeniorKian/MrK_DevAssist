@@ -129,7 +129,7 @@ recorded in zone history.
 
 ## Test, fuzz, benchmark
 
-Go is not needed on the host. Use the pinned toolchain image from `deploy/appliance/Dockerfile`:
+Go is not needed on the host. Use the pinned toolchain image from `deploy/images/Dockerfile`:
 
 ```sh
 GO="docker run --rm -v $PWD:/src -v mrk-go-cache:/go -w /src golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80"

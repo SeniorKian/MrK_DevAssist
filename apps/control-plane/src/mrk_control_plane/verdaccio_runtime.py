@@ -166,21 +166,29 @@ def _tenancy_rules(data_dir: Path) -> tuple[list[dict[str, object]], str]:
     return scopes, " ".join(others) or QUARANTINE_GROUP
 
 
-def _quota_plugin_lines(data_dir: Path) -> list[str]:
-    if not quota_plugin_available():
+def _quota_plugin_lines(data_dir: Path, container: bool = False) -> list[str]:
+    if not (container or quota_plugin_available()):
         return []
-    tenancy_file = data_dir / "npm" / "config" / "tenancy.json"
+    # For the mrk-npm container (docs/44) the paths are the container's own view.
+    tenancy_file = (
+        "/data/npm/config/tenancy.json" if container
+        else str(data_dir / "npm" / "config" / "tenancy.json")
+    )
+    plugins = "/opt/verdaccio/plugins" if container else str(plugins_dir())
     return [
-        f"plugins: {_yaml_scalar(str(plugins_dir()))}",
+        f"plugins: {_yaml_scalar(plugins)}",
         "middlewares:",
         "  mrk-quota:",
-        f"    tenancy_file: {_yaml_scalar(str(tenancy_file))}",
+        f"    tenancy_file: {_yaml_scalar(tenancy_file)}",
         "    storage_dir: /data/npm/storage",
         "",
     ]
 
 
-def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
+def build_runtime_config(
+    data_dir: Path, *, container: bool = False
+) -> tuple[Path, dict[str, str]]:
+    """Render generated.yaml. ``container``: written by the panel for mrk-npm (docs/44)."""
     store = UpstreamStore(data_dir)
     now = int(time.time())
     upstreams = [
@@ -203,7 +211,7 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
     lines = [
         "storage: /data/npm/storage",
         "",
-        *_quota_plugin_lines(data_dir),
+        *_quota_plugin_lines(data_dir, container),
         "auth:",
         "  htpasswd:",
         "    file: /data/npm/auth/htpasswd",
@@ -249,7 +257,7 @@ def build_runtime_config(data_dir: Path) -> tuple[Path, dict[str, str]]:
             ]
         )
     scopes, generic_publish = _tenancy_rules(data_dir)
-    quota_plugin = quota_plugin_available()
+    quota_plugin = container or quota_plugin_available()
     for scope in scopes:
         if scope["quota_bytes"] is not None and not quota_plugin:
             # Fail closed: without the quota plugin a single publish could pass the limit.

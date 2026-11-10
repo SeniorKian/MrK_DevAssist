@@ -19,9 +19,9 @@ updates:
     commit-message:
       prefix: deps
 
-  # Runtime pins shared by the image and CI (deploy/appliance/requirements.txt).
+  # Runtime pins shared by the image and CI (deploy/images/requirements.txt).
   - package-ecosystem: pip
-    directory: /deploy/appliance
+    directory: /deploy/images
     schedule:
       interval: weekly
     commit-message:
@@ -52,7 +52,7 @@ updates:
   # digests used by workflow `docker run` steps drift from the Dockerfile's, so
   # update those in the same PR.
   - package-ecosystem: docker
-    directory: /deploy/appliance
+    directory: /deploy/images
     schedule:
       interval: weekly
     commit-message:

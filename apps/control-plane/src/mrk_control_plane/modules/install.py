@@ -24,10 +24,12 @@ import secrets
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from .. import remote_services
 from ..agent.signing import encode_key, generate_key
 from ..module_context import ModuleContext
 from .install_catalog import (
@@ -45,6 +47,7 @@ STATE_FILE = "install.json"
 # Extra permission per service on top of services:operate (same as its own pair route).
 WRITE_PERMISSION = {
     "agent": "agent:write", "firewall": "firewall:write", "dns": "dns:write", "s3": "s3:admin",
+    "npm": "upstream:write", "pypi": "upstream:write",
 }
 
 
@@ -111,6 +114,8 @@ class InstallService:
             from . import s3 as s3_module
 
             return s3_module.ACTIVE_STORE
+        if service_id in {"npm", "pypi"}:
+            return self.ctx.settings
         return None
 
     def env_managed(self, service_id: str) -> bool:
@@ -154,7 +159,23 @@ class InstallService:
                 return "not_connected"
             healthy = await EngineAdmin(helper.admin_token_path).health()
             return "connected" if healthy else "unreachable"
+        if service_id in {"npm", "pypi"}:
+            if not remote_services.is_remote(service_id, self.ctx.data_dir):
+                return "not_connected"
+            return "connected" if await self._registry_healthy(service_id) else "unreachable"
         return "unavailable"
+
+    async def _registry_healthy(self, service_id: str) -> bool:
+        from ..components import check_http_component
+
+        settings = self.ctx.settings
+        if service_id == "npm":
+            return await asyncio.to_thread(
+                check_http_component, settings.npm_health_host, settings.npm_health_port,
+                "/-/ping", 3.0)
+        return await asyncio.to_thread(
+            check_http_component, settings.pypi_health_host, settings.pypi_health_port,
+            "/+status", 3.0)
 
     async def catalog(self) -> dict[str, Any]:
         items = []
@@ -194,6 +215,7 @@ class InstallService:
                                fields=[{"field": f"env.{exc}", "reason_code": "invalid"}]) from exc
         key_text: str | None = None
         state = self._read()
+        previous_entry = state.get(service_id) if isinstance(state.get(service_id), dict) else {}
         if service_id == "s3":
             # The engine uses the token the panel already has (docs/44), so files made
             # again never break a running engine.
@@ -211,11 +233,17 @@ class InstallService:
             state[service_id] = {"secret_ref": reference, "created_at": int(time.time())}
         else:
             state[service_id] = {"created_at": int(time.time())}
+        if isinstance(previous_entry.get("deployment"), dict):
+            # Where the panel deployed it (Dokploy/Coolify): domains are routed there.
+            state[service_id]["deployment"] = previous_entry["deployment"]
+        if service_id == "npm":
+            # The npm container waits for this config in the shared volume (docs/44).
+            remote_services.write_npm_config(self.ctx.data_dir)
         self._write(state)
         return {
             "id": item.id,
             "image": public_item(item)["image"],
-            "compose": compose_for(item),
+            "compose": compose_for(item, self.ctx.data_dir),
             "env": render_env(item, values, key_text),
             "file_names": {"compose": "compose.yaml", "env": ".env"},
             "pairing": key_text is not None,
@@ -232,6 +260,21 @@ class InstallService:
         if self.env_managed(service_id):
             raise InstallError("managed_by_environment", 409,
                                "This connection is managed by environment variables")
+        if service_id in {"npm", "pypi"}:
+            target = urlsplit((url or "").strip() or default_url(item) or "")
+            if target.scheme != "http" or not target.hostname or target.path not in {"", "/"}:
+                raise InstallError("invalid_url", 422, "Use http://host:port",
+                                   fields=[{"field": "url", "reason_code": "invalid"}])
+            port = target.port or (4873 if service_id == "npm" else 3141)
+            try:
+                await asyncio.to_thread(
+                    remote_services.connect, self.ctx.settings, service_id, target.hostname, port)
+            except ValueError as exc:
+                raise InstallError("invalid_url", 422, str(exc),
+                                   fields=[{"field": "url", "reason_code": "invalid"}]) from exc
+            if service_id == "npm":
+                await asyncio.to_thread(remote_services.write_npm_config, self.ctx.data_dir)
+            return {"id": service_id, "connection": await self.connection_state(service_id)}
         if service_id == "s3":
             from .install_catalog import S3_DEFAULT_ENGINE_URL
             from .s3_client import save_remote

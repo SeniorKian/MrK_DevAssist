@@ -2,7 +2,7 @@
 #
 # This stack runs ONLY the admin panel and its embedded database. Open it, create
 # the owner account, then add the services you want (server agent, DNS, firewall,
-# and later npm, PyPI, S3) from «My services -> Add a service»: the wizard gives a
+# S3, npm, PyPI) from «My services -> Add a service»: the wizard gives a
 # ready Compose file and .env for each one, for Dokploy, Coolify or docker compose.
 #
 #   docker compose up -d                 # published image (MRK_PANEL_IMAGE)
@@ -11,7 +11,8 @@
 # Dokploy: Create Compose -> Compose Path ./compose.yaml.
 # Coolify: New resource -> Docker Compose -> this file.
 # The stack also creates the shared pieces the service stacks attach to: the
-# internal network mrk-net and the volumes mrk-dns-run and mrk-firewall-run.
+# internal network mrk-net and the volumes mrk-dns-run, mrk-firewall-run,
+# mrk-npm-data and mrk-pypi-data.
 services:
   mrk-panel:
     image: ${MRK_PANEL_IMAGE:-ghcr.io/seniorkian/mrk-panel:latest}
@@ -43,16 +44,22 @@ services:
       # Admin socket of the DNS service and the firewall helper's socket, once added.
       - mrk-dns-run:/run/mrk-dns:ro
       - mrk-firewall-run:/run/mrk-firewall:ro
+      # Data of the npm and PyPI services, once added: the panel writes their
+      # config (users, upstreams, quotas) and browses their packages here.
+      - mrk-npm-data:/data/npm
+      - mrk-pypi-data:/data/pypi
     ports:
       # Loopback by default. MRK_ADMIN_BIND=0.0.0.0 publishes the panel on every
       # interface over plain HTTP: do that only temporarily and firewall the port.
       - "${MRK_ADMIN_BIND:-127.0.0.1}:${MRK_ADMIN_PORT:-8080}:8080"
     networks:
-      - default
-      - mrk-net
-      # Behind Dokploy's Traefik without its own domain settings (docs/35): join
-      # Dokploy's network and uncomment it under the top-level networks too.
-      # - dokploy-network
+      default:
+      mrk-net:
+        # devpi (mrk-pypi) reaches the panel's PyPI router as http://mrk-panel:3142.
+        aliases: [mrk-panel]
+      # Behind Dokploy's Traefik without its own domain settings: join Dokploy's
+      # network and uncomment it under the top-level networks too.
+      # dokploy-network:
     init: true
     read_only: true
     tmpfs:
@@ -61,8 +68,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    mem_limit: ${MRK_MEM_LIMIT:-1g}
-    memswap_limit: ${MRK_MEM_LIMIT:-1g}
+    mem_limit: ${MRK_MEM_LIMIT:-2g}
+    memswap_limit: ${MRK_MEM_LIMIT:-2g}
     cpus: ${MRK_CPUS:-1.0}
     pids_limit: 256
     ulimits:
@@ -91,6 +98,10 @@ volumes:
     name: mrk-dns-run
   mrk-firewall-run:
     name: mrk-firewall-run
+  mrk-npm-data:
+    name: mrk-npm-data
+  mrk-pypi-data:
+    name: mrk-pypi-data
 
 networks:
   # Internal, no egress: the panel talks to the service stacks here
