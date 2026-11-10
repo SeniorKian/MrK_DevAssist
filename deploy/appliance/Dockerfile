@@ -119,10 +119,12 @@ RUN groupadd --gid 10001 mrk \
 # Gate 19 S7: the nft CLI for the optional mrk-firewall helper. Only that service
 # gets CAP_NET_ADMIN; in every other process the binary is inert. No service is
 # enabled (there is no init system in the image).
+# apt-get upgrade pulls Debian security fixes newer than the pinned base image.
 RUN if [ -n "$APT_MIRROR" ]; then \
         sed -i "s|http://deb.debian.org|${APT_MIRROR%/}|g" /etc/apt/sources.list.d/debian.sources; \
     fi \
     && apt-get update \
+    && apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends nftables \
     && rm -rf /var/lib/apt/lists/*
 
