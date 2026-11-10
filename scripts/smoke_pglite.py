@@ -37,7 +37,7 @@ def main() -> int:
         task_id = tasks.enqueue("integrity.scan", {}, user_id)
         queued = tasks.get_payload(task_id)
         backup = BackupManager(data_dir, "smoke", database=database)
-        backup_result = backup.create("smoke-backup-passphrase-123")
+        backup_result = backup.create("smoke-backup-passphrase-123", profile="full")
         backup_validation = backup.validate(
             str(backup_result["filename"]), "smoke-backup-passphrase-123"
         )

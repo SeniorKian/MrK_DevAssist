@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -36,6 +37,10 @@ type Zone struct {
 	names  map[string]bool     // authoritative names (incl. delegation points)
 	cuts   map[string]bool
 	signed bool
+
+	// mu serialises Answer, Add and Sign: the engine queries zones from
+	// several goroutines and Answer signs lazily.
+	mu sync.Mutex
 }
 
 // NewZone creates a zone with SOA and an NS ns1.<origin> record set.
@@ -73,6 +78,8 @@ func genKey(origin string, flags uint16) (*dns.DNSKEY, crypto.Signer) {
 // Add adds records in presentation format (relative names are not
 // supported; use FQDNs).
 func (z *Zone) Add(rrs ...string) {
+	z.mu.Lock()
+	defer z.mu.Unlock()
 	for _, s := range rrs {
 		rr, err := dns.NewRR(s)
 		if err != nil {
@@ -85,7 +92,12 @@ func (z *Zone) Add(rrs ...string) {
 }
 
 // AddRR adds parsed records.
-func (z *Zone) AddRR(rrs ...dns.RR) { z.recs = append(z.recs, rrs...); z.signed = false }
+func (z *Zone) AddRR(rrs ...dns.RR) {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	z.recs = append(z.recs, rrs...)
+	z.signed = false
+}
 
 // DS returns the DS record of the zone's KSK (SHA-256).
 func (z *Zone) DS() *dns.DS {
@@ -152,6 +164,12 @@ func (z *Zone) sign(rrset []dns.RR, k *dns.DNSKEY, priv crypto.Signer) dns.RR {
 
 // Sign (re)builds signatures and the denial chain. Answer calls it lazily.
 func (z *Zone) Sign() {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	z.signLocked()
+}
+
+func (z *Zone) signLocked() {
 	z.sigs = map[string][]dns.RR{}
 	z.nsec = map[string]dns.RR{}
 	z.nsec3 = nil
@@ -432,8 +450,10 @@ func (z *Zone) nodata(m *dns.Msg, name string) {
 
 // Answer answers q like an authoritative server for the zone.
 func (z *Zone) Answer(q dns.Question, do bool) *dns.Msg {
+	z.mu.Lock()
+	defer z.mu.Unlock()
 	if !z.signed {
-		z.Sign()
+		z.signLocked()
 	}
 	m := new(dns.Msg)
 	m.SetQuestion(q.Name, q.Qtype)

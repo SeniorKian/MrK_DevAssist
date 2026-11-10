@@ -78,6 +78,7 @@ def devpi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str,
     password_file.write_text(ROOT_PASSWORD)
     secret_file = tmp_path / "devpi-secret"
     secret_file.write_text(secrets.token_urlsafe(48))
+    secret_file.chmod(0o600)  # devpi refuses a world-readable secret file
     process_env = {**os.environ, "PYTHONPATH": os.pathsep.join(
         [str(SRC), os.environ.get("PYTHONPATH", "")]), "MRK_PYPI_QUOTA_FILE": str(quota_file)}
     init = subprocess.run(  # noqa: S603 - fixed arguments
