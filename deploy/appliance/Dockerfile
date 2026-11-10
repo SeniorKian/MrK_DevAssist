@@ -19,6 +19,11 @@ ARG PIP_INDEX_URL=""
 #   contents (like the npm lockfile integrity hashes).
 #   docker build --build-arg GOPROXY=https://proxy.golang.org,direct ...
 ARG GOPROXY=""
+# - apt: package lists are signed by the Debian archive keys already in the base
+#   image, so a mirror cannot change package contents. It must serve both
+#   /debian and /debian-security.
+#   docker build --build-arg APT_MIRROR=http://deb.debian.org ...
+ARG APT_MIRROR=""
 
 FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS admin-builder
 ARG NPM_REGISTRY
@@ -72,6 +77,7 @@ ARG VCS_REF="unknown"
 ARG BUILD_DATE="unknown"
 ARG SOURCE_URL="unknown"
 ARG PIP_INDEX_URL
+ARG APT_MIRROR
 
 LABEL org.opencontainers.image.title="MrK DevAssist" \
       org.opencontainers.image.description="Self-hosted server and DevOps assistant next to Dokploy: npm/PyPI mirrors, S3, DNS, backups, monitoring" \
@@ -113,7 +119,10 @@ RUN groupadd --gid 10001 mrk \
 # Gate 19 S7: the nft CLI for the optional mrk-firewall helper. Only that service
 # gets CAP_NET_ADMIN; in every other process the binary is inert. No service is
 # enabled (there is no init system in the image).
-RUN apt-get update \
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|http://deb.debian.org|${APT_MIRROR%/}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
     && apt-get install --yes --no-install-recommends nftables \
     && rm -rf /var/lib/apt/lists/*
 

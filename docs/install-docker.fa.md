@@ -55,6 +55,9 @@ ssh -L 8080:127.0.0.1:8080 you@your-server   # then open http://localhost:8080
 (نسخه‌ها پین هستند ولی pip هیچ hashی را بررسی نمی‌کند؛ مثل خود PyPI به آن اعتماد کنید) را بدهید.
 اگر ساخت با خطای `proxy.golang.org ... 403 Forbidden` متوقف شد، `MRK_BUILD_GOPROXY` را هم بدهید
 (مثلاً `https://goproxy.cn|https://goproxy.io|direct`؛ hashهای `go.sum` همچنان بررسی می‌شوند).
+اگر گام `apt-get update` روی `deb.debian.org` معطل ماند، `MRK_BUILD_APT_MIRROR` را بدهید (مثلاً
+`https://mirror.arvancloud.ir`؛ آینه باید `/debian` و `/debian-security` را داشته باشد و امضای
+فهرست بسته‌ها همچنان بررسی می‌شود).
 در Dokploy این مقدارها را در زبانه **Environment** همان سرویس Compose بنویسید.
 
 برای استفاده از یک پوشه روی سرور به‌جای volume، پوشه را با مالک `10001:10001` بسازید و

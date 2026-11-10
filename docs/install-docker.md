@@ -45,7 +45,10 @@ Build mirrors (useful where Docker Hub, npmjs or PyPI are slow): set `MRK_BUILD_
 (lockfile integrity hashes are still enforced) and `MRK_BUILD_PIP_INDEX_URL` (versions are
 pinned, but pip checks no hashes: trust it like PyPI) in `.env`. If the build stops with
 `proxy.golang.org ... 403 Forbidden`, also set `MRK_BUILD_GOPROXY` (for example
-`https://goproxy.cn|https://goproxy.io|direct`; `go.sum` hashes are still enforced). In Dokploy,
+`https://goproxy.cn|https://goproxy.io|direct`; `go.sum` hashes are still enforced). If the
+`apt-get update` step hangs on `deb.debian.org`, set `MRK_BUILD_APT_MIRROR` (for example
+`https://mirror.arvancloud.ir`; the mirror must serve `/debian` and `/debian-security`, and
+package lists stay signature-checked). In Dokploy,
 put these values in the **Environment** tab of the Compose service.
 
 To use a host folder instead of the named volume, create it owned by `10001:10001` and set
