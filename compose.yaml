@@ -26,7 +26,9 @@ services:
       MRK_FIREWALL_KEY_FILE: ${MRK_FIREWALL_KEY_FILE:-}
       MRK_LOG_LEVEL: INFO
       MRK_CORS_ORIGINS: http://localhost:8080
-      MRK_TRUSTED_HOSTS: localhost,127.0.0.1
+      # Host names the panel answers to. Domains added in the panel are trusted
+      # automatically; add the server IP here only for direct http://<ip>:8080 access.
+      MRK_TRUSTED_HOSTS: ${MRK_TRUSTED_HOSTS:-localhost,127.0.0.1}
       MRK_ADMIN_UI_DIR: /opt/mrk/admin-ui
       MRK_NPM_ENABLED: "true"
       MRK_NPM_HEALTH_PORT: "4873"
@@ -46,7 +48,9 @@ services:
       # enough to connect; the volume stays empty unless the `dns` profile runs.
       - mrk-dns-run:/run/mrk-dns:ro
     ports:
-      - "127.0.0.1:${MRK_ADMIN_PORT:-8080}:8080"
+      # Loopback by default. MRK_ADMIN_BIND=0.0.0.0 publishes the panel on every
+      # interface over plain HTTP: do that only temporarily and firewall the port.
+      - "${MRK_ADMIN_BIND:-127.0.0.1}:${MRK_ADMIN_PORT:-8080}:8080"
       - "127.0.0.1:${MRK_NPM_PORT:-4873}:4873"
       - "127.0.0.1:${MRK_PYPI_PORT:-3141}:3141"
       # Native S3 API (s3-engine). Route s3.<domain> (and *.s3.<domain> for

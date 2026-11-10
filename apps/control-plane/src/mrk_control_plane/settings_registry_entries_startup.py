@@ -218,6 +218,13 @@ SYSTEM = (
         ("درگاه پنل روی سرور", "Panel port on the host"),
         ("پنل از بیرون با این درگاه باز می‌شود.", "The panel is reached from outside on this port."),
         reason="compose", danger="high", processes=COMPOSE, min=1, max=65535),
+    env("deploy.admin_bind", "system", "string", "127.0.0.1", "MRK_ADMIN_BIND",
+        ("نشانی درگاه پنل روی سرور", "Panel port address on the host"),
+        ("127.0.0.1 یعنی پنل فقط از خود سرور باز می‌شود. 0.0.0.0 آن را بدون TLS روی اینترنت می‌گذارد؛ "
+         "فقط موقت و پشت فایروال.",
+         "127.0.0.1 keeps the panel reachable only from the server itself. 0.0.0.0 exposes it to "
+         "the Internet without TLS; only temporarily and behind a firewall."),
+        reason="compose", danger="critical", processes=COMPOSE, validator="ip"),
     build("build.npm_registry", "MRK_BUILD_NPM_REGISTRY", "url",
           ("مخزن npm هنگام ساخت", "npm registry at build time"),
           ("هنگام ساخت image بسته‌های npm از این نشانی دانلود می‌شوند.",
