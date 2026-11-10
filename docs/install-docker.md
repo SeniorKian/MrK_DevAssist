@@ -43,7 +43,10 @@ anyone who reaches the panel can.
 
 Build mirrors (useful where Docker Hub, npmjs or PyPI are slow): set `MRK_BUILD_NPM_REGISTRY`
 (lockfile integrity hashes are still enforced) and `MRK_BUILD_PIP_INDEX_URL` (versions are
-pinned, but pip checks no hashes: trust it like PyPI) in `.env`.
+pinned, but pip checks no hashes: trust it like PyPI) in `.env`. If the build stops with
+`proxy.golang.org ... 403 Forbidden`, also set `MRK_BUILD_GOPROXY` (for example
+`https://goproxy.cn|https://goproxy.io|direct`; `go.sum` hashes are still enforced). In Dokploy,
+put these values in the **Environment** tab of the Compose service.
 
 To use a host folder instead of the named volume, create it owned by `10001:10001` and set
 `MRK_HOST_DATA_PATH`:

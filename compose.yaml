@@ -6,6 +6,7 @@ services:
       args:
         NPM_REGISTRY: ${MRK_BUILD_NPM_REGISTRY:-}
         PIP_INDEX_URL: ${MRK_BUILD_PIP_INDEX_URL:-}
+        GOPROXY: ${MRK_BUILD_GOPROXY:-}
     image: mrk/package-mirror:dev
     restart: unless-stopped
     # Run as the image's unprivileged user; with cap_drop ALL the root bootstrap

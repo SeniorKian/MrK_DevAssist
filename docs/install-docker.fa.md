@@ -53,6 +53,9 @@ ssh -L 8080:127.0.0.1:8080 you@your-server   # then open http://localhost:8080
 آینه دانلود هنگام ساخت (وقتی Docker Hub، npmjs یا PyPI کند است): در `.env` مقدار
 `MRK_BUILD_NPM_REGISTRY` (hashهای lockfile همچنان بررسی می‌شوند) و `MRK_BUILD_PIP_INDEX_URL`
 (نسخه‌ها پین هستند ولی pip هیچ hashی را بررسی نمی‌کند؛ مثل خود PyPI به آن اعتماد کنید) را بدهید.
+اگر ساخت با خطای `proxy.golang.org ... 403 Forbidden` متوقف شد، `MRK_BUILD_GOPROXY` را هم بدهید
+(مثلاً `https://goproxy.cn|https://goproxy.io|direct`؛ hashهای `go.sum` همچنان بررسی می‌شوند).
+در Dokploy این مقدارها را در زبانه **Environment** همان سرویس Compose بنویسید.
 
 برای استفاده از یک پوشه روی سرور به‌جای volume، پوشه را با مالک `10001:10001` بسازید و
 `MRK_HOST_DATA_PATH` را تنظیم کنید:
