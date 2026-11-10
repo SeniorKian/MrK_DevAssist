@@ -25,7 +25,7 @@ ARG GOPROXY=""
 #   docker build --build-arg APT_MIRROR=http://deb.debian.org ...
 ARG APT_MIRROR=""
 
-FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS admin-builder
+FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS admin-builder
 ARG NPM_REGISTRY
 WORKDIR /build/admin-ui
 COPY apps/admin-ui/package.json apps/admin-ui/package-lock.json ./
@@ -38,7 +38,7 @@ ENV VITE_BUILD_COMMIT=$VCS_REF \
     VITE_BUILD_DATE=$BUILD_DATE
 RUN npm run build
 
-FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS verdaccio-builder
+FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS verdaccio-builder
 ARG NPM_REGISTRY
 WORKDIR /opt/verdaccio
 COPY deploy/verdaccio/package.json deploy/verdaccio/package-lock.json ./
@@ -46,7 +46,7 @@ RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm con
 # docs/43 §0.1: pre-publish size quota for «My space» scopes (no dependencies).
 COPY deploy/verdaccio/plugins ./plugins
 
-FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS pglite-builder
+FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS pglite-builder
 ARG NPM_REGISTRY
 WORKDIR /opt/pglite
 COPY deploy/pglite/package.json deploy/pglite/package-lock.json ./
