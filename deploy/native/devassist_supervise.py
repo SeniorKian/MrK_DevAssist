@@ -1,12 +1,14 @@
-"""Run supervisord for the native (systemd) install of DevAssist.
+"""Run supervisord for the native (systemd) install of the DevAssist panel.
 
-``deploy/appliance/supervisord.conf`` is shared with the container unchanged. It
-sends every program's output to ``/dev/fd/1`` and ``/dev/fd/2``. In a container
+``deploy/images/panel/supervisord.conf`` (installed as ``/opt/mrk/supervisord.conf``)
+is shared with the panel image unchanged. It sends every program's output to
+``/dev/fd/1`` and ``/dev/fd/2``. In a container
 those are pipes; under systemd they are journald sockets, and Linux cannot reopen
 a socket through ``/dev/fd`` (ENXIO), so supervisord would fail to start its
 programs. This wrapper gives supervisord a pipe, copies everything to its own
 stdout (the journal), forwards stop signals unchanged, and exits with status 1
-when the FATAL listener stopped supervisord, like ``deploy/appliance/entrypoint.py``.
+when the FATAL listener stopped supervisord, like the panel image's
+``deploy/appliance/entrypoint.py``.
 """
 
 from __future__ import annotations

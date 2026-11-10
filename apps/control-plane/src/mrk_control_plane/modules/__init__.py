@@ -27,6 +27,7 @@ def _load() -> None:
         "dbadmin",
         "dns",  # before services: the services card and domain sync read it
         "services",  # after dokploy/s3/host_agent/firewall: it reads their services
+        "install",  # add-service wizard (docs/44): reads agent/firewall/dns
         "tenancy",  # «my space» (docs/43): after dns/s3, it reuses their services
         "home",  # last: it reads the services the modules above registered
     ):

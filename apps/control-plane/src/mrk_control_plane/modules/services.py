@@ -807,6 +807,18 @@ class ServicesService:
             if state == "running" and await self._doh_port() is None:
                 return "disabled", "doh_plain_disabled", False
             return state, reason, False
+        if service.id == "s3":
+            from .s3_client import is_remote
+
+            if await asyncio.to_thread(is_remote):
+                # Its own container (docs/44): only its health is visible from here.
+                if await self._health_fallback("s3"):
+                    return "running", None, False
+                return "degraded", "s3_unreachable", False
+        if status is not None and not any(name in status for name in service.programs):
+            # The panel image runs alone (docs/44): a service whose programs this
+            # supervisor does not have is not part of this install.
+            return "not_installed", "not_installed_here", False
         enabled = {
             "npm": getattr(settings, "npm_enabled", False),
             "pypi": getattr(settings, "pypi_enabled", False),

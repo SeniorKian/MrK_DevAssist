@@ -1,6 +1,6 @@
 # Uptime Kuma 2.x behavioural spec for a clean-room re-implementation
 
-Target: a native MRK module (`uptime_*` namespace, Python/FastAPI + SQLAlchemy + React) inside the single-container appliance. The container runs `cap_drop: ALL` as uid 10001. Scope comes from `docs/21-uptime-monitoring-module.md` and `docs/20-modular-appliance-and-domain-routing.md` (module id `uptime`, dataRoot `/data/modules/uptime`, routes `panel/uptime/*` and `status.domain.com`, PGlite/PostgreSQL namespace `uptime_*`).
+Target: a native MRK module (`uptime_*` namespace, Python/FastAPI + SQLAlchemy + React) inside the single-container appliance. The container runs `cap_drop: ALL` as uid 10001. Scope comes from `docs/21-uptime-monitoring-module.md` and docs/20 (archived, see docs/03) (module id `uptime`, dataRoot `/data/modules/uptime`, routes `panel/uptime/*` and `status.domain.com`, PGlite/PostgreSQL namespace `uptime_*`).
 
 Source: `louislam/uptime-kuma` `master` branch (2.x line), read on 2026-11-08 through raw.githubusercontent.com. Uptime Kuma is MIT-licensed. This document describes **behaviour only**; it contains no code to copy. Base URL for references: `https://github.com/louislam/uptime-kuma/blob/master/`. Each item is marked:
 

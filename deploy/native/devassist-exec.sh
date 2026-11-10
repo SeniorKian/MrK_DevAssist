@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# devassist-exec — run a command the way devassist.service sees the system (native install).
+# devassist-exec — run a command the way devassist.service sees the system (native panel).
 #
-# The main service runs in its own mount namespace (/data, /usr/local/bin,
-# /opt/verdaccio, /opt/pglite and a private /tmp with the supervisor socket).
+# The panel runs in its own mount namespace (/data, /usr/local/bin, /opt/pglite
+# and a private /tmp with the supervisor socket).
 # Maintenance commands from docs/18-operations-runbooks.md need that view:
 #
 #   sudo devassist-exec supervisorctl -c /opt/mrk/supervisord.conf status
@@ -57,6 +57,6 @@ exec systemd-run --quiet --wait "$io_mode" --collect --service-type=exec \
     --property=EnvironmentFile=/etc/devassist/devassist.env \
     --setenv=PATH="$INNER_PATH" --setenv=HOME=/tmp \
     --property=BindPaths="$data_dir:/data" \
-    --property=BindReadOnlyPaths="/opt/mrk/bin:/usr/local/bin /opt/mrk/verdaccio:/opt/verdaccio /opt/mrk/pglite:/opt/pglite" \
+    --property=BindReadOnlyPaths="/opt/mrk/bin:/usr/local/bin /opt/mrk/pglite:/opt/pglite" \
     --property=TemporaryFileSystem="/tmp:mode=1777,nosuid,nodev" \
     -- "$@"

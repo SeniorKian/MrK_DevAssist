@@ -2,7 +2,7 @@
 
 The owner's brief: *so simple a 5-year-old can use it; no machine-like text; Advanced is complete.*
 Every Phase 1 page is built from this kit (`src/kit`) and the shared copy (`src/copy`), and its
-nav entry lives in `src/nav.ts`. Plan: `docs/33-ux-redesign-plan.md` (§1 IA, §2 writing guide, §4 Simple/Advanced, §6 kit).
+nav entry lives in `src/nav.ts`. Plan: `git show 4fea430:docs/33-ux-redesign-plan.md` (§1 IA, §2 writing guide, §4 Simple/Advanced, §6 kit).
 
 ```ts
 import { PageHeader, GroupTabs, SectionCard, StatusPill, EmptyState, FriendlyError, useKit } from "./kit";

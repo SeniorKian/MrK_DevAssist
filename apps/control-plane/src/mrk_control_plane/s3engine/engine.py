@@ -23,8 +23,27 @@ LOGGER = logging.getLogger("mrk.s3.engine")
 
 
 def load_or_create_token(path: Path) -> str:
-    """Shared admin token (mode 0600). Either side may create it; O_EXCL avoids races."""
+    """Shared admin token (mode 0600). Either side may create it; O_EXCL avoids races.
+
+    In its own container (docs/44) the panel's wizard passes the token as
+    ``MRK_S3_ADMIN_TOKEN``; that value is authoritative and replaces the file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    seeded = os.getenv("MRK_S3_ADMIN_TOKEN", "").strip()
+    if seeded:
+        if len(seeded) < 32 or any(ch.isspace() for ch in seeded):
+            raise RuntimeError("MRK_S3_ADMIN_TOKEN must be at least 32 characters, no spaces")
+        try:
+            current = path.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeDecodeError):
+            current = ""
+        if current != seeded:
+            temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+            fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w", encoding="ascii") as handle:
+                handle.write(seeded + "\n")
+            os.replace(temporary, path)
+        return seeded
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:

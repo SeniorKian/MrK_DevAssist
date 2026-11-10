@@ -159,7 +159,7 @@ COPY deploy/appliance/entrypoint.py /opt/mrk/entrypoint.py
 # The sed is a CRLF guard: a CRLF checkout would otherwise break `set -eu`.
 # /data/modules exists in the image so a fresh named volume gets it owned by 10001;
 # otherwise Docker creates it as root for the /data/modules/s3 mount point of
-# compose.split-storage.yaml and the panel cannot add its other module folders.
+# a separate S3 volume and the panel cannot add its other module folders.
 RUN sed -i 's/\r$//' /opt/mrk/devpi-start.sh /opt/mrk/devpi-configure.sh /opt/mrk/supervisord.conf \
     && mkdir -p /data/modules /var/lib/mrk-agent /mnt/links /var/lib/mrk-dns /run/mrk-dns \
     && chown 10001:10001 /data /data/modules /var/lib/mrk-agent /mnt/links /var/lib/mrk-dns /run/mrk-dns \

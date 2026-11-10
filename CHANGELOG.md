@@ -8,6 +8,23 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Split install (docs/44): the panel runs alone first (`compose.yaml` at the repository root,
+  image `mrk-panel`), and every other service is added from **My services → Add a service**. The
+  wizard gives a ready `compose.yaml` and `.env` for Dokploy, Coolify or `docker compose`, with the
+  steps for that tool, then connects to the service and checks it. Separate images `mrk-agent`,
+  `mrk-firewall` and `mrk-dns` from `deploy/images/Dockerfile`, published to GHCR with the panel's
+  version. The agent and firewall take their pairing key from the wizard's `.env`
+  (`MRK_AGENT_PAIRING_KEY`, `MRK_FIREWALL_PAIRING_KEY`) instead of printing it in their logs.
+- The native install (`scripts/install-native.sh`) installs only the panel; every other
+  service is Docker, from the wizard, which adapts its stacks to a native panel
+  (`MRK_PANEL_RUNTIME=native`: loopback ports and host socket folders instead of `mrk-net`).
+- Shorter install docs: one page per install type, one row per service. Implemented design
+  documents were removed (listed in `docs/03-user-stories.md`, full text in git history), as
+  were unused files (e2e fixtures, the egress note, `compose.split-storage.yaml`).
+- S3 file storage as its own image (`mrk-s3`), added from the same wizard. The panel pushes
+  buckets, users and keys to it over the internal network (`PUT /admin/config`) instead of a
+  shared config file, re-sends them if the engine missed them, and the file manager, backups
+  and «My space» follow the engine's address.
 - Open-source release files: new README (English and Persian), CONTRIBUTING, Code of Conduct,
   Security policy, issue and pull request templates, funding placeholder, this changelog.
 - Product name **MrK DevAssist**: product "DevAssist" with the maker signature "MrK", and a new

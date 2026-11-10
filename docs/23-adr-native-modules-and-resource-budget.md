@@ -24,7 +24,7 @@
 | ماژول | process | مشخصات فنی | مرجع رفتاری |
 |---|---|---|---|
 | Uptime Monitoring | `uptime-engine` (asyncio) | `docs/24-native-uptime-engine-spec.md` | رفتار Uptime Kuma 2.x (MIT) |
-| DNS Management | `dns-engine` (asyncio + uvloop) | `docs/25-native-dns-engine-spec.md` | قابلیت‌های Technitium + RFCها |
+| DNS Management | `dns-engine` (asyncio + uvloop) | `docs/25 (archived, see docs/03)` | قابلیت‌های Technitium + RFCها |
 | Docker/OCI Registry | `oci-engine` (uvicorn، `127.0.0.1:5000`) | `docs/26-oci-registry-module-spec.md` | OCI Distribution Spec v1.1 |
 
 قواعد مشترک:

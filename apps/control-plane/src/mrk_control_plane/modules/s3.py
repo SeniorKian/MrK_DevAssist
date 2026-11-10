@@ -8,6 +8,7 @@ SigV4-signed calls as the hidden ``__mrk_panel__`` identity. Bytes are streamed 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import math
@@ -863,8 +864,42 @@ def register(ctx: ModuleContext) -> None:
     ACTIVE_STORE = store
     ctx.routers.append(build_router(ctx, store))
 
+    from .s3_client import configure_remote, is_remote
+
+    configure_remote(ctx.data_dir)
+    retry: dict[str, asyncio.Task[None] | None] = {"task": None}
+
+    async def resend_loop() -> None:
+        # docs/44: a separate engine that missed a snapshot (down, restarted with an
+        # empty volume) gets it again. Its health also says whether it has a config.
+        while True:
+            await asyncio.sleep(30)
+            try:
+                if not is_remote():
+                    continue
+                missing = store.push_pending
+                if not missing:
+                    health = await EngineAdmin(store.admin_token_path).json(
+                        "GET", "/admin/health", timeout=3.0)
+                    missing = isinstance(health, dict) and not health.get("config_loaded")
+                if missing:
+                    await asyncio.to_thread(store.push_snapshot)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - engine trouble; try again next round
+                logging.getLogger(__name__).debug("S3 snapshot resend failed", exc_info=True)
+
     async def start() -> None:
         # Regenerate the snapshot at every start so the engine always matches the database.
         await asyncio.to_thread(store.startup)
+        retry["task"] = asyncio.create_task(resend_loop())
+
+    async def stop() -> None:
+        task = retry["task"]
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     ctx.start_hooks.append(start)
+    ctx.stop_hooks.append(stop)

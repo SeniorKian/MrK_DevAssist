@@ -328,7 +328,7 @@ def _npm_matches(reference: dict[str, str], digests: dict[str, str]) -> bool | N
 def _move_directory(source: Path, target: Path) -> None:
     """Move a directory: an atomic rename, or a copy when it crosses a mount point.
 
-    The npm storage can be its own volume (compose.split-storage.yaml), and a rename
+    The npm storage can be its own volume (a separate mount), and a rename
     between two mounts fails with EXDEV. The copy goes to a hidden sibling first and
     is renamed into place, so ``target`` never exists half-written; the source is
     removed only after that.

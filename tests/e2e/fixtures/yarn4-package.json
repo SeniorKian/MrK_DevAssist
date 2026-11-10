@@ -1,8 +1,0 @@
-{
-  "name": "mrk-yarn4-e2e",
-  "private": true,
-  "packageManager": "yarn@4.10.3",
-  "dependencies": {
-    "is-number": "7.0.0"
-  }
-}

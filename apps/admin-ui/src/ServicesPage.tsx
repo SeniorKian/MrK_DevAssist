@@ -7,7 +7,7 @@
  * every 10 s while the tab is visible and right after every change.
  * Hash query: `?add=<service id>` opens the wizard, `?domain=<id>` opens a domain, `?routing=1` scrolls to routing.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Box, Button, CircularProgress, Grid, Skeleton, Stack, Typography } from "@mui/material";
 import type { SvgIconComponent } from "@mui/icons-material";
 import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
@@ -31,15 +31,17 @@ import { ApiError, hasPermission, isAbortError } from "./api";
 import { errorSentence, nameConfirmation, persianDigits, pick, say, type Bi } from "./copy";
 import {
   CopyField, EmptyState, FriendlyError, Ltr, NoAccess, PageHeader, RelativeTime, SectionCard, StatGrid, StatTile, StatusPill,
-  formatSize, useConfirmAction, useKit, useUndoSnackbar
+  GroupTabs, Notice, formatSize, useConfirmAction, useKit, useUndoSnackbar
 } from "./kit";
-import { hashQuery } from "./nav";
+import { findGroup, hashQuery, visibleTabs } from "./nav";
+import { AddServicePanel } from "./AddServicePanel";
+import { TabBody, useHashTab } from "./ServerPage";
 import { useVisibleInterval } from "./polling";
 import type { GroupPageProps } from "./ServerPage";
 import { AddDomainWizard, DomainChips, DomainDialog } from "./ServiceDomains";
 import { DomainRouting } from "./DomainRouting";
 import {
-  ACTION_WORDS, SERVICE_ACTIONS, apiTime, fetchDomains, fetchServices, runServiceAction, serviceDescription, serviceName, serviceStateText,
+  ACTION_WORDS, SERVICE_ACTIONS, apiTime, resetServices, fetchDomains, fetchServices, runServiceAction, serviceDescription, serviceName, serviceStateText,
   type DomainRecord, type RoutingInfo, type ServiceAction, type ServiceInfo, type ServicesPayload
 } from "./services";
 
@@ -82,7 +84,17 @@ const COPY = {
   restartPanelBody: { fa: "پنل چند ثانیه قطع می‌شود؛ بعد این صفحه را تازه کنید.", en: "The panel goes away for a few seconds; then reload this page." },
   restartYes: { fa: "بله، دوباره راه‌اندازی کن", en: "Yes, restart" },
   actionFailed: { fa: "«{name}»: {reason}", en: "“{name}”: {reason}" },
-  operateNeeded: { fa: "روشن و خاموش کردن", en: "Start and stop" }
+  operateNeeded: { fa: "روشن و خاموش کردن", en: "Start and stop" },
+  addService: { fa: "افزودن سرویس", en: "Add a service" },
+  addTitle: { fa: "افزودن سرویس", en: "Add a service" },
+  addSubtitle: {
+    fa: "هر بخش DevAssist برنامه جدای خودش است؛ هر کدام را که لازم دارید با Dokploy، Coolify یا Docker Compose اضافه کنید.",
+    en: "Each part of DevAssist is its own program; add the ones you need with Dokploy, Coolify or Docker Compose."
+  },
+  startHere: {
+    fa: "پنل آماده است. حالا بخش‌هایی را که لازم دارید اضافه کنید؛ از «دستیار سرور» شروع کنید.",
+    en: "The panel is ready. Now add the parts you need; start with the server agent."
+  }
 } satisfies Record<string, Bi>;
 
 const SERVICE_ICONS: Record<string, SvgIconComponent> = {
@@ -264,7 +276,7 @@ function ServiceCard({ service, domains, permissions, busyAction, onAction, onAd
   );
 }
 
-export default function ServicesPage({ user, permissions: permissionsProp }: GroupPageProps) {
+function ServicesList({ user, permissions: permissionsProp, tabs }: GroupPageProps & { tabs: ReactNode }) {
   const { language, isAdvanced, c } = useKit();
   const permissions = useMemo(() => user?.permissions ?? permissionsProp ?? [], [user, permissionsProp]);
   const canServices = hasPermission(permissions, "services:read");
@@ -409,10 +421,20 @@ export default function ServicesPage({ user, permissions: permissionsProp }: Gro
   const routing = payload?.routing ?? null;
 
   const refreshButton = (
-    <Button onClick={() => void load()} disabled={loading} startIcon={loading ? <CircularProgress size={14} /> : <RefreshRoundedIcon />} sx={{ minHeight: 44 }}>
-      {c.refresh}
-    </Button>
+    <Stack direction="row" spacing={1}>
+      <Button onClick={() => void load()} disabled={loading} startIcon={loading ? <CircularProgress size={14} /> : <RefreshRoundedIcon />} sx={{ minHeight: 44 }}>
+        {c.refresh}
+      </Button>
+      {canServices ? (
+        <Button variant="contained" href="#/services/add" startIcon={<AddRoundedIcon />} sx={{ minHeight: 44 }}>
+          {pick(language, COPY.addService)}
+        </Button>
+      ) : null}
+    </Stack>
   );
+  // docs/44: a fresh panel has nothing else yet; point straight at the wizard.
+  const nothingAdded =
+    payload !== null && services.length > 0 && services.filter((item) => item.id !== "panel").every((item) => item.state === "not_installed");
 
   let body;
   if (!canServices && !canDomains) {
@@ -455,8 +477,20 @@ export default function ServicesPage({ user, permissions: permissionsProp }: Gro
 
   return (
     <>
-      <PageHeader title={pick(language, COPY.title)} subtitle={pick(language, COPY.subtitle)} icon={AppsRoundedIcon} secondaryActions={refreshButton} />
+      <PageHeader title={pick(language, COPY.title)} subtitle={pick(language, COPY.subtitle)} icon={AppsRoundedIcon} secondaryActions={refreshButton} tabs={tabs} />
       <Stack spacing={2.5}>
+        {nothingAdded ? (
+          <Notice
+            tone="info"
+            action={
+              <Button color="inherit" href="#/services/add" sx={{ minHeight: 44, whiteSpace: "nowrap" }}>
+                {pick(language, COPY.addService)}
+              </Button>
+            }
+          >
+            {pick(language, COPY.startHere)}
+          </Notice>
+        ) : null}
         {error !== null && payload ? <FriendlyError error={error} title={pick(language, COPY.loadFailed)} scope="services" onRetry={() => void load()} severity="warning" /> : null}
         {domainsError !== null && isAdvanced ? <FriendlyError error={domainsError} title={pick(language, COPY.domainsFailed)} scope="domains" onRetry={() => void load()} severity="warning" /> : null}
         {body}
@@ -492,4 +526,26 @@ export default function ServicesPage({ user, permissions: permissionsProp }: Gro
       {snackbar}
     </>
   );
+}
+
+/** «سرویس‌های من» group: the service cards and «افزودن سرویس» (docs/44). */
+export default function ServicesPage(props: GroupPageProps) {
+  const { language, mode } = useKit();
+  const { user, permissions: permissionsProp } = props;
+  const permissions = useMemo(() => user?.permissions ?? permissionsProp ?? [], [user, permissionsProp]);
+  const group = findGroup("services");
+  const tabs = group ? visibleTabs(group, permissions, mode).map((item) => item.key) : [];
+  const tab = useHashTab("services", {}, tabs, tabs[0] ?? "all");
+  const tabBar = <GroupTabs group="services" permissions={permissions} value={tab} />;
+  if (tab === "add") {
+    return (
+      <>
+        <PageHeader title={pick(language, COPY.addTitle)} subtitle={pick(language, COPY.addSubtitle)} icon={AddRoundedIcon} tabs={tabBar} />
+        <TabBody>
+          <AddServicePanel permissions={permissions} onChanged={resetServices} />
+        </TabBody>
+      </>
+    );
+  }
+  return <ServicesList {...props} tabs={tabBar} />;
 }

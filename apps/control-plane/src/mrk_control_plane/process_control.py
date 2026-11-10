@@ -10,6 +10,9 @@ LOGGER = logging.getLogger(__name__)
 
 def restart_verdaccio_if_managed() -> bool:
     """Restart Verdaccio under supervisor. Raises RuntimeError on any failure."""
+    if os.getenv("MRK_NPM_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}:
+        # The panel-only image has no Verdaccio to restart (docs/44).
+        return False
     socket_path = Path(
         os.getenv(
             "MRK_SUPERVISOR_SOCKET",

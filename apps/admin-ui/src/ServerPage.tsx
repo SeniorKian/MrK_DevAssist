@@ -38,7 +38,7 @@ const COPY = {
 const TAB_ALIASES: Record<string, string> = { monitoring: "resources", dokploy: "apps", dbadmin: "databases", db: "databases" };
 
 /** Current tab of a group from the hash, accepting `?query` suffixes and aliases. */
-export function useHashTab(group: "server" | "files", aliases: Record<string, string>, valid: string[], fallback: string) {
+export function useHashTab(group: "server" | "files" | "services", aliases: Record<string, string>, valid: string[], fallback: string) {
   const read = () => {
     const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0];
     const [first, second] = raw.split("/");

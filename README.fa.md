@@ -10,24 +10,8 @@
 منبع‌ها، فضای ذخیره‌سازی S3، سرور DNS، پشتیبان‌گیری، پایش منابع، فایروال و ابزارهای Docker،
 همه در یک پنل فارسی.
 
-> این پروژه پیش‌تر با نام *MRK* ساخته شده است. نام ریپو، بسته‌ها، ایمیج و کانتینرها
-> (`mrk-mirror`، `mrk-dns`، متغیرهای `MRK_*`، مسیر `/opt/mrk`) همان پیشوند را نگه می‌دارند؛
-> فقط نام محصول عوض شده است.
-
 - مجوز: [MIT](LICENSE). برای همه رایگان است و نسخه پولی ندارد.
 - وضعیت: در حال توسعه (نسخه 0.1). پیش از باز کردن پنل روی اینترنت، [SECURITY.md](SECURITY.md) را بخوانید.
-
-## تصویرها
-
-هنوز تصویری در ریپو نیست. جای تصویرها پوشه [`docs/images/`](docs/images/) است:
-
-| فایل | چه چیزی را نشان می‌دهد |
-|---|---|
-| `docs/images/home.png` | صفحه خانه: فقط چیزهایی که توجه می‌خواهند |
-| `docs/images/services.png` | «سرویس‌های من»: وضعیت، مصرف و دامنه‌ها |
-| `docs/images/packages.png` | منبع‌های npm و PyPI و جابه‌جایی بین آن‌ها |
-| `docs/images/dns.png` | نام‌ها، آزمایش و پایش DNS |
-| `docs/images/files.png` | مدیریت فایل S3 |
 
 ## امکانات
 
@@ -63,76 +47,44 @@
 - همه تنظیم‌ها در **تنظیمات ← همه تنظیمات** با توضیح، پیش‌فرض و جای تنظیمشان فهرست شده‌اند.
 - رابط فارسی (راست‌به‌چپ) و انگلیسی، با حالت *ساده* و *پیشرفته* در همه صفحه‌ها.
 
-## نصب سریع (Docker)
+## نصب
 
-پیش‌نیاز: یک سرور لینوکس (amd64 یا arm64) با Docker Engine و افزونه Compose (روی سرورهای
-Dokploy هر دو هست)، 2 گیگابایت رم آزاد و فضای دیسک برای کش پکیج‌ها.
+DevAssist یک **پنل** است به‌علاوه چند **سرویس** اختیاری. مهم‌ترین بخش پنل است و تنها چیزی است که دستی نصب
+می‌کنید؛ بقیه سرویس‌ها بعداً از داخل خود پنل، دستی یا (به‌زودی) خودکار، نصب می‌شوند.
 
-<div dir="ltr">
-
-```bash
-git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist && cd devassist && docker compose up -d --build
-```
-
-</div>
-
-این فرمان ایمیج را از سورس می‌سازد و پنل، npm، PyPI و S3 را بالا می‌آورد. همه پورت‌ها فقط روی
-`127.0.0.1` باز می‌شوند. از کامپیوتر خودتان یک تونل SSH بزنید و <http://localhost:8080> را باز کنید:
+**۱. پنل** — یک فرمان روی سرور لینوکس با Docker:
 
 <div dir="ltr">
 
 ```bash
-ssh -L 8080:127.0.0.1:8080 you@your-server
+git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist
+cd devassist && docker compose up -d
 ```
 
 </div>
 
-بار اول صفحه **راه‌اندازی اولیه** باز می‌شود؛ همان لحظه حساب مالک را بسازید.
-برای استفاده واقعی (ایمیج منتشرشده، دامنه، TLS از طریق Dokploy، DNS و فایروال و Agent و
-راهنمای پورت 53) **[docs/install-docker.fa.md](docs/install-docker.fa.md)** را بخوانید.
+در Dokploy یا Coolify: از `compose.yaml` همین مخزن یک سرویس Compose بسازید.
+بدون Docker: `sudo bash scripts/install-native.sh install` پنل را با systemd نصب می‌کند.
+بعد با `ssh -L 8080:127.0.0.1:8080 you@your-server` نشانی <http://localhost:8080> را باز کنید و همان لحظه حساب مالک را بسازید.
 
-## نصب بدون Docker
+**۲. سرویس‌ها** — در پنل «سرویس‌های من ← افزودن سرویس». ویزارد برای Dokploy، Coolify یا `docker compose`
+فایل `compose.yaml` و `.env` آماده می‌دهد و بعد وصل می‌شود و امتحان می‌کند.
 
-DevAssist روی Debian 12/13 و Ubuntu 22.04/24.04 مستقیم و به‌شکل سرویس systemd هم اجرا می‌شود؛
-با همان برنامه‌ها، همان نسخه‌ها و همان محدودیت‌های امنیتی کانتینر:
+| سرویس | image |
+|---|---|
+| پنل (لازم) | `ghcr.io/seniorkian/mrk-panel` |
+| دستیار سرور | `ghcr.io/seniorkian/mrk-agent` |
+| DNS | `ghcr.io/seniorkian/mrk-dns` |
+| فایروال | `ghcr.io/seniorkian/mrk-firewall` |
+| فضای فایل (S3) | `ghcr.io/seniorkian/mrk-s3` |
+| مخزن npm و PyPI | به‌زودی image جدا؛ فعلاً `deploy/appliance/compose.yaml` |
 
-<div dir="ltr">
+بیشتر: [نصب با Docker](docs/install-docker.fa.md) · [نصب بدون Docker](docs/install-native.fa.md)
 
-```bash
-git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist && cd devassist
-sudo bash scripts/install-native.sh install --dry-run   # first, see the plan
-sudo bash scripts/install-native.sh install            # optional: --with-dns --with-firewall --with-agent
-```
+## تنظیمات
 
-</div>
-
-پیش از شروع **[docs/install-native.fa.md](docs/install-native.fa.md)** را بخوانید.
-
-## پیش‌نیازها
-
-| | نصب با Docker | نصب بدون Docker |
-|---|---|---|
-| سیستم‌عامل | هر لینوکسی با Docker Engine و Compose نسخه 2 | Debian 12/13 یا Ubuntu 22.04/24.04 با systemd |
-| پردازنده | amd64 یا arm64 | amd64 یا arm64 |
-| رم | 2 گیگابایت برای کانتینر اصلی (به‌علاوه 512 مگ برای DNS و 256 مگ برای Agent) | همان سقف‌ها در systemd |
-| دیسک | چند گیگابایت به‌علاوه داده npm، PyPI و S3 | همان، به‌علاوه حدود 3 گیگابایت برای ساخت |
-| پورت | 8080 پنل، 4873 npm، 3141 PyPI، 9000 S3؛ 53 برای DNS (اختیاری) | همان |
-
-## تنظیمات در یک نگاه
-
-- تنظیم‌ها سه لایه دارند: **پنل** (بیشتر تنظیم‌ها، بدون ری‌استارت)، **متغیرهای محیطی** `MRK_*`
-  (هنگام شروع خوانده می‌شوند) و **آرگومان‌های build** (آینه دانلود هنگام ساخت ایمیج). متغیر
-  محیطی صریح همیشه برنده است.
-- در پنل، **تنظیمات ← همه تنظیمات** همه موارد را با توضیح، پیش‌فرض، منبع فعلی و نیاز به
-  ری‌استارت نشان می‌دهد. منبع اصلی، رجیستری تنظیمات در
-  `apps/control-plane/src/mrk_control_plane/settings_registry_entries_*.py` است.
-- Docker: مقدارهایی که Compose می‌خواند در [`.env.example`](.env.example) است (آن را به `.env`
-  کپی کنید)؛ تنظیمات کانتینر در `compose.yaml` و `deploy/appliance/compose.production.yaml`.
-- بدون Docker: فایل `/etc/devassist/devassist.env` (نمونه: [`deploy/native/devassist.env.example`](deploy/native/devassist.env.example)).
-- پیش از عمومی کردن، دست‌کم `MRK_TRUSTED_HOSTS`، `MRK_CORS_ORIGINS` و `MRK_PYPI_OUTSIDE_URL`
-  (یا دامنه‌ها در پنل) را روی نام‌های HTTPS واقعی بگذارید.
-- دیتابیس پیش‌فرض PGlite داخلی است؛ برای نصب بزرگ‌تر `MRK_DATABASE_URL` را به یک PostgreSQL
-  بیرونی (`postgresql+psycopg://...`) بدهید. بیشتر: [docs/27](docs/27-configurability-and-settings.md).
+همه تنظیم‌ها در پنل در **تنظیمات ← همه تنظیمات** با توضیح، پیش‌فرض و منبع فعلی فهرست شده‌اند. متغیرهای
+محیطی `MRK_*` هنگام شروع خوانده می‌شوند و همیشه برنده‌اند؛ نمونه‌ها در [`.env.example`](.env.example).
 
 ## نکته‌های امنیتی
 
@@ -152,12 +104,8 @@ sudo bash scripts/install-native.sh install            # optional: --with-dns --
 ## مستندات
 
 - [نصب با Docker](docs/install-docker.fa.md) · [نصب بدون Docker](docs/install-native.fa.md)
-- [Runbookهای عملیاتی](docs/18-operations-runbooks.md) (بازگردانی، نگهداری PGlite، راه‌اندازی PyPI)
-- [نظارت بر فرایندها و سلامت](docs/11-process-supervision-and-health.md)
-- [CI/CD و انتشار](docs/12-ci-cd-and-release.md)
-- [تنظیمات](docs/27-configurability-and-settings.md) · [جزئیات Appliance](deploy/appliance/README.md)
-- سندهای طراحی و قراردادها: `docs/01` تا `docs/43`؛ سندهای تمام‌شده به‌صورت Story در
-  [سند 03](docs/03-user-stories.md) بایگانی شده‌اند.
+- [Runbookهای عملیاتی](docs/18-operations-runbooks.md) (بازگردانی، نگهداری PGlite)
+- چه ساخته شده و چه در راه است: [Storyها](docs/03-user-stories.md) · [جدا کردن سرویس‌ها](docs/44-split-services-and-install-wizard.md)
 
 ## مشارکت
 

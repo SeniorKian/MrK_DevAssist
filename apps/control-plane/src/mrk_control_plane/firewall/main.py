@@ -23,7 +23,42 @@ DEFAULT_LISTEN = "unix:/run/mrk-firewall/firewall.sock"
 KEY_FILE_NAME = "firewall.key"
 
 
-def load_or_create_key(state_dir: Path) -> tuple[bytes, bool]:
+def load_or_create_key(state_dir: Path, seed: str | None = None) -> tuple[bytes, bool]:
+    """Return (key, newly_created).
+
+    ``seed`` is the pairing key the panel's add-service wizard generated
+    (``MRK_FIREWALL_PAIRING_KEY``). When given it is authoritative: it is written to the key
+    file (mode 0600) if the file is missing or holds another key, so a key
+    regenerated in the wizard takes effect on the next deploy. Nothing is
+    logged for a seeded key: the panel already has it.
+    """
+    if seed is None or not seed.strip():
+        return _load_or_create_key(state_dir)
+    key = decode_key(seed.strip())
+    state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = state_dir / KEY_FILE_NAME
+    if path.exists():
+        if not path.is_file():
+            raise ValueError("firewall key path is not a regular file")
+        raw = path.read_bytes()
+        current = raw if len(raw) == KEY_BYTES else None
+        if current is None:
+            try:
+                current = decode_key(raw.decode("ascii", errors="strict"))
+            except ValueError:
+                current = None
+        if current == key:
+            return key, False
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="ascii") as handle:
+        handle.write(encode_key(key) + "\n")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    return key, False
+
+
+def _load_or_create_key(state_dir: Path) -> tuple[bytes, bool]:
     """Return (key, newly_created). The key file holds base64url text, mode 0600."""
     state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = state_dir / KEY_FILE_NAME
@@ -78,7 +113,7 @@ def run() -> None:
 
     configure_logging(os.getenv("MRK_LOG_LEVEL", "INFO").strip().upper() or "INFO")
     state_dir = Path(os.getenv("MRK_FIREWALL_STATE_DIR", "").strip() or DEFAULT_STATE_DIR)
-    key, created = load_or_create_key(state_dir)
+    key, created = load_or_create_key(state_dir, os.getenv("MRK_FIREWALL_PAIRING_KEY"))
     if created:
         # Shown exactly once. Paste it into Admin UI -> Server -> Firewall -> Pair.
         LOGGER.warning(

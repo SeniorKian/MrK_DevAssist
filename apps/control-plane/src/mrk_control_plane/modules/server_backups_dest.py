@@ -78,7 +78,10 @@ def part_size() -> int:
 
 
 def mrk_s3_endpoint() -> str:
-    return (os.getenv("MRK_S3_ENGINE_URL", "").strip() or DEFAULT_MRK_S3_URL).rstrip("/")
+    # Same resolution as the file manager: env, then a separate engine (docs/44), then loopback.
+    from .s3_client import engine_url
+
+    return engine_url()
 
 
 def mrk_s3_region(data_dir: Path) -> str:

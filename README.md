@@ -27,29 +27,35 @@ to the server.
 - **Operations** — encrypted backups and restore, notifications (Telegram, email, webhooks), roles and audit log, firewall helper.
 - **Made to be simple** — Persian and English interface, a *Simple* and an *Advanced* mode on every page, and every setting documented in the panel.
 
-## Quick start
+## Install
 
-Requirements: a Linux server (amd64/arm64) with Docker and the Compose plugin, and 2 GB of free RAM.
+DevAssist is a **panel** plus optional **services**. The panel is the only thing you install by hand;
+everything else is added from inside it.
+
+**1. Panel** — one command on a Linux server with Docker:
 
 ```bash
 git clone https://github.com/SeniorKian/MrK_DevAssist.git devassist
-cd devassist && docker compose up -d --build
+cd devassist && docker compose up -d
 ```
 
-Every port listens on `127.0.0.1` only. Open a tunnel and visit <http://localhost:8080> to create the owner account:
+Dokploy / Coolify: create a Compose service from this repository's `compose.yaml`.
+No Docker? `sudo bash scripts/install-native.sh install` installs the panel with systemd.
+Then open <http://localhost:8080> through `ssh -L 8080:127.0.0.1:8080 you@your-server` and create the owner account.
 
-```bash
-ssh -L 8080:127.0.0.1:8080 you@your-server
-```
+**2. Services** — in the panel, **My services → Add a service**. The wizard gives a ready
+`compose.yaml` and `.env` for Dokploy, Coolify or `docker compose`, then connects and checks it.
 
-Prefer no Docker? Install directly on Debian or Ubuntu with systemd:
+| Service | Image |
+|---|---|
+| Panel (required) | `ghcr.io/seniorkian/mrk-panel` |
+| Server agent | `ghcr.io/seniorkian/mrk-agent` |
+| DNS | `ghcr.io/seniorkian/mrk-dns` |
+| Firewall | `ghcr.io/seniorkian/mrk-firewall` |
+| File storage (S3) | `ghcr.io/seniorkian/mrk-s3` |
+| npm / PyPI mirrors | coming as their own images; for now `deploy/appliance/compose.yaml` |
 
-```bash
-sudo bash scripts/install-native.sh install --dry-run   # review the plan, then run without --dry-run
-```
-
-Production setup, domains and TLS through Dokploy, and the DNS port 53 guide:
-**[Docker install](docs/install-docker.md)** · **[Native install](docs/install-native.md)**
+More: [Docker install](docs/install-docker.md) · [Native install](docs/install-native.md)
 
 ## Security
 
@@ -60,7 +66,7 @@ Production setup, domains and TLS through Dokploy, and the DNS port 53 guide:
 ## Contributing
 
 Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the setup,
-tests and project conventions. Design notes and user stories live in [`docs/`](docs/).
+tests and project conventions. What is built and planned: [user stories](docs/03-user-stories.md).
 
 ## Support
 

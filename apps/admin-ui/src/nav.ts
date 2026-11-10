@@ -41,6 +41,7 @@ export type DisplayMode = "simple" | "advanced";
 export type PanelKey =
   | "HomePage"
   | "ServicesPage"
+  | "AddServicePanel"
   | "DnsPage"
   | "DnsSetup"
   | "DnsNames"
@@ -130,6 +131,15 @@ export const NAV_GROUPS: NavGroup[] = [
         anyOf: ["services:read", "domains:read"],
         panel: "ServicesPage",
         keywords: ["service", "سرویس", "domain", "دامنه", "traefik", "https", "ssl", "گواهی", "پورت", "port"]
+      },
+      {
+        // docs/44: the panel runs alone; every other part is added from here.
+        key: "add",
+        label: { fa: "افزودن سرویس", en: "Add a service" },
+        hint: { fa: "بخش‌های دیگر DevAssist را با فایل‌های آماده و راهنمای قدم‌به‌قدم نصب کنید.", en: "Install the other parts of DevAssist with ready files and step-by-step help." },
+        anyOf: ["services:read"],
+        panel: "AddServicePanel",
+        keywords: ["install", "نصب", "wizard", "dokploy", "coolify", "compose", "agent", "دستیار", "فایروال", "firewall", "dns"]
       }
     ]
   },

@@ -60,13 +60,23 @@ def _check_workflows(root: Path, dockerfile: str, failures: list[str]) -> None:
                 )
 
 
+# (Compose file, service holding PGlite). The root compose.yaml is the panel-only
+# stack (docs/44); the deploy/appliance files are the legacy all-in-one stack.
+_DATABASE_SERVICES = (
+    ("compose.yaml", "mrk-panel"),
+    ("deploy/appliance/compose.yaml", "mrk-mirror"),
+    ("deploy/appliance/compose.production.yaml", "mrk-mirror"),
+)
+_LEGACY_COMPOSE = ("deploy/appliance/compose.yaml", "deploy/appliance/compose.production.yaml")
+
+
 def _check_runtime_limits(root: Path, failures: list[str]) -> None:
-    for relative in ("compose.yaml", "deploy/appliance/compose.production.yaml"):
+    for relative, name in _DATABASE_SERVICES:
         document = yaml.safe_load((root / relative).read_text(encoding="utf-8"))
         services = document.get("services", {}) if isinstance(document, dict) else {}
-        service = services.get("mrk-mirror", {}) if isinstance(services, dict) else {}
+        service = services.get(name) if isinstance(services, dict) else None
         if not isinstance(service, dict):
-            failures.append(f"{relative}: service mrk-mirror is missing")
+            failures.append(f"{relative}: service {name} is missing")
             continue
         for key in ("mem_limit", "cpus", "pids_limit"):
             _require(key in service, f"{relative}: resource limit {key} is missing", failures)
@@ -104,7 +114,9 @@ def _check_line_endings(root: Path, failures: list[str]) -> None:
         ".gitattributes must force LF for *.sh",
         failures,
     )
-    for path in sorted((root / "deploy/appliance").glob("*")):
+    for path in sorted(
+        [*(root / "deploy/appliance").glob("*"), *(root / "deploy/images").rglob("*")]
+    ):
         if path.is_file() and path.suffix in {".sh", ".conf", ".py", ""}:
             _require(
                 b"\r\n" not in path.read_bytes(),
@@ -141,7 +153,7 @@ def _check_dns_service(root: Path, dockerfile: str, failures: list[str]) -> None
     _require(
         (root / "apps/dns-engine/go.sum").is_file(), "apps/dns-engine/go.sum is missing", failures
     )
-    for relative in ("compose.yaml", "deploy/appliance/compose.production.yaml"):
+    for relative in ("compose.yaml", *_LEGACY_COMPOSE):
         document = yaml.safe_load((root / relative).read_text(encoding="utf-8"))
         services = document.get("services", {}) if isinstance(document, dict) else {}
         if not isinstance(services, dict):
@@ -159,6 +171,8 @@ def _check_dns_service(root: Path, dockerfile: str, failures: list[str]) -> None
                     f"{relative}: service {name} is privileged",
                     failures,
                 )
+        if relative not in _LEGACY_COMPOSE:
+            continue  # the panel stack has no DNS service; the wizard adds it (docs/44)
         dns = services.get("mrk-dns")
         if not isinstance(dns, dict):
             failures.append(f"{relative}: service mrk-dns is missing")
@@ -238,6 +252,27 @@ def main() -> int:
         )
     )
     failures: list[str] = []
+
+    split_dockerfile = (root / "deploy/images/Dockerfile").read_text(encoding="utf-8")
+    for target in ("panel", "agent", "firewall", "dns", "s3"):
+        _require(
+            re.search(rf"^FROM\s+\S+\s+AS\s+{target}$", split_dockerfile, re.MULTILINE)
+            is not None,
+            f"deploy/images/Dockerfile is missing the {target} target",
+            failures,
+        )
+    split_bases = re.findall(r"^FROM\s+(\S+:\S+)\s", split_dockerfile, flags=re.MULTILINE)
+    _require(
+        all("@sha256:" in image for image in split_bases),
+        "every deploy/images/Dockerfile base image must be digest-pinned",
+        failures,
+    )
+    _require(
+        "COPY LICENSE /opt/mrk/LICENSE" in split_dockerfile
+        and "setcap" not in split_dockerfile,
+        "split images must carry the MIT license text and set no file capabilities",
+        failures,
+    )
 
     from_lines = re.findall(r"^FROM\s+(\S+)", dockerfile, flags=re.MULTILINE)
     _require(bool(from_lines), "Dockerfile has no FROM lines", failures)

@@ -83,6 +83,9 @@ class AccessKey:
     access_key_id: str
     secret_ref: str
     enabled: bool
+    # Pushed by the panel to an engine in its own container (docs/44), which cannot
+    # read the panel's SecretStore. None = look the secret up by secret_ref.
+    secret: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,7 +307,15 @@ def _parse_identity(item: Any) -> Identity | None:
         ref = raw.get("secret_ref")
         if not isinstance(akid, str) or not akid or not isinstance(ref, str) or not ref:
             continue
-        keys.append(AccessKey(akid, ref, raw.get("enabled", True) is True))
+        inline = raw.get("secret_access_key")
+        keys.append(
+            AccessKey(
+                akid,
+                ref,
+                raw.get("enabled", True) is True,
+                inline if isinstance(inline, str) and inline else None,
+            )
+        )
     return Identity(
         id=identity_id,
         name=name,
@@ -374,6 +385,30 @@ class SnapshotManager:
             )
             return True
 
+    def accept(self, payload: object) -> str | None:
+        """Store a snapshot pushed over the admin API (docs/44). Returns an error or None.
+
+        It is validated first, so a bad push never replaces the last good config.
+        The file holds access-key secrets: mode 0600, atomic replace.
+        """
+        if not isinstance(payload, dict):
+            return "config must be a JSON object"
+        try:
+            parse_snapshot(payload, self.settings, 0)
+        except ValueError as exc:
+            return str(exc)[:300]
+        path = self.settings.config_file
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        self.reload(force=True)
+        return self.last_error
+
     def secret_for(self, access_key_id: str) -> str | None:
         snapshot = self.current
         if snapshot is None:
@@ -384,6 +419,8 @@ class SnapshotManager:
         identity, key = entry
         if not identity.enabled or not key.enabled:
             return None
+        if key.secret is not None:
+            return key.secret
         now = time.monotonic()
         cached = self._secrets.get(key.secret_ref)
         if cached and cached[1] > now:

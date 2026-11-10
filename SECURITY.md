@@ -66,6 +66,6 @@ Out of scope:
 - Access to the Docker socket (Host Agent) is equivalent to root on the host. The agent only
   sends allowlisted Docker API calls and only answers HMAC-signed requests.
 - Backups are encrypted with AES-256-GCM (scrypt key derivation); restore is offline only.
-- Details: [docs/09-security-access-review.md](docs/09-security-access-review.md),
-  [docs/05-api-data-security.md](docs/05-api-data-security.md),
-  [deploy/appliance/README.md](deploy/appliance/README.md).
+- Every service runs in its own container with its own minimal rights; the panel reaches them
+  only over an internal Docker network and with a per-service key (docs/44).
+- Earlier security reviews are archived in git history (see the table in docs/03-user-stories.md).

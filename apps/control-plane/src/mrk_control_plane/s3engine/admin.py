@@ -9,6 +9,8 @@ Every request needs ``X-MRK-Admin-Token`` equal to ``/data/modules/s3/admin.toke
   buckets only lose their index, never files)
 * ``GET /admin/links`` -> folders mounted under the link roots
 * ``POST /admin/reload``, ``POST /admin/gc``, ``POST /admin/buckets/{b}/rescan``
+* ``PUT /admin/config`` -> store a snapshot pushed by the panel (engine in its own
+  container, docs/44); validated before it replaces the last good one
 * ``GET /admin/buckets/{b}/lifecycle`` -> rules, versioning state, last run summary
 * ``POST /admin/buckets/{b}/lifecycle/preview`` -> dry-run ("would delete N objects / B bytes")
 * ``POST /admin/lifecycle/run`` -> run every bucket's lifecycle rules now
@@ -27,6 +29,7 @@ from urllib.parse import parse_qs, unquote
 
 from . import lifecycle
 from .linked import LinkedBucket
+from .snapshot import MAX_CONFIG_BYTES
 
 if TYPE_CHECKING:
     from .engine import Engine
@@ -94,15 +97,53 @@ class AdminApi:
         if not token or not hmac.compare_digest(token.encode(), self.engine.admin_token.encode()):
             await self._json(send, 401, {"error": "unauthorized"})
             return
+        method = scope["method"].upper()
+        path = scope.get("path", "/")
+        if method == "PUT" and path.rstrip("/") == "/admin/config":
+            body = await self._body(receive)
+            if body is None:
+                await self._json(send, 413, {"error": "config_too_large"})
+                return
+            try:
+                pushed = json.loads(body)
+            except (ValueError, UnicodeDecodeError):
+                await self._json(send, 400, {"error": "invalid_json"})
+                return
+            error = await asyncio.to_thread(self.engine.snapshots.accept, pushed)
+            if error is not None:
+                await self._json(send, 422, {"error": "invalid_config", "detail": error})
+                return
+            snapshot = self.engine.snapshots.current
+            await self._json(send, 200, {
+                "ok": True, "buckets": len(snapshot.buckets) if snapshot else 0,
+            })
+            return
         try:
             status, payload = await self.route(
-                scope["method"].upper(),
-                scope.get("path", "/"),
+                method,
+                path,
                 scope.get("query_string", b"").decode(),
             )
         except Exception:
             status, payload = 500, {"error": "internal_error"}
         await self._json(send, status, payload)
+
+    @staticmethod
+    async def _body(receive: Any) -> bytes | None:
+        """The request body, or None when it is larger than a snapshot may be."""
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return b"".join(chunks)
+            chunk = message.get("body", b"")
+            size += len(chunk)
+            if size > MAX_CONFIG_BYTES:
+                return None
+            chunks.append(chunk)
+            if not message.get("more_body"):
+                return b"".join(chunks)
 
     async def _json(self, send: Any, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")

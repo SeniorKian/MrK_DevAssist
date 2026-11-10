@@ -98,6 +98,49 @@ Evidence: test/report/ADR reference
 | US-143 | Done | 2026-11-07 | Gate 10 | bounded load gate و GitHub-hosted soak |
 | US-144 | Done | 2026-11-07 | Gate 10 | Alembic downgrade/upgrade + data preservation |
 
+## بایگانی سندهای طراحی — 2026-11-10
+
+همه سندهای طراحی، برنامه‌ریزی و قرارداد Gateها که پیاده‌سازی و تست شده‌اند حذف شدند تا مخزن سبک بماند.
+آنچه واقعاً ساخته شد در Epicهای همین سند است؛ کامنت‌های کد که به «docs/NN» اشاره می‌کنند به این متن‌ها در
+تاریخچه git اشاره دارند. ماندند: همین سند، [18](18-operations-runbooks.md) (runbook عملیاتی)،
+[44](44-split-services-and-install-wizard.md) (جدا کردن سرویس‌ها، فازهای باقی‌مانده) و سندهای قابلیت‌های
+هنوز ساخته‌نشده: [21](21-uptime-monitoring-module.md) و [24](24-native-uptime-engine-spec.md) (Uptime)،
+[23](23-adr-native-modules-and-resource-budget.md) (ADR ماژول‌های بومی)، [26](26-oci-registry-module-spec.md) (رجیستری OCI).
+
+| سند حذف‌شده | موضوع | متن کامل |
+|---|---|---|
+| docs/01 | 01 — محصول و دامنه | `git show 4fea430:docs/01-product-and-scope.md` |
+| docs/02 | 02 — معماری و انتخاب ریپوها | `git show 4fea430:docs/02-architecture-and-repository-selection.md` |
+| docs/04 | 04 — Roadmap و برنامه تحویل | `git show 4fea430:docs/04-roadmap-and-delivery.md` |
+| docs/05 | 05 — API، مدل داده و امنیت | `git show 4fea430:docs/05-api-data-security.md` |
+| docs/06 | 06 — تست، مشاهده‌پذیری و عملیات | `git show 4fea430:docs/06-testing-observability-operations.md` |
+| docs/07 | 07 — شروع پیاده‌سازی | `git show 4fea430:docs/07-implementation-start.md` |
+| docs/08 | 08 — Scorecard انتخاب ریپوها | `git show 4fea430:docs/08-repository-selection-scorecard.md` |
+| docs/09 | 09 — بازبینی امنیت و دسترسی | `git show 4fea430:docs/09-security-access-review.md` |
+| docs/10 | 10 — Execution Plan آینده | `git show 4fea430:docs/10-execution-plan.md` |
+| docs/11 | Process Supervision and Health Contract | `git show 4fea430:docs/11-process-supervision-and-health.md` |
+| docs/12 | CI/CD and GHCR Release | `git show 4fea430:docs/12-ci-cd-and-release.md` |
+| docs/13 | Gate 2 — npm Registry | `git show 4fea430:docs/13-gate2-npm-registry.md` |
+| docs/14 | Professional bilingual admin UI | `git show 4fea430:docs/14-professional-admin-ui.md` |
+| docs/15 | Gate 3 — PyPI Registry Baseline | `git show 4fea430:docs/15-gate3-pypi-registry.md` |
+| docs/16 | Gate 4 — Multi-upstream Failover Router | `git show 4fea430:docs/16-gate4-failover-router.md` |
+| docs/17 | Gate 5 — Identity and Access | `git show 4fea430:docs/17-gate5-identity-access.md` |
+| docs/19 | 19 — Production Release Gate | `git show 4fea430:docs/19-production-release-gate.md` |
+| docs/20 | 20 — معماری Modular Appliance و مسیریابی دامنه | `git show 4fea430:docs/20-modular-appliance-and-domain-routing.md` |
+| docs/22 | 22 — طراحی ماژول DNS Management | `git show 4fea430:docs/22-dns-management-module.md` |
+| docs/25 | Clean-room DNS engine for MRK Appliance — behavioural study of Technitium DNS | `git show 4fea430:docs/25-native-dns-engine-spec.md` |
+| docs/27 | 27 — اصل «همه‌چیز قابل‌تنظیم» و فهرست تنظیم | `git show 4fea430:docs/27-configurability-and-settings.md` |
+| docs/28 | 28 — ماژول‌های کنترل سرور در کنار Dokploy | `git show 4fea430:docs/28-server-control-modules.md` |
+| docs/29 | 29 — قراردادهای Gate 17 (Dokploy، مانیتورینگ، لاگ، | `git show 4fea430:docs/29-gate17-contracts.md` |
+| docs/30 | MRK S3-Compatible Object Storage Module — Engineering Spec (research draft) | `git show 4fea430:docs/30-s3-object-storage-spec.md` |
+| docs/31 | 31 — قراردادهای Gate 18 (سرویس S3، بکاپ سرور و دیت | `git show 4fea430:docs/31-gate18-contracts.md` |
+| docs/32 | 32 — قراردادهای Gate 19 (فایروال و ضدحمله، اسکن | `git show 4fea430:docs/32-gate19-contracts.md` |
+| docs/33 | MRK admin panel: UX redesign plan (Simple for everyone, Advanced for everything) | `git show 4fea430:docs/33-ux-redesign-plan.md` |
+| docs/34 | 34 — قراردادهای بک‌اند برای بازطراحی پنل (خا | `git show 4fea430:docs/34-ui-backend-contracts.md` |
+| docs/42 | 42 — برنامه «فضای من»: مدیریت کل در برابر کار | `git show 4fea430:docs/42-my-space-plan.md` |
+| docs/43 | 43 — قرارداد «فضای من» (فضای کاری، بسته، مالک | `git show 4fea430:docs/43-my-space-contract.md` |
+| docs/_research-tenancy | Research: Multi-tenancy & "customer area" models for DevAssist | `git show 4fea430:docs/_research-tenancy.md` |
+
 ## بایگانی سندهای طراحی — 2026-11-09
 
 سندهای طراحی/قرارداد زیر پس از پیاده‌سازی حذف شدند. قابلیت، معیار پذیرشِ واقعاً پیاده‌شده (از بخش «پذیرش» و §0
@@ -1579,6 +1622,37 @@ DoH3 نیست.
 - همگام‌سازی پس از هر تغییر دامنه؛ نتیجه در `sync.dns` پاسخ‌های دامنه؛ بدون موتور هم تنظیم ذخیره می‌شود.
 
 وضعیت: انجام‌شده — commit `1a568bf` (D1)؛ جایگزین docs/37.
+
+## Epic E19 — نصب جدا: پنل اول، سرویس‌ها از داخل پنل
+
+طرح و فازها: [سند 44](44-split-services-and-install-wizard.md).
+
+### US-200 — پنل به تنهایی نصب می‌شود
+**به عنوان** مدیر سرور **می‌خواهم** فقط پنل را با یک فرمان (Docker، Dokploy، Coolify یا نصب بومی) بالا بیاورم.
+- پذیرش: `compose.yaml` ریشه فقط `mrk-panel` (پنل + PGlite) را دارد و بدون هیچ سرویس دیگری ready می‌شود؛
+  شبکه `mrk-net` و volumeهای `mrk-dns-run`/`mrk-firewall-run` را با نام ثابت می‌سازد.
+- پذیرش: npm و PyPI که در این نصب نیستند «نصب نشده» نشان داده می‌شوند، نه «خراب».
+- پذیرش: نصب بومی (`scripts/install-native.sh`) فقط پنل را نصب می‌کند؛ بقیه سرویس‌ها همیشه Docker هستند.
+- وضعیت: **تحویل شد** (2026-11-10).
+
+### US-201 — ویزارد «افزودن سرویس»
+**به عنوان** مدیر **می‌خواهم** هر سرویس را از «سرویس‌های من ← افزودن سرویس» با راهنمای قدم‌به‌قدم نصب کنم.
+- پذیرش: روش اجرا (Dokploy، Coolify، Docker Compose)، تنظیمات با پیش‌فرض، `compose.yaml` و `.env` آماده
+  با دکمه کپی/دریافت، و «اتصال و امتحان» که پنل را وصل و جواب دادن سرویس را بررسی می‌کند.
+- پذیرش: بعد از ساختن حساب مالک، پنل مستقیم این صفحه را باز می‌کند.
+- پذیرش: کلید اتصال را پنل می‌سازد (Agent، فایروال) یا از قبل دارد (S3) و فقط یک بار در `.env` نشان می‌دهد؛
+  سرویس آن را از env می‌خواند و دیگر لازم نیست کلید از گزارش‌ها پیدا شود.
+- وضعیت: **تحویل شد** برای Agent، DNS، فایروال و S3؛ npm و PyPI «به‌زودی».
+
+### US-202 — S3 در کانتینر جدا
+- پذیرش: پنل snapshot سطل‌ها، کاربران و کلیدها را با `PUT /admin/config` روی `mrk-net` می‌فرستد؛ موتور آن را
+  اعتبارسنجی و در volume خودش (0600) نگه می‌دارد؛ اگر موتور با volume خالی برگردد، پنل حداکثر ۳۰ ثانیه بعد
+  دوباره می‌فرستد. مدیر فایل، پشتیبان‌ها و «فضای من» از نشانی موتور جدا استفاده می‌کنند.
+- وضعیت: **تحویل شد** (تست e2e با دو کانتینر واقعی و کلاینت boto3).
+
+### US-203 — نصب خودکار از طرف پنل (Dokploy/Coolify API)
+- پذیرش: پنل با کلید API ‏Dokploy یا Coolify سرویس را خودش می‌سازد، env و دامنه را تنظیم و deploy می‌کند.
+- وضعیت: **برنامه‌ریزی‌شده** (فاز ۶).
 
 ## Definition of Done برای همه Storyها
 

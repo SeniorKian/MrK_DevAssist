@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import hmac
+import json
 import os
 import xml.etree.ElementTree as ET  # noqa: S405 - responses come from our own loopback engine
 from collections.abc import AsyncIterator, Callable, Iterable
@@ -32,12 +33,74 @@ _MAX_XML_BODY = 16 * 1024 * 1024
 TRANSPORT_FACTORY: Callable[[], httpx.AsyncBaseTransport] | None = None
 
 
+# docs/44: the engine may run in its own container (image mrk-s3). The add-service
+# wizard saves its addresses here; environment variables still win.
+REMOTE_FILE = "s3-engine.json"
+_REMOTE_PATH: Path | None = None
+
+
+def configure_remote(data_dir: Path) -> None:
+    global _REMOTE_PATH
+    _REMOTE_PATH = data_dir / "control-plane" / REMOTE_FILE
+
+
+def validate_engine_url(value: str) -> str:
+    text = value.strip().rstrip("/")
+    parts = urlsplit(text)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise ValueError("S3 engine URL must be http(s)://host:port")
+    if parts.username or parts.password or parts.query or parts.fragment or parts.path:
+        raise ValueError("S3 engine URL must not contain credentials, a path or a query")
+    if any(ch.isspace() for ch in text):
+        raise ValueError("S3 engine URL must not contain spaces")
+    return text
+
+
+def remote_config() -> dict[str, str] | None:
+    """``{"engine_url", "admin_url"}`` of a separate engine, or None (bundled engine)."""
+    if _REMOTE_PATH is None:
+        return None
+    try:
+        payload = json.loads(_REMOTE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return {
+            "engine_url": validate_engine_url(str(payload["engine_url"])),
+            "admin_url": validate_engine_url(str(payload["admin_url"])),
+        }
+    except (KeyError, ValueError):
+        return None
+
+
+def is_remote() -> bool:
+    return remote_config() is not None
+
+
+def save_remote(engine: str, admin: str) -> dict[str, str]:
+    if _REMOTE_PATH is None:
+        raise RuntimeError("remote S3 engine path is not configured")
+    payload = {"engine_url": validate_engine_url(engine), "admin_url": validate_engine_url(admin)}
+    _REMOTE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _REMOTE_PATH.with_name(f".{REMOTE_FILE}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, _REMOTE_PATH)
+    return payload
+
+
 def engine_url() -> str:
-    return (os.getenv("MRK_S3_ENGINE_URL", "").strip() or DEFAULT_ENGINE_URL).rstrip("/")
+    remote = remote_config()
+    fallback = remote["engine_url"] if remote else DEFAULT_ENGINE_URL
+    return (os.getenv("MRK_S3_ENGINE_URL", "").strip() or fallback).rstrip("/")
 
 
 def admin_url() -> str:
-    return (os.getenv("MRK_S3_ADMIN_URL", "").strip() or DEFAULT_ADMIN_URL).rstrip("/")
+    remote = remote_config()
+    fallback = remote["admin_url"] if remote else DEFAULT_ADMIN_URL
+    return (os.getenv("MRK_S3_ADMIN_URL", "").strip() or fallback).rstrip("/")
 
 
 def new_client(timeout: httpx.Timeout | float = 30.0) -> httpx.AsyncClient:
@@ -510,7 +573,12 @@ class EngineAdmin:
 
     def __init__(self, token_path: Path, base_url: str | None = None) -> None:
         self.token_path = token_path
-        self.base_url = (base_url or admin_url()).rstrip("/")
+        self._base_url = base_url.rstrip("/") if base_url else None
+
+    @property
+    def base_url(self) -> str:
+        # Resolved per call: the wizard may move the engine to its own container.
+        return self._base_url or admin_url()
 
     def _token(self) -> str:
         try:

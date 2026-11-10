@@ -17,11 +17,12 @@ and you follow the [Code of Conduct](CODE_OF_CONDUCT.md). Security problems go t
 | `apps/control-plane` | FastAPI control plane (panel API, modules, PyPI router, S3 engine, Host Agent, firewall helper), Python 3.13 |
 | `apps/admin-ui` | React 19 + TypeScript + Material UI admin panel (Persian/RTL first) |
 | `apps/dns-engine` | Go DNS engine (`mrk-dns`, `mrk-dnsbench`) |
-| `deploy/appliance` | Dockerfile, production Compose, Supervisor config, entrypoint, devpi scripts, runtime pins |
-| `deploy/native` | systemd units and helpers for the native install |
+| `deploy/images` | the split images: one Dockerfile, one target per service (panel, agent, firewall, dns, s3) |
+| `deploy/appliance` | legacy all-in-one image (still carries npm and PyPI), entrypoint, runtime pins |
+| `deploy/native` | systemd unit and helpers for the native (panel-only) install |
 | `deploy/verdaccio`, `deploy/pglite` | pinned npm packages of Verdaccio and PGlite |
 | `scripts` | CI checks, smoke/e2e tests, release validation, `install-native.sh` |
-| `docs` | design documents, contracts (`NN-*.md`), install guides |
+| `docs` | install guides, user stories (what is built), plans for what is not built yet |
 | `versions.lock.yaml` | every pinned component and base image digest |
 
 ## Development setup
@@ -162,7 +163,7 @@ Larger features follow the workflow used for every gate so far:
    Describe the engine ↔ backend ↔ panel contract: endpoints, payloads, error codes, settings,
    permissions, audit events, limits. Open a PR or issue to discuss it before large code.
 2. **Implement** against the contract, with tests.
-3. **Record changes** in the contract's "changes" section (see docs/43 §0) when the
+3. **Record changes** in the contract's "changes" section (a «changes» section at the top) when the
    implementation differs, so the doc stays true.
 4. **Update user-facing docs** (README, install guides, `deploy/appliance/README.md`) and the
    settings registry. Completed gates are later summarised into `docs/03-user-stories.md`

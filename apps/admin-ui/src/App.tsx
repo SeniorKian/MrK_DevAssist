@@ -209,7 +209,11 @@ export function App() {
 
   const setup = async (values: SetupValues) => {
     const result = await createAccount("/api/v1/auth/setup", values);
-    if (result === true) setSetupRequired(false);
+    if (result === true) {
+      setSetupRequired(false);
+      // docs/44: a fresh panel runs alone; the next step is adding services.
+      window.history.replaceState(null, "", "#/services/add");
+    }
     return result;
   };
 

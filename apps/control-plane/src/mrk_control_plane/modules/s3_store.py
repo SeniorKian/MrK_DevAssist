@@ -228,6 +228,8 @@ class S3Store:
         self.secrets = secret_store
         self._snapshot_lock = threading.Lock()
         self._panel_lock = threading.Lock()
+        # A separate engine (docs/44) missed the last snapshot; the S3 module retries.
+        self.push_pending = False
 
     # ------------------------------------------------------------ bootstrap
 
@@ -387,7 +389,63 @@ class S3Store:
 
     def write_snapshot(self) -> None:
         self._write_snapshot_file()
-        self._notify_engine()
+        from .s3_client import is_remote
+
+        if is_remote():
+            self.push_snapshot()
+        else:
+            self._notify_engine()
+
+    def admin_token(self) -> str:
+        """The admin token shared with the engine (created on first use)."""
+        self.ensure_admin_token()
+        return self.admin_token_path.read_text(encoding="utf-8").strip()
+
+    def remote_snapshot(self) -> dict[str, Any]:
+        """The snapshot for an engine in its own container (docs/44).
+
+        That engine cannot read the panel's SecretStore, so each access key carries
+        its secret. It is sent only over the authenticated admin API and the engine
+        keeps it in its own 0600 config file.
+        """
+        payload = self.snapshot()
+        for identity in payload["identities"]:
+            for key in identity.get("keys") or []:
+                try:
+                    value = self.secrets.get(key["secret_ref"])
+                except (KeyError, ValueError, OSError):
+                    continue
+                secret = value.get("secret_access_key") or value.get("secret")
+                if secret:
+                    key["secret_access_key"] = secret
+        return payload
+
+    def push_snapshot(self) -> bool:
+        """Send the snapshot to a separate engine. False (and retried later) on failure."""
+        import urllib.request
+
+        from .s3_client import ADMIN_TOKEN_HEADER, admin_url
+
+        base = admin_url()
+        if not base.startswith(("http://", "https://")):
+            self.push_pending = True
+            return False
+        body = json.dumps(self.remote_snapshot(), ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(  # noqa: S310 - scheme checked above
+            f"{base}/admin/config",
+            data=body,
+            method="PUT",
+            headers={ADMIN_TOKEN_HEADER: self.admin_token(), "Content-Type": "application/json"},
+        )
+        try:
+            # Operator-configured internal URL (mrk-net), never a proxy.
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(request, timeout=5) as response:  # noqa: S310
+                ok = 200 <= response.status < 300
+        except Exception:  # noqa: BLE001 - the engine may be down; retried later
+            ok = False
+        self.push_pending = not ok
+        return ok
 
     def _notify_engine(self) -> None:
         """Ask the engine to reload now (best effort; it also polls every ~2s).

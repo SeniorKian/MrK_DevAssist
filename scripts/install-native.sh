@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
-# install-native.sh — install DevAssist without Docker (systemd), on
-# Debian 12/13 or Ubuntu 22.04/24.04, amd64 or arm64.
+# install-native.sh — install the MrK DevAssist PANEL without Docker (systemd),
+# on Debian 12/13 or Ubuntu 22.04/24.04, amd64 or arm64.
 #
-# It reproduces what deploy/appliance/Dockerfile builds and what the containers
-# run, from this source checkout:
-#   * Python (version from versions.lock.yaml) in a venv with the control plane
-#     and deploy/appliance/requirements.txt, pins checked like the Dockerfile;
-#   * Node (versions.lock.yaml) for Verdaccio and PGlite, `npm ci` from the
-#     lockfiles (integrity hashes enforced), and the built admin UI;
-#   * the Go DNS engine built from apps/dns-engine (go.sum enforced), or a
-#     prebuilt binary (--dns-binary);
-#   * the unchanged deploy/appliance/supervisord.conf and devpi scripts, run
-#     by systemd units from deploy/native/systemd/.
+# Only the panel is native: the same two programs as the `panel` image target of
+# deploy/images/Dockerfile (PGlite + control plane, deploy/images/panel/supervisord.conf),
+# built from this checkout with the versions of versions.lock.yaml:
+#   * Python in a venv with apps/control-plane and deploy/appliance/requirements.txt
+#     (pins checked like the Dockerfile);
+#   * Node for PGlite (`npm ci`, lockfile hashes enforced) and the built admin UI.
+# Every other service (agent, DNS, firewall, S3, npm, PyPI) runs in Docker and is
+# added from the panel: My services -> Add a service (docs/44).
 #
 # Guide: docs/install-native.md (Persian: docs/install-native.fa.md).
 #
-#   sudo bash scripts/install-native.sh install [--with-dns] [--with-firewall] [--with-agent]
+#   sudo bash scripts/install-native.sh install
 #   sudo bash scripts/install-native.sh upgrade     # after `git pull`
 #   sudo bash scripts/install-native.sh status
 #   sudo bash scripts/install-native.sh uninstall [--purge]
@@ -36,14 +34,21 @@ readonly RUNTIMES="$PREFIX/runtimes"
 readonly MARKER="$PREFIX/.devassist-native"
 readonly CONF_DIR="/etc/devassist"
 readonly INSTALL_CONF="$CONF_DIR/install.conf"
+readonly ENV_FILE="$CONF_DIR/devassist.env"
 readonly CACHE_DIR="/var/cache/devassist"
 readonly UNIT_DIR="/etc/systemd/system"
+readonly UNIT="devassist.service"
+readonly TMPFILES="/etc/tmpfiles.d/devassist.conf"
 readonly EXEC_HELPER="/usr/local/sbin/devassist-exec"
 readonly RUN_USER="devassist"
+# uid/gid of the service images: Docker services write their sockets as 10001.
 readonly PREFERRED_ID=10001
-# Fixed sub-directories of the data volume (deploy/appliance/entrypoint.py).
-readonly DATA_SUBDIRS=(database npm npm/config npm/storage pypi pypi/server pypi/auth control-plane router)
-readonly MAIN_PORTS=(8080 4873 3141 9000 9001 5433 3142)
+# Data layout of the panel image (deploy/images/Dockerfile, deploy/appliance/entrypoint.py).
+readonly DATA_SUBDIRS=(database control-plane modules)
+# Host directories the DNS and firewall containers bind-mount for their sockets.
+readonly SOCKET_DIRS=(/run/mrk-dns /run/mrk-firewall)
+# Units of older native installs (before docs/44); only ever removed.
+readonly LEGACY_UNITS=(devassist-agent devassist-firewall devassist-dns)
 
 # ----------------------------------------------------------------------------- options
 
@@ -51,61 +56,50 @@ COMMAND="install"
 DRY_RUN=0
 ASSUME_YES=0
 PURGE=0
-WITH_DNS=0
-WITH_FIREWALL=0
-WITH_AGENT=0
 DATA_DIR="/var/lib/devassist"
 SKIP_PORT_CHECK=0
 SKIP_OS_CHECK=0
-MIN_FREE_GB=5
-DNS_BINARY=""
-DNSBENCH_BINARY=""
+MIN_FREE_GB=3
 PYTHON_OVERRIDE=""
 PIP_INDEX_URL=""
 NPM_REGISTRY=""
-GOPROXY_URL=""
 NO_START=0
 REBUILD=0
 LANG_MODE="both"
 
 NODE_DIST="${DEVASSIST_NODE_DIST:-https://nodejs.org/dist}"
-GO_DIST="${DEVASSIST_GO_DIST:-https://dl.google.com/go}"
 UV_DIST="${DEVASSIST_UV_DIST:-https://github.com/astral-sh/uv/releases/download}"
 
 usage() {
     cat <<'EOF'
 Usage: sudo bash scripts/install-native.sh [COMMAND] [OPTIONS]
 
+Installs only the panel. Add the other services from the panel (they run in Docker).
+
 Commands:
   install     install or repair (default; safe to run again)
   upgrade     build the current checkout, then switch with a short restart
-  status      show units, release and health
+  status      show the unit, release and health
   uninstall   remove programs and units (data and /etc/devassist are kept)
 
 Options:
-  --with-dns            also install the DNS engine (devassist-dns, port 53)
-  --with-firewall       also install the nftables firewall helper (devassist-firewall)
-  --with-agent          also install the Host Agent (devassist-agent, needs Docker)
   --data-dir DIR        data directory on the host (default /var/lib/devassist)
-  --dns-binary PATH     use this prebuilt mrk-dns instead of building it with Go
-  --dnsbench-binary PATH  prebuilt mrk-dnsbench (optional, with --dns-binary)
   --python PATH         use an existing Python 3.13 instead of the pinned build
   --pip-index-url URL   PyPI mirror for the build (trusted like PyPI: pip checks no hashes)
   --npm-registry URL    npm mirror for the build (lockfile hashes still enforced)
-  --goproxy URL         Go module proxy for the build (go.sum still enforced)
   --rebuild             rebuild even if this commit is already built
-  --no-start            install but do not start or restart services
+  --no-start            install but do not start or restart the service
   --skip-port-check     do not stop when a needed port is in use
   --skip-os-check       allow an untested distribution (unsupported)
-  --min-free-gb N       free disk space required (default 5)
+  --min-free-gb N       free disk space required (default 3)
   --purge               with uninstall: also delete data, config and the user
   --yes                 do not ask for confirmation
   --dry-run             print what would be done, change nothing
   --lang fa|en|both     message language (default both)
   -h, --help            this help
 
-Download mirrors (environment): DEVASSIST_NODE_DIST, DEVASSIST_GO_DIST,
-DEVASSIST_UV_DIST, and uv's own UV_PYTHON_INSTALL_MIRROR for Python builds.
+Download mirrors (environment): DEVASSIST_NODE_DIST, DEVASSIST_UV_DIST, and
+uv's own UV_PYTHON_INSTALL_MIRROR for Python builds.
 EOF
 }
 
@@ -116,16 +110,10 @@ parse_args() {
     fi
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --with-dns) WITH_DNS=1 ;;
-            --with-firewall) WITH_FIREWALL=1 ;;
-            --with-agent) WITH_AGENT=1 ;;
             --data-dir) DATA_DIR="${2:?--data-dir needs a value}"; shift ;;
-            --dns-binary) DNS_BINARY="${2:?--dns-binary needs a value}"; shift ;;
-            --dnsbench-binary) DNSBENCH_BINARY="${2:?--dnsbench-binary needs a value}"; shift ;;
             --python) PYTHON_OVERRIDE="${2:?--python needs a value}"; shift ;;
             --pip-index-url) PIP_INDEX_URL="${2:?--pip-index-url needs a value}"; shift ;;
             --npm-registry) NPM_REGISTRY="${2:?--npm-registry needs a value}"; shift ;;
-            --goproxy) GOPROXY_URL="${2:?--goproxy needs a value}"; shift ;;
             --rebuild) REBUILD=1 ;;
             --no-start) NO_START=1 ;;
             --skip-port-check) SKIP_PORT_CHECK=1 ;;
@@ -219,6 +207,7 @@ confirm() {
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+unit_active() { systemctl is-active --quiet "$1" 2>/dev/null; }
 
 # ----------------------------------------------------------------------------- versions.lock.yaml
 
@@ -238,10 +227,9 @@ load_pins() {
         "versions.lock.yaml not found; run the script from the repository checkout"
     PY_VERSION="$(lock_version python)"
     NODE_VERSION="$(lock_version node)"
-    GO_VERSION="$(lock_version golang)"
     UV_VERSION="$(lock_version uv)"
     local name
-    for name in PY_VERSION NODE_VERSION GO_VERSION UV_VERSION; do
+    for name in PY_VERSION NODE_VERSION UV_VERSION; do
         [[ "${!name}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "نسخه $name در versions.lock.yaml خوانده نشد" \
             "could not read $name from versions.lock.yaml"
     done
@@ -262,24 +250,25 @@ require_root() {
 
 check_os() {
     [[ -r /etc/os-release ]] || die "/etc/os-release نیست؛ توزیع شناخته نشد" "cannot read /etc/os-release"
+    local os_id os_version
     # shellcheck disable=SC1091
-    OS_ID="$(. /etc/os-release && printf '%s' "${ID:-}")"
+    os_id="$(. /etc/os-release && printf '%s' "${ID:-}")"
     # shellcheck disable=SC1091
-    OS_VERSION="$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")"
-    case "$OS_ID:$OS_VERSION" in
+    os_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")"
+    case "$os_id:$os_version" in
         debian:12|debian:13|ubuntu:22.04|ubuntu:24.04)
-            info "سیستم‌عامل: $OS_ID $OS_VERSION" "OS: $OS_ID $OS_VERSION" ;;
+            info "سیستم‌عامل: $os_id $os_version" "OS: $os_id $os_version" ;;
         *)
             if [[ $SKIP_OS_CHECK -eq 1 ]]; then
-                warn "توزیع $OS_ID $OS_VERSION آزموده نشده است" "untested distribution $OS_ID $OS_VERSION"
+                warn "توزیع $os_id $os_version آزموده نشده است" "untested distribution $os_id $os_version"
             else
-                die "فقط Debian 12/13 و Ubuntu 22.04/24.04 پشتیبانی می‌شوند ($OS_ID $OS_VERSION)" \
-                    "only Debian 12/13 and Ubuntu 22.04/24.04 are supported (found $OS_ID $OS_VERSION)"
+                die "فقط Debian 12/13 و Ubuntu 22.04/24.04 پشتیبانی می‌شوند ($os_id $os_version)" \
+                    "only Debian 12/13 and Ubuntu 22.04/24.04 are supported (found $os_id $os_version)"
             fi ;;
     esac
     case "$(uname -m)" in
-        x86_64) NODE_ARCH="x64"; GO_ARCH="amd64"; UV_TRIPLE="x86_64-unknown-linux-gnu" ;;
-        aarch64|arm64) NODE_ARCH="arm64"; GO_ARCH="arm64"; UV_TRIPLE="aarch64-unknown-linux-gnu" ;;
+        x86_64) NODE_ARCH="x64"; UV_TRIPLE="x86_64-unknown-linux-gnu" ;;
+        aarch64|arm64) NODE_ARCH="arm64"; UV_TRIPLE="aarch64-unknown-linux-gnu" ;;
         *) die "معماری $(uname -m) پشتیبانی نمی‌شود (فقط amd64 و arm64)" \
             "unsupported architecture $(uname -m) (amd64 and arm64 only)" ;;
     esac
@@ -295,9 +284,8 @@ check_data_dir() {
         /|/opt/mrk|/opt/mrk/*|/etc|/etc/*|/usr|/usr/*|/proc*|/sys*|/dev*|/run*|/tmp*)
             die "این مسیر برای داده مناسب نیست: $DATA_DIR" "not a valid data directory: $DATA_DIR" ;;
     esac
-    if [[ -L "$DATA_DIR" ]]; then
-        die "مسیر داده نباید symlink باشد: $DATA_DIR" "the data directory must not be a symlink: $DATA_DIR"
-    fi
+    [[ ! -L "$DATA_DIR" ]] || die "مسیر داده نباید symlink باشد: $DATA_DIR" \
+        "the data directory must not be a symlink: $DATA_DIR"
 }
 
 # free_kb PATH -> free KiB on the filesystem holding PATH (or its nearest parent)
@@ -308,7 +296,7 @@ free_kb() {
 }
 
 check_resources() {
-    local need_kb=$((MIN_FREE_GB * 1024 * 1024)) path free
+    local need_kb=$((MIN_FREE_GB * 1024 * 1024)) path free mem_kb
     for path in "$PREFIX" "$CACHE_DIR" "$DATA_DIR"; do
         free="$(free_kb "$path")"
         if [[ -z "$free" || "$free" -lt "$need_kb" ]]; then
@@ -316,15 +304,12 @@ check_resources() {
                 "not enough free space for $path (less than ${MIN_FREE_GB} GiB)"
         fi
     done
-    local mem_kb
     mem_kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)"
     if [[ -n "$mem_kb" && "$mem_kb" -lt 1900000 ]]; then
-        warn "حافظه کمتر از 2 گیگابایت است؛ سرویس اصلی تا 2 گیگابایت مصرف می‌کند" \
-            "less than 2 GiB of RAM; the main service may use up to 2 GiB"
+        warn "حافظه کمتر از 2 گیگابایت است؛ پنل تا 1 گیگابایت و سرویس‌های Docker جدا مصرف می‌کنند" \
+            "less than 2 GiB of RAM; the panel may use up to 1 GiB, plus the Docker services"
     fi
 }
-
-unit_active() { systemctl is-active --quiet "$1" 2>/dev/null; }
 
 # port_users PORT -> listening sockets on that port (ss "Local Address:Port" column)
 port_users() {
@@ -333,44 +318,26 @@ port_users() {
 
 check_ports() {
     [[ $SKIP_PORT_CHECK -eq 1 ]] && return 0
+    unit_active "$UNIT" && return 0
     have ss || { warn "ss نیست؛ بررسی پورت‌ها انجام نشد" "ss not found; ports not checked"; return 0; }
     local port used failed=0
-    if ! unit_active devassist.service; then
-        for port in "${MAIN_PORTS[@]}"; do
-            used="$(port_users "$port")"
-            if [[ -n "$used" ]]; then
-                warn "پورت $port در حال استفاده است: $used" "port $port is already in use: $used"
-                failed=1
-            fi
-        done
-    fi
-    if [[ $WITH_DNS -eq 1 ]] && ! unit_active devassist-dns.service; then
-        # systemd-resolved's stub on 127.0.0.53/127.0.0.54 does not clash with 127.0.0.1:53.
-        used="$(port_users 53 | awk '$2 !~ /^127\.0\.0\.5[34]:/')"
+    # 8080: the panel. 5433: PGlite, loopback only.
+    for port in 8080 5433; do
+        used="$(port_users "$port")"
         if [[ -n "$used" ]]; then
-            warn "پورت 53 گرفته شده است؛ با «sudo ss -lntup 'sport = :53'» ببینید کدام برنامه است" \
-                "port 53 is in use; see which program with: sudo ss -lntup 'sport = :53'"
-            printf '         %s\n' "$used" >&2
+            warn "پورت $port در حال استفاده است: $used" "port $port is already in use: $used"
             failed=1
         fi
-    fi
-    if [[ $WITH_AGENT -eq 1 ]] && ! unit_active devassist-agent.service && [[ -n "$(port_users 7070)" ]]; then
-        warn "پورت 7070 (Host Agent) گرفته شده است" "port 7070 (Host Agent) is in use"
-        failed=1
-    fi
-    if [[ $failed -eq 1 ]]; then
-        die "پورت‌ها را آزاد کنید یا با --skip-port-check ادامه دهید" \
-            "free the ports or continue with --skip-port-check"
-    fi
+    done
+    [[ $failed -eq 0 ]] || die "پورت‌ها را آزاد کنید یا با --skip-port-check ادامه دهید" \
+        "free the ports or continue with --skip-port-check"
 }
 
-check_docker_install() {
+check_docker_panel() {
     have docker || return 0
-    local names
-    names="$(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null || true)"
-    if grep -Eq 'mrk-mirror|mrk-package-mirror|mrk/package-mirror' <<<"$names"; then
-        die "نسخه Docker DevAssist در حال اجراست؛ هر دو با هم روی یک سرور اجرا نشوند (پورت‌ها و داده یکی است)" \
-            "the Docker install of DevAssist is running; do not run both on one server (same ports)"
+    if docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null | grep -Eq 'mrk-panel|mrk-mirror|mrk/package-mirror'; then
+        die "پنل DevAssist در Docker در حال اجراست؛ هر دو با هم روی یک سرور اجرا نشوند" \
+            "the Docker panel of DevAssist is running; do not run both on one server"
     fi
 }
 
@@ -381,11 +348,21 @@ check_existing_prefix() {
     fi
 }
 
-# ----------------------------------------------------------------------------- packages
+warn_legacy_units() {
+    local unit
+    for unit in "${LEGACY_UNITS[@]}"; do
+        [[ -e "$UNIT_DIR/$unit.service" ]] || continue
+        warn "$unit از نصب قدیمی مانده و دیگر مدیریت نمی‌شود؛ آن را از پنل با Docker جایگزین کنید و با «systemctl disable --now $unit» ببندید" \
+            "$unit is left from an older install and no longer managed; replace it from the panel (Docker), then: systemctl disable --now $unit"
+    done
+}
 
-apt_install() {
+# ----------------------------------------------------------------------------- packages and runtimes
+
+install_packages() {
+    step "System packages / بسته‌های سیستم"
     local missing=() pkg
-    for pkg in "$@"; do
+    for pkg in ca-certificates curl xz-utils tar gzip coreutils util-linux iproute2 git; do
         dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed" || missing+=("$pkg")
     done
     [[ ${#missing[@]} -eq 0 ]] && return 0
@@ -394,19 +371,9 @@ apt_install() {
     run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
 }
 
-install_packages() {
-    step "System packages / بسته‌های سیستم"
-    local packages=(ca-certificates curl xz-utils tar gzip coreutils util-linux iproute2 git)
-    [[ $WITH_FIREWALL -eq 1 ]] && packages+=(nftables)
-    apt_install "${packages[@]}"
-}
-
-# ----------------------------------------------------------------------------- downloads
-
 download() {
-    local url="$1" dest="$2"
     run curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-        --retry 3 --retry-delay 2 --output "$dest" "$url"
+        --retry 3 --retry-delay 2 --output "$2" "$1"
 }
 
 # verify_sha256 FILE EXPECTED_HEX
@@ -420,16 +387,13 @@ verify_sha256() {
 
 install_uv() {
     UV_BIN="$CACHE_DIR/tools/uv-$UV_VERSION/uv"
-    if [[ -x "$UV_BIN" ]]; then return 0; fi
+    [[ -x "$UV_BIN" ]] && return 0
     info "دانلود uv $UV_VERSION (فقط برای نصب Python)" "downloading uv $UV_VERSION (installs Python only)"
-    local name="uv-$UV_TRIPLE.tar.gz" tmp="$CACHE_DIR/downloads" sum
+    local name="uv-$UV_TRIPLE.tar.gz" tmp="$CACHE_DIR/downloads"
     run install -d -m 0755 "$tmp" "$CACHE_DIR/tools/uv-$UV_VERSION"
     download "$UV_DIST/$UV_VERSION/$name" "$tmp/$name"
     download "$UV_DIST/$UV_VERSION/$name.sha256" "$tmp/$name.sha256"
-    if [[ $DRY_RUN -eq 0 ]]; then
-        sum="$(awk '{ print $1; exit }' "$tmp/$name.sha256")"
-        verify_sha256 "$tmp/$name" "$sum"
-    fi
+    [[ $DRY_RUN -eq 1 ]] || verify_sha256 "$tmp/$name" "$(awk '{ print $1; exit }' "$tmp/$name.sha256")"
     run tar -xzf "$tmp/$name" -C "$CACHE_DIR/tools/uv-$UV_VERSION" --strip-components=1
 }
 
@@ -460,47 +424,31 @@ install_python() {
 
 install_node() {
     step "Node.js $NODE_VERSION"
-    local dir="node-v$NODE_VERSION-linux-$NODE_ARCH"
+    local dir="node-v$NODE_VERSION-linux-$NODE_ARCH" tmp="$CACHE_DIR/downloads"
     NODE_HOME="$RUNTIMES/$dir"
     if [[ -x "$NODE_HOME/bin/node" ]]; then
         info "Node $NODE_VERSION از قبل نصب است" "Node $NODE_VERSION already installed"
         return 0
     fi
-    local tmp="$CACHE_DIR/downloads" sum
     run install -d -m 0755 "$tmp" "$RUNTIMES"
     download "$NODE_DIST/v$NODE_VERSION/$dir.tar.xz" "$tmp/$dir.tar.xz"
     download "$NODE_DIST/v$NODE_VERSION/SHASUMS256.txt" "$tmp/node-v$NODE_VERSION-SHASUMS256.txt"
     if [[ $DRY_RUN -eq 0 ]]; then
-        sum="$(awk -v f="$dir.tar.xz" '$2 == f { print $1 }' "$tmp/node-v$NODE_VERSION-SHASUMS256.txt")"
-        verify_sha256 "$tmp/$dir.tar.xz" "$sum"
+        verify_sha256 "$tmp/$dir.tar.xz" \
+            "$(awk -v f="$dir.tar.xz" '$2 == f { print $1 }' "$tmp/node-v$NODE_VERSION-SHASUMS256.txt")"
     fi
     run tar -xJf "$tmp/$dir.tar.xz" -C "$RUNTIMES" --no-same-owner
-}
-
-install_go() {
-    local name="go$GO_VERSION.linux-$GO_ARCH.tar.gz" tmp="$CACHE_DIR/downloads" sum
-    GO_ROOT="$CACHE_DIR/tools/go-$GO_VERSION"
-    if [[ -x "$GO_ROOT/bin/go" ]]; then return 0; fi
-    info "دانلود Go $GO_VERSION (فقط برای ساخت موتور DNS)" "downloading Go $GO_VERSION (DNS engine build only)"
-    run install -d -m 0755 "$tmp" "$GO_ROOT"
-    download "$GO_DIST/$name" "$tmp/$name"
-    download "$GO_DIST/$name.sha256" "$tmp/$name.sha256"
-    if [[ $DRY_RUN -eq 0 ]]; then
-        sum="$(awk '{ print $1; exit }' "$tmp/$name.sha256")"
-        verify_sha256 "$tmp/$name" "$sum"
-    fi
-    run tar -xzf "$tmp/$name" -C "$GO_ROOT" --strip-components=1 --no-same-owner
 }
 
 # ----------------------------------------------------------------------------- build
 
 source_commit() {
-    if have git && git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
-        COMMIT="$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" rev-parse HEAD)"
-        if [[ -n "$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]]; then
-            RELEASE_ID="${COMMIT:0:12}-dirty-$(date -u +%Y%m%d%H%M%S)"
-        else
-            RELEASE_ID="${COMMIT:0:12}"
+    local git_cmd=(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT")
+    if have git && "${git_cmd[@]}" rev-parse HEAD >/dev/null 2>&1; then
+        COMMIT="$("${git_cmd[@]}" rev-parse HEAD)"
+        RELEASE_ID="${COMMIT:0:12}"
+        if [[ -n "$("${git_cmd[@]}" status --porcelain --untracked-files=no)" ]]; then
+            RELEASE_ID="$RELEASE_ID-dirty-$(date -u +%Y%m%d%H%M%S)"
         fi
     else
         COMMIT="unknown"
@@ -510,20 +458,16 @@ source_commit() {
     RELEASE_DIR="$RELEASES/$RELEASE_ID"
 }
 
-npm_env() {
-    local -a vars=(PATH="$NODE_HOME/bin:/usr/bin:/bin" npm_config_cache="$CACHE_DIR/npm"
-        npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false)
-    if [[ -n "$NPM_REGISTRY" ]]; then
-        vars+=(npm_config_registry="$NPM_REGISTRY" npm_config_replace_registry_host=always)
-    fi
-    printf '%s\n' "${vars[@]}"
-}
-
 # npm_in DIR ARGS... : run npm in DIR with the pinned Node and optional mirror
 npm_in() {
-    local dir="$1" env_vars
+    local dir="$1"
     shift
-    mapfile -t env_vars < <(npm_env)
+    local -a env_vars=(PATH="$NODE_HOME/bin:/usr/bin:/bin" npm_config_cache="$CACHE_DIR/npm"
+        npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false
+        VITE_BUILD_COMMIT="$COMMIT" VITE_BUILD_DATE="$BUILD_DATE")
+    if [[ -n "$NPM_REGISTRY" ]]; then
+        env_vars+=(npm_config_registry="$NPM_REGISTRY" npm_config_replace_registry_host=always)
+    fi
     if [[ $DRY_RUN -eq 1 ]]; then
         printf '  + (cd %q && npm %s)\n' "$dir" "$*"
         return 0
@@ -540,74 +484,28 @@ build_python_env() {
     else
         run env UV_CACHE_DIR="$CACHE_DIR/uv" "$UV_BIN" venv --seed --python "$PYTHON_BIN" "$venv"
     fi
-    # Same install line as the Dockerfile runtime stage.
+    # Same install line and pin check as the python-base stage of deploy/images/Dockerfile.
     run env PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_CACHE_DIR="$CACHE_DIR/pip" "$venv/bin/python" -m pip install \
         "${pip_args[@]}" "$REPO_ROOT/apps/control-plane" -r "$REPO_ROOT/deploy/appliance/requirements.txt"
-    # Same pin check as the Dockerfile: the build fails on any runtime pin mismatch.
     run "$venv/bin/python" -c "import importlib.metadata as md, sys; pins = [line.strip().split('==') for line in open(sys.argv[1]) if '==' in line and not line.startswith('#')]; bad = [(name, want, md.version(name)) for name, want in pins if md.version(name) != want]; sys.exit(f'runtime pin mismatch: {bad}' if bad else 0)" \
         "$REPO_ROOT/deploy/appliance/requirements.txt"
     run "$venv/bin/python" -m pip uninstall --yes pip wheel
 }
 
 build_node_parts() {
-    step "Verdaccio, PGlite, admin UI"
-    local part
-    for part in verdaccio pglite; do
-        run install -d -m 0755 "$RELEASE_DIR/$part"
-        run cp "$REPO_ROOT/deploy/$part/package.json" "$REPO_ROOT/deploy/$part/package-lock.json" "$RELEASE_DIR/$part/"
-        npm_in "$RELEASE_DIR/$part" ci --omit=dev --ignore-scripts
-    done
-    # docs/43 §0.1: Verdaccio's pre-publish quota plugin (no dependencies).
-    run cp -R "$REPO_ROOT/deploy/verdaccio/plugins" "$RELEASE_DIR/verdaccio/plugins"
+    step "PGlite, admin UI"
+    run install -d -m 0755 "$RELEASE_DIR/pglite"
+    run cp "$REPO_ROOT/deploy/pglite/package.json" "$REPO_ROOT/deploy/pglite/package-lock.json" "$RELEASE_DIR/pglite/"
+    npm_in "$RELEASE_DIR/pglite" ci --omit=dev --ignore-scripts
     local build="$CACHE_DIR/build/admin-ui"
     run rm -rf "$build"
     run install -d -m 0755 "$build"
     run tar -C "$REPO_ROOT/apps/admin-ui" --exclude=./node_modules --exclude=./dist -cf "$CACHE_DIR/build/admin-ui.tar" .
     run tar -C "$build" -xf "$CACHE_DIR/build/admin-ui.tar"
     npm_in "$build" ci --ignore-scripts
-    if [[ $DRY_RUN -eq 1 ]]; then
-        printf '  + (cd %q && VITE_BUILD_COMMIT=... npm run build)\n' "$build"
-    else
-        local env_vars
-        mapfile -t env_vars < <(npm_env)
-        (cd "$build" && env "${env_vars[@]}" VITE_BUILD_COMMIT="$COMMIT" VITE_BUILD_DATE="$BUILD_DATE" \
-            "$NODE_HOME/bin/npm" run build)
-    fi
+    npm_in "$build" run build
     run cp -a "$build/dist" "$RELEASE_DIR/admin-ui"
     run rm -rf "$build" "$CACHE_DIR/build/admin-ui.tar"
-}
-
-build_dns() {
-    step "DNS engine (mrk-dns)"
-    if [[ -n "$DNS_BINARY" ]]; then
-        [[ -f "$DNS_BINARY" ]] || die "فایل mrk-dns پیدا نشد: $DNS_BINARY" "mrk-dns binary not found: $DNS_BINARY"
-        run install -m 0755 "$DNS_BINARY" "$RELEASE_DIR/bin/mrk-dns"
-        if [[ -n "$DNSBENCH_BINARY" ]]; then
-            run install -m 0755 "$DNSBENCH_BINARY" "$RELEASE_DIR/bin/mrk-dnsbench"
-        fi
-        run "$RELEASE_DIR/bin/mrk-dns" version
-        return 0
-    fi
-    install_go
-    local build="$CACHE_DIR/build/dns-engine"
-    local -a go_env=(PATH="$GO_ROOT/bin:/usr/bin:/bin" GOROOT="$GO_ROOT" GOPATH="$CACHE_DIR/go"
-        GOMODCACHE="$CACHE_DIR/go/pkg/mod" GOCACHE="$CACHE_DIR/go/cache"
-        CGO_ENABLED=0 GOFLAGS=-trimpath GOTOOLCHAIN=local)
-    [[ -n "$GOPROXY_URL" ]] && go_env+=(GOPROXY="$GOPROXY_URL")
-    run rm -rf "$build"
-    run install -d -m 0755 "$build"
-    run cp -a "$REPO_ROOT/apps/dns-engine/." "$build/"
-    # Same steps and flags as the dns-builder stage of the Dockerfile.
-    local go="$GO_ROOT/bin/go"
-    run env -C "$build" "${go_env[@]}" "$go" mod download
-    run env -C "$build" "${go_env[@]}" "$go" mod verify
-    run env -C "$build" "${go_env[@]}" "$go" build -buildvcs=false \
-        -ldflags "-s -w -X mrk/dns-engine/internal/version.Commit=$COMMIT" \
-        -o "$RELEASE_DIR/bin/mrk-dns" ./cmd/mrk-dns
-    run env -C "$build" "${go_env[@]}" "$go" build -buildvcs=false -ldflags "-s -w" \
-        -o "$RELEASE_DIR/bin/mrk-dnsbench" ./cmd/mrk-dnsbench
-    run "$RELEASE_DIR/bin/mrk-dns" version
-    run rm -rf "$build"
 }
 
 # The command directory mounted at /usr/local/bin inside devassist.service: the
@@ -621,9 +519,7 @@ build_bin_dir() {
     fi
     for entry in "$venv_bin"/*; do
         name="$(basename -- "$entry")"
-        case "$name" in
-            activate*|python*|pip*|Activate*|deactivate*) continue ;;
-        esac
+        case "$name" in activate*|python*|pip*|Activate*|deactivate*) continue ;; esac
         [[ -f "$entry" && -x "$entry" ]] && ln -sfn "$entry" "$bin/$name"
     done
     ln -sfn "$NODE_HOME/bin/node" "$bin/node"
@@ -635,33 +531,23 @@ build_bin_dir() {
     done
 }
 
-copy_appliance_files() {
-    local file
-    for file in supervisord.conf devpi-start.sh devpi-configure.sh; do
-        run install -m 0644 "$REPO_ROOT/deploy/appliance/$file" "$RELEASE_DIR/$file"
-    done
+copy_release_files() {
+    run install -m 0644 "$REPO_ROOT/deploy/images/panel/supervisord.conf" "$RELEASE_DIR/supervisord.conf"
     # Same CRLF guard as the Dockerfile.
-    run sed -i 's/\r$//' "$RELEASE_DIR/devpi-start.sh" "$RELEASE_DIR/devpi-configure.sh" "$RELEASE_DIR/supervisord.conf"
+    run sed -i 's/\r$//' "$RELEASE_DIR/supervisord.conf"
     run install -m 0644 "$REPO_ROOT/deploy/native/devassist_supervise.py" "$RELEASE_DIR/devassist_supervise.py"
     run install -m 0644 "$REPO_ROOT/LICENSE" "$RELEASE_DIR/LICENSE"
-    printf 'commit=%s\nbuild_date=%s\npython=%s\nnode=%s\ngo=%s\n' \
-        "$COMMIT" "$BUILD_DATE" "$PY_VERSION" "$NODE_VERSION" "$GO_VERSION" \
+    printf 'commit=%s\nbuild_date=%s\npython=%s\nnode=%s\n' "$COMMIT" "$BUILD_DATE" "$PY_VERSION" "$NODE_VERSION" \
         | put_file 0644 root root "$RELEASE_DIR/RELEASE"
 }
 
-release_complete() { [[ -d "$1" && ! -e "$1/.incomplete" && -x "$1/venv/bin/python" ]]; }
+release_complete() { [[ -d "$1" && ! -e "$1/.incomplete" && -x "$1/venv/bin/python" && -d "$1/pglite" ]]; }
 
 build_release() {
     source_commit
     if release_complete "$RELEASE_DIR" && [[ $REBUILD -eq 0 ]]; then
         ok "نسخه $RELEASE_ID از قبل ساخته شده است (برای ساخت دوباره --rebuild)" \
             "release $RELEASE_ID is already built (use --rebuild to build again)"
-        if [[ $WITH_DNS -eq 1 && ! -x "$RELEASE_DIR/bin/mrk-dns" ]]; then
-            # Adding DNS to an existing release: build only the engine into it.
-            build_dns
-            run chown -R root:root "$RELEASE_DIR/bin"
-            run chmod -R u=rwX,go=rX "$RELEASE_DIR/bin"
-        fi
         return 0
     fi
     # Never delete or rebuild an existing release in place: it may be the active one.
@@ -677,8 +563,7 @@ build_release() {
     build_python_env
     build_node_parts
     build_bin_dir
-    [[ $WITH_DNS -eq 1 ]] && build_dns
-    copy_appliance_files
+    copy_release_files
     # Application files stay root-owned and read-only for the runtime user (like the image).
     run chown -R root:root "$RELEASE_DIR"
     run chmod -R u=rwX,go=rX "$RELEASE_DIR"
@@ -699,13 +584,13 @@ clean_incomplete_releases() {
 # Keep the active release and the one before it.
 prune_releases() {
     local current keep=() dir
-    current="$(readlink -f "$PREFIX/current" 2>/dev/null || true)"
     [[ -d "$RELEASES" ]] || return 0
+    current="$(readlink -f "$PREFIX/current" 2>/dev/null || true)"
+    # shellcheck disable=SC2012 # release names are [A-Za-z0-9-] only
     mapfile -t keep < <(ls -1dt "$RELEASES"/*/ 2>/dev/null | head -n 2)
     for dir in "$RELEASES"/*/; do
         dir="${dir%/}"
-        [[ -d "$dir" ]] || continue
-        [[ "$dir" == "$current" ]] && continue
+        [[ -d "$dir" && "$dir" != "$current" ]] || continue
         [[ " ${keep[*]%/} " == *" $dir "* ]] && continue
         run rm -rf "$dir"
     done
@@ -717,24 +602,23 @@ ensure_user() {
     step "System user / کاربر سیستمی"
     if getent passwd "$RUN_USER" >/dev/null; then
         info "کاربر $RUN_USER وجود دارد" "user $RUN_USER exists"
-        return 0
-    fi
-    local -a id_args=()
-    # Same uid/gid as the image (10001) when free, so data moves between Docker and native installs.
-    if ! getent group "$PREFERRED_ID" >/dev/null && ! getent passwd "$PREFERRED_ID" >/dev/null; then
+    elif ! getent group "$PREFERRED_ID" >/dev/null && ! getent passwd "$PREFERRED_ID" >/dev/null; then
+        # Same uid/gid as the images, so the panel reads the Docker services' sockets.
         run groupadd --system --gid "$PREFERRED_ID" "$RUN_USER"
-        id_args=(--uid "$PREFERRED_ID" --gid "$PREFERRED_ID")
+        run useradd --system --uid "$PREFERRED_ID" --gid "$PREFERRED_ID" --no-create-home \
+            --home-dir /nonexistent --shell /usr/sbin/nologin --comment "DevAssist" "$RUN_USER"
     else
-        warn "uid/gid 10001 آزاد نیست؛ شناسه سیستمی دیگری انتخاب می‌شود" \
-            "uid/gid 10001 is taken; a different system id is used"
         run groupadd --system "$RUN_USER"
-        id_args=(--gid "$RUN_USER")
+        run useradd --system --gid "$RUN_USER" --no-create-home \
+            --home-dir /nonexistent --shell /usr/sbin/nologin --comment "DevAssist" "$RUN_USER"
     fi
-    run useradd --system "${id_args[@]}" --no-create-home --home-dir /nonexistent \
-        --shell /usr/sbin/nologin --comment "DevAssist" "$RUN_USER"
+    if [[ $DRY_RUN -eq 0 && "$(id -u "$RUN_USER")" != "$PREFERRED_ID" ]]; then
+        warn "uid کاربر $RUN_USER برابر 10001 نیست؛ سوکت‌های DNS و فایروال (uid 10001) شاید خوانا نباشند (docs/install-native.md)" \
+            "$RUN_USER is not uid 10001; the DNS and firewall sockets (uid 10001) may be unreadable (docs/install-native.md)"
+    fi
 }
 
-# mount_point PATH: an empty directory that systemd mounts over inside a unit.
+# mount_point PATH: an empty directory that systemd mounts over inside the unit.
 mount_point() {
     local path="$1"
     if [[ -e "$path" || -L "$path" ]]; then
@@ -749,15 +633,12 @@ ensure_layout() {
     step "Directories / پوشه‌ها"
     CREATED_MOUNT_POINTS=()
     if [[ -r "$INSTALL_CONF" ]]; then
-        local previous
-        previous="$(sed -n 's/^DEVASSIST_CREATED_MOUNT_POINTS=//p' "$INSTALL_CONF" | head -n 1)"
-        read -r -a CREATED_MOUNT_POINTS <<<"$previous"
+        read -r -a CREATED_MOUNT_POINTS <<<"$(sed -n 's/^DEVASSIST_CREATED_MOUNT_POINTS=//p' "$INSTALL_CONF" | head -n 1)"
     fi
     run install -d -m 0755 -o root -g root "$PREFIX" "$RELEASES" "$RUNTIMES" "$CACHE_DIR"
     [[ -e "$MARKER" ]] || printf 'DevAssist native install; managed by scripts/install-native.sh\n' \
         | put_file 0644 root root "$MARKER"
     run install -d -m 0750 -o root -g "$RUN_USER" "$CONF_DIR"
-    # Data directory with the fixed layout of deploy/appliance/entrypoint.py (0750, devassist).
     run install -d -m 0750 -o "$RUN_USER" -g "$RUN_USER" "$DATA_DIR"
     local sub
     for sub in "${DATA_SUBDIRS[@]}"; do
@@ -765,71 +646,60 @@ ensure_layout() {
     done
     # Mount points for the container paths the code expects.
     mount_point /data
-    mount_point /opt/verdaccio
     mount_point /opt/pglite
-    run install -d -m 0755 -o root -g root "$PREFIX/firewall-logroot/system" \
-        "$PREFIX/agent-host/proc" "$PREFIX/agent-host/cgroup" "$PREFIX/agent-host/volumes" "$PREFIX/agent-host/root"
+    # Socket directories the DNS and firewall containers bind-mount (recreated at boot):
+    # owned by the images' uid 10001, group devassist (setgid) so the panel can read them.
+    {
+        printf '# Written by scripts/install-native.sh: sockets of the Docker DNS and firewall services.\n'
+        for sub in "${SOCKET_DIRS[@]}"; do
+            printf 'd %s 2750 %s %s -\n' "$sub" "$PREFERRED_ID" "$RUN_USER"
+        done
+    } | put_file 0644 root root "$TMPFILES"
+    run systemd-tmpfiles --create "$TMPFILES"
 }
 
-# install_env_file TEMPLATE DEST : write once, never overwrite operator changes.
-install_env_file() {
-    local template="$1" dest="$2"
-    if [[ -e "$dest" ]]; then
-        info "$dest از قبل هست و دست‌نخورده می‌ماند" "$dest exists and is kept unchanged"
-        return 0
+# set_env KEY VALUE: replace or append one line of the env file.
+set_env() {
+    if [[ $DRY_RUN -eq 1 ]]; then
+        printf '  + set %s=%s in %s\n' "$1" "$2" "$ENV_FILE"
+    elif grep -q "^$1=" "$ENV_FILE"; then
+        sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
+    else
+        printf '%s=%s\n' "$1" "$2" >>"$ENV_FILE"
     fi
-    sed -e "s|@DEVASSIST_COMMIT@|$COMMIT|g" -e "s|@DEVASSIST_BUILD_DATE@|$BUILD_DATE|g" "$template" \
-        | put_file 0640 root "$RUN_USER" "$dest"
 }
 
 install_config() {
     step "Configuration / تنظیمات"
-    install_env_file "$REPO_ROOT/deploy/native/devassist.env.example" "$CONF_DIR/devassist.env"
-    # Build metadata always follows the active release.
-    run sed -i -e "s|^MRK_BUILD_COMMIT=.*|MRK_BUILD_COMMIT=$COMMIT|" \
-        -e "s|^MRK_BUILD_DATE=.*|MRK_BUILD_DATE=$BUILD_DATE|" "$CONF_DIR/devassist.env"
-    [[ $WITH_DNS -eq 1 ]] && install_env_file "$REPO_ROOT/deploy/native/dns.env.example" "$CONF_DIR/dns.env"
-    [[ $WITH_FIREWALL -eq 1 ]] && install_env_file "$REPO_ROOT/deploy/native/firewall.env.example" "$CONF_DIR/firewall.env"
-    [[ $WITH_AGENT -eq 1 ]] && install_env_file "$REPO_ROOT/deploy/native/agent.env.example" "$CONF_DIR/agent.env"
+    if [[ -e "$ENV_FILE" ]]; then
+        info "$ENV_FILE از قبل هست و تغییرات شما می‌ماند" "$ENV_FILE exists; your changes are kept"
+    else
+        sed -e "s|@DEVASSIST_COMMIT@|$COMMIT|g" -e "s|@DEVASSIST_BUILD_DATE@|$BUILD_DATE|g" \
+            "$REPO_ROOT/deploy/native/devassist.env.example" | put_file 0640 root "$RUN_USER" "$ENV_FILE"
+    fi
+    # Panel-only facts, also enforced on env files of older installs.
+    set_env MRK_PANEL_RUNTIME native
+    set_env MRK_NPM_ENABLED false
+    set_env MRK_PYPI_ENABLED false
+    set_env MRK_BUILD_COMMIT "$COMMIT"
+    set_env MRK_BUILD_DATE "$BUILD_DATE"
     {
         printf '# Written by scripts/install-native.sh. Do not edit by hand.\n'
         printf 'DEVASSIST_DATA_DIR=%s\n' "$DATA_DIR"
         printf 'DEVASSIST_REPO=%s\n' "$REPO_ROOT"
-        printf 'DEVASSIST_WITH_DNS=%s\n' "$WITH_DNS"
-        printf 'DEVASSIST_WITH_FIREWALL=%s\n' "$WITH_FIREWALL"
-        printf 'DEVASSIST_WITH_AGENT=%s\n' "$WITH_AGENT"
         printf 'DEVASSIST_CREATED_MOUNT_POINTS=%s\n' "${CREATED_MOUNT_POINTS[*]}"
     } | put_file 0644 root root "$INSTALL_CONF"
     run install -m 0755 -o root -g root "$REPO_ROOT/deploy/native/devassist-exec.sh" "$EXEC_HELPER"
-}
-
-selected_units() {
-    printf '%s\n' devassist.service
-    [[ $WITH_DNS -eq 1 ]] && printf '%s\n' devassist-dns.service
-    [[ $WITH_FIREWALL -eq 1 ]] && printf '%s\n' devassist-firewall.service
-    [[ $WITH_AGENT -eq 1 ]] && printf '%s\n' devassist-agent.service
-    return 0
-}
-
-install_units() {
-    step "systemd units"
-    local unit
-    while read -r unit; do
-        sed -e "s|@DEVASSIST_DATA_DIR@|$DATA_DIR|g" "$REPO_ROOT/deploy/native/systemd/$unit" \
-            | put_file 0644 root root "$UNIT_DIR/$unit"
-    done < <(selected_units)
+    sed -e "s|@DEVASSIST_DATA_DIR@|$DATA_DIR|g" "$REPO_ROOT/deploy/native/systemd/$UNIT" \
+        | put_file 0644 root root "$UNIT_DIR/$UNIT"
     run systemctl daemon-reload
 }
 
-# Read previously chosen components so `upgrade` keeps them.
 load_install_conf() {
     [[ -r "$INSTALL_CONF" ]] || return 0
     local value
     value="$(sed -n 's/^DEVASSIST_DATA_DIR=//p' "$INSTALL_CONF" | head -n 1)"
     [[ -n "$value" ]] && DATA_DIR="$value"
-    [[ "$(sed -n 's/^DEVASSIST_WITH_DNS=//p' "$INSTALL_CONF")" == 1 ]] && WITH_DNS=1
-    [[ "$(sed -n 's/^DEVASSIST_WITH_FIREWALL=//p' "$INSTALL_CONF")" == 1 ]] && WITH_FIREWALL=1
-    [[ "$(sed -n 's/^DEVASSIST_WITH_AGENT=//p' "$INSTALL_CONF")" == 1 ]] && WITH_AGENT=1
     return 0
 }
 
@@ -837,27 +707,21 @@ load_install_conf() {
 
 activate_release() {
     step "Activate / فعال‌سازی $RELEASE_ID"
-    local was_active=0 unit link
-    unit_active devassist.service && was_active=1
-    if [[ $was_active -eq 1 && $NO_START -eq 0 ]]; then
+    local link
+    if unit_active "$UNIT" && [[ $NO_START -eq 0 ]]; then
         info "توقف سرویس (تا 3 دقیقه؛ PGlite آخر از همه بسته می‌شود)" \
             "stopping the service (up to 3 minutes; PGlite stops last)"
-        run systemctl stop devassist.service
+        run systemctl stop "$UNIT"
     fi
     run ln -sfn "releases/$RELEASE_ID" "$PREFIX/current"
-    for link in venv admin-ui verdaccio pglite bin supervisord.conf devpi-start.sh devpi-configure.sh \
-        devassist_supervise.py LICENSE; do
+    for link in venv admin-ui pglite bin supervisord.conf devassist_supervise.py LICENSE; do
         run ln -sfn "current/$link" "$PREFIX/$link"
     done
+    # Leftovers of the pre-docs/44 layout (npm and PyPI ran inside the panel).
+    run rm -f "$PREFIX/verdaccio" "$PREFIX/devpi-start.sh" "$PREFIX/devpi-configure.sh"
     [[ $NO_START -eq 1 ]] && return 0
-    while read -r unit; do
-        run systemctl enable "$unit"
-        if [[ "$unit" == devassist.service ]]; then
-            run systemctl start "$unit"
-        else
-            run systemctl restart "$unit"
-        fi
-    done < <(selected_units)
+    run systemctl enable "$UNIT"
+    run systemctl start "$UNIT"
 }
 
 wait_ready() {
@@ -866,10 +730,8 @@ wait_ready() {
         "waiting for the panel to be ready (the first start takes a few minutes)"
     local waited=0
     until "$EXEC_HELPER" python -m mrk_control_plane.healthcheck >/dev/null 2>&1; do
-        if ! unit_active devassist.service; then
-            die "سرویس devassist اجرا نمی‌شود؛ ببینید: journalctl -u devassist -n 100" \
-                "devassist.service is not running; see: journalctl -u devassist -n 100"
-        fi
+        unit_active "$UNIT" || die "سرویس devassist اجرا نمی‌شود؛ ببینید: journalctl -u devassist -n 100" \
+            "devassist.service is not running; see: journalctl -u devassist -n 100"
         if [[ $waited -ge 600 ]]; then
             warn "پنل بعد از 10 دقیقه آماده نشد؛ لاگ را ببینید: journalctl -u devassist -f" \
                 "the panel was not ready after 10 minutes; check: journalctl -u devassist -f"
@@ -883,9 +745,9 @@ wait_ready() {
 
 summary() {
     local port="" host=""
-    if [[ -r "$CONF_DIR/devassist.env" ]]; then
-        port="$(sed -n 's/^MRK_PORT=//p' "$CONF_DIR/devassist.env" | head -n 1)"
-        host="$(sed -n 's/^MRK_HOST=//p' "$CONF_DIR/devassist.env" | head -n 1)"
+    if [[ -r "$ENV_FILE" ]]; then
+        port="$(sed -n 's/^MRK_PORT=//p' "$ENV_FILE" | head -n 1)"
+        host="$(sed -n 's/^MRK_HOST=//p' "$ENV_FILE" | head -n 1)"
     fi
     port="${port:-8080}"
     host="${host:-127.0.0.1}"
@@ -895,49 +757,17 @@ summary() {
 
   Panel / پنل:          http://$host:$port  (from your PC: ssh -L $port:127.0.0.1:$port <server>)
   First visit:          the panel shows "First Time Setup" to create the owner account
+  Next / بعد:           My services -> Add a service (agent, DNS, firewall, S3 run in Docker)
+                        سرویس‌های من ← افزودن سرویس (بقیه سرویس‌ها با Docker اجرا می‌شوند)
   Logs / لاگ:           journalctl -u devassist -f
-  Config / تنظیمات:     $CONF_DIR/devassist.env  (then: systemctl restart devassist)
+  Config / تنظیمات:     $ENV_FILE  (then: systemctl restart devassist)
   Data / داده:          $DATA_DIR
-  Maintenance:          sudo devassist-exec supervisorctl -c /opt/mrk/supervisord.conf status
   Upgrade / ارتقا:      git pull && sudo bash scripts/install-native.sh upgrade
   Uninstall / حذف:      sudo bash scripts/install-native.sh uninstall
-
-  Network: every service listens on 127.0.0.1 only (see /etc/devassist/devassist.env).
-  If you open one on a public address, firewall it, e.g.:  ufw deny 4873/tcp
-  شبکه: همه سرویس‌ها فقط روی 127.0.0.1 هستند؛ اگر یکی را عمومی کردید با فایروال ببندید.
 EOF
-    if [[ $WITH_DNS -eq 1 ]]; then
-        cat <<'EOF'
-
-  DNS: listening on 127.0.0.1:53 and 172.17.0.1:53 (first start). Test: dig @127.0.0.1 localhost
-  Then follow Panel -> DNS -> Setup (resolver and Docker steps). The engine is
-  managed with `systemctl ... devassist-dns`, not `docker compose`.
-EOF
-    fi
-    if [[ $WITH_FIREWALL -eq 1 || $WITH_AGENT -eq 1 ]]; then
-        cat <<'EOF'
-
-  Pairing keys are logged once / کلید جفت‌سازی یک بار در لاگ می‌آید:
-    journalctl -u devassist-agent | grep "pairing key"      (URL: http://127.0.0.1:7070)
-    journalctl -u devassist-firewall | grep "pairing key"   (URL: unix:/run/mrk-firewall/firewall.sock)
-EOF
-    fi
 }
 
 # ----------------------------------------------------------------------------- commands
-
-preflight() {
-    require_root
-    check_os
-    load_pins
-    check_data_dir
-    check_existing_prefix
-    if [[ $EUID -eq 0 ]]; then
-        check_resources
-        check_docker_install
-        check_ports
-    fi
-}
 
 cmd_install() {
     if [[ "$COMMAND" == upgrade ]]; then
@@ -945,7 +775,6 @@ cmd_install() {
             "no native install found; run install first"
         load_install_conf
     elif [[ -r "$INSTALL_CONF" ]]; then
-        # Re-running install keeps components chosen before and adds new ones.
         local requested_dir="$DATA_DIR"
         load_install_conf
         if [[ "$requested_dir" != "/var/lib/devassist" && "$requested_dir" != "$DATA_DIR" ]]; then
@@ -953,14 +782,23 @@ cmd_install() {
                 "the data directory is already $DATA_DIR; moving data is a manual step"
         fi
     fi
-    preflight
+    require_root
+    check_os
+    load_pins
+    check_data_dir
+    check_existing_prefix
+    if [[ $EUID -eq 0 ]]; then
+        check_resources
+        check_docker_panel
+        check_ports
+    fi
+    warn_legacy_units
     [[ $DRY_RUN -eq 1 ]] && info "حالت پیش‌نمایش: هیچ چیزی تغییر نمی‌کند" "dry run: nothing is changed"
-    info "نسخه‌های پین‌شده: Python $PY_VERSION، Node $NODE_VERSION، Go $GO_VERSION" \
-        "pinned versions: Python $PY_VERSION, Node $NODE_VERSION, Go $GO_VERSION"
+    info "نسخه‌های پین‌شده: Python $PY_VERSION، Node $NODE_VERSION" \
+        "pinned versions: Python $PY_VERSION, Node $NODE_VERSION"
     if [[ "$COMMAND" == upgrade ]]; then
-        warn "پیش از ارتقا از پنل یک پشتیبان رمزنگاری‌شده بگیرید (چرخه داده → پشتیبان)" \
-            "take an encrypted backup in the panel before upgrading (data lifecycle -> backup)"
-        confirm "ارتقا سرویس را چند دقیقه متوقف می‌کند." "The upgrade stops the service for a few minutes." "UPGRADE"
+        warn "پیش از ارتقا از پنل یک پشتیبان رمزنگاری‌شده بگیرید" "take an encrypted backup in the panel before upgrading"
+        confirm "ارتقا پنل را چند دقیقه متوقف می‌کند." "The upgrade stops the panel for a few minutes." "UPGRADE"
     fi
     install_packages
     ensure_user
@@ -968,7 +806,6 @@ cmd_install() {
     clean_incomplete_releases
     build_release
     install_config
-    install_units
     activate_release
     prune_releases
     wait_ready
@@ -977,18 +814,17 @@ cmd_install() {
 
 cmd_status() {
     local unit
-    for unit in devassist devassist-dns devassist-firewall devassist-agent; do
+    for unit in devassist "${LEGACY_UNITS[@]}"; do
         [[ -e "$UNIT_DIR/$unit.service" ]] || continue
         printf '%-18s %s\n' "$unit" "$(systemctl is-active "$unit" 2>/dev/null || true)"
     done
-    if [[ -r "$PREFIX/current/RELEASE" ]]; then
-        printf '\nrelease: %s\n' "$(basename -- "$(readlink -f "$PREFIX/current")")"
-        cat "$PREFIX/current/RELEASE"
-    else
+    if [[ ! -r "$PREFIX/current/RELEASE" ]]; then
         info "نصب بومی پیدا نشد" "no native install found"
         return 0
     fi
-    if [[ $EUID -eq 0 ]] && unit_active devassist.service; then
+    printf '\nrelease: %s\n' "$(basename -- "$(readlink -f "$PREFIX/current")")"
+    cat "$PREFIX/current/RELEASE"
+    if [[ $EUID -eq 0 ]] && unit_active "$UNIT"; then
         if "$EXEC_HELPER" python -m mrk_control_plane.healthcheck >/dev/null 2>&1; then
             ok "پنل آماده است" "panel ready"
         else
@@ -1001,28 +837,30 @@ cmd_uninstall() {
     require_root
     [[ -e "$MARKER" || -r "$INSTALL_CONF" ]] || die "نصب بومی پیدا نشد" "no native install found"
     load_install_conf
+    # Data of the native agent/DNS/firewall of older installs.
+    local -a legacy_data=(/var/lib/mrk-dns /var/lib/mrk-firewall /var/lib/mrk-agent)
     if [[ $PURGE -eq 1 ]]; then
-        warn "--purge همه داده‌ها را برای همیشه پاک می‌کند: $DATA_DIR، /var/lib/mrk-dns، /var/lib/mrk-firewall، /var/lib/mrk-agent و $CONF_DIR" \
-            "--purge permanently deletes all data: $DATA_DIR, /var/lib/mrk-dns, /var/lib/mrk-firewall, /var/lib/mrk-agent and $CONF_DIR"
+        warn "--purge همه داده‌ها را برای همیشه پاک می‌کند: $DATA_DIR، $CONF_DIR و ${legacy_data[*]}" \
+            "--purge permanently deletes all data: $DATA_DIR, $CONF_DIR and ${legacy_data[*]}"
         confirm "این کار برگشت‌پذیر نیست." "This cannot be undone." "DELETE"
     else
         confirm "برنامه‌ها و unitها حذف می‌شوند؛ داده و $CONF_DIR می‌مانند." \
             "Programs and units are removed; data and $CONF_DIR are kept." "UNINSTALL"
     fi
     local unit
-    for unit in devassist-agent devassist-firewall devassist-dns devassist; do
+    for unit in "${LEGACY_UNITS[@]}" devassist; do
         if [[ -e "$UNIT_DIR/$unit.service" ]]; then
             run systemctl disable --now "$unit.service" || true
             run rm -f "$UNIT_DIR/$unit.service"
         fi
     done
     run systemctl daemon-reload
-    # The firewall helper's table must not outlive it (it would keep dropping traffic).
-    if have nft && nft list table inet mrk >/dev/null 2>&1; then
-        info "حذف جدول nftables «inet mrk»" "deleting the nftables table 'inet mrk'"
+    # A legacy native firewall helper's table must not outlive it (it would keep dropping traffic).
+    if have nft && nft list table inet mrk >/dev/null 2>&1 && ! docker_firewall_running; then
+        info "حذف جدول nftables «inet mrk» (فایروال بومی قدیمی)" "deleting the nftables table 'inet mrk' (old native firewall)"
         run nft delete table inet mrk
     fi
-    run rm -f "$EXEC_HELPER"
+    run rm -f "$EXEC_HELPER" "$TMPFILES"
     [[ -e "$MARKER" ]] && run rm -rf "$PREFIX"
     run rm -rf "$CACHE_DIR"
     local path
@@ -1034,15 +872,22 @@ cmd_uninstall() {
         [[ -d "$path" ]] && run rmdir --ignore-fail-on-non-empty "$path"
     done
     if [[ $PURGE -eq 1 ]]; then
-        run rm -rf "$DATA_DIR" /var/lib/mrk-dns /var/lib/mrk-firewall /var/lib/mrk-agent "$CONF_DIR"
+        run rm -rf "$DATA_DIR" "${legacy_data[@]}" "$CONF_DIR"
         if getent passwd "$RUN_USER" >/dev/null; then run userdel "$RUN_USER"; fi
         if getent group "$RUN_USER" >/dev/null; then run groupdel "$RUN_USER"; fi
-        ok "DevAssist و همه داده‌هایش حذف شد" "DevAssist and all its data were removed"
+        ok "پنل DevAssist و همه داده‌هایش حذف شد" "the DevAssist panel and all its data were removed"
     else
         run rm -f "$INSTALL_CONF"
-        ok "DevAssist حذف شد؛ داده در $DATA_DIR و تنظیمات در $CONF_DIR ماند" \
-            "DevAssist was removed; data stays in $DATA_DIR and config in $CONF_DIR"
+        ok "پنل DevAssist حذف شد؛ داده در $DATA_DIR و تنظیمات در $CONF_DIR ماند" \
+            "the DevAssist panel was removed; data stays in $DATA_DIR and config in $CONF_DIR"
     fi
+    info "سرویس‌های Docker (agent، DNS، فایروال، S3) دست نخوردند؛ آن‌ها را جدا حذف کنید" \
+        "Docker services (agent, DNS, firewall, S3) are untouched; remove them separately"
+}
+
+# The Docker firewall helper owns the same table; never delete it from under it.
+docker_firewall_running() {
+    have docker && docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'mrk-firewall'
 }
 
 main() {
