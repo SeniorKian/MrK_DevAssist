@@ -159,3 +159,45 @@ def test_restore_plan_requires_confirmation_and_applies_only_offline(tmp_path: P
     assert artifact.read_bytes() == b"original-cache-content"
     assert (tmp_path / "control-plane" / "restore-receipts").is_dir()
     database.dispose()
+
+
+def test_mounts_below_reads_only_mounts_inside_the_data_dir(tmp_path: Path) -> None:
+    from mrk_control_plane.restore import _mounts_below
+
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "36 35 0:30 / / rw - overlay overlay rw\n"
+        "40 36 8:1 /storage /data rw - ext4 /dev/sda1 rw\n"
+        "41 40 8:1 /storage/npm /data/npm rw - ext4 /dev/sda1 rw\n"
+        "42 40 8:1 /storage/s3 /data/modules/s3 rw - ext4 /dev/sda1 rw\n"
+        "43 40 8:1 /x /data/my\\040dir rw - ext4 /dev/sda1 rw\n"
+        "44 36 8:1 /y /database rw - ext4 /dev/sda1 rw\n"
+        "short line\n",
+        encoding="utf-8",
+    )
+    assert _mounts_below(Path("/data"), mountinfo) == [
+        Path("/data/npm"),
+        Path("/data/modules/s3"),
+        Path("/data/my dir"),
+    ]
+    assert _mounts_below(Path("/data"), tmp_path / "missing") == []
+
+
+@pytest.mark.parametrize("mount", ["npm", "npm/storage"])
+def test_restore_refuses_a_data_root_on_a_separate_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mount: str
+) -> None:
+    from mrk_control_plane import restore as restore_module
+
+    stage = tmp_path / "stage"
+    (stage / "npm").mkdir(parents=True)
+    (stage / "pypi").mkdir()
+    data_dir = tmp_path / "data"
+    (data_dir / "npm" / "storage").mkdir(parents=True)
+    executor = RestoreExecutor.__new__(RestoreExecutor)
+    executor.data_dir = data_dir
+    monkeypatch.setattr(restore_module, "_mounts_below", lambda _root: [data_dir / mount])
+    with pytest.raises(RestoreError, match="separate mount"):
+        executor._check_stage(stage, ["npm"])  # noqa: SLF001
+    # A unit that is not on that mount is still accepted.
+    executor._check_stage(stage, ["pypi"])  # noqa: SLF001

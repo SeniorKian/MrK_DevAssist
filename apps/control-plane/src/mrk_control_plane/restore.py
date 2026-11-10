@@ -199,6 +199,29 @@ def _apply_logical_database(database: Database, path: Path) -> None:
                 )
 
 
+def _mounts_below(data_dir: Path, mountinfo: Path = Path("/proc/self/mountinfo")) -> list[Path]:
+    """Mount points strictly inside ``data_dir`` (Linux only; empty elsewhere).
+
+    Read from ``/proc/self/mountinfo`` because a bind mount of the same filesystem
+    has the same ``st_dev`` as its parent, so ``os.path.ismount`` does not see it.
+    """
+    try:
+        lines = mountinfo.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    found: list[Path] = []
+    for line in lines:
+        fields = line.split(" ")
+        if len(fields) < 5:
+            continue
+        # Spaces and other specials are octal-escaped (a space is backslash 040).
+        raw = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), fields[4])
+        mount = Path(raw)
+        if data_dir in mount.parents:
+            found.append(mount)
+    return found
+
+
 def _write_journal(path: Path, journal: dict[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(journal, sort_keys=True), encoding="utf-8")
@@ -242,6 +265,7 @@ class RestoreExecutor:
                 relative = relative.replace("\\", "/")
                 if not any(relative.startswith(f"{unit}/") for unit in units):
                     raise RestoreError(f"backup contains unsupported path: {relative}")
+        mounts = _mounts_below(self.data_dir)
         for unit in units:
             if unit.split("/", 1)[0] not in ALLOWED_DATA_ROOTS:
                 raise RestoreError(f"backup contains unsupported root: {unit}")
@@ -251,6 +275,14 @@ class RestoreExecutor:
                 "/" in unit and os.path.islink(current.parent)
             ):
                 raise RestoreError(f"active data root is a symlink: {unit}")
+            for mount in mounts:
+                if mount == current or mount in current.parents or current in mount.parents:
+                    # The swap below is a rename, which cannot cross a mount point.
+                    # Refuse before anything is moved instead of failing halfway.
+                    raise RestoreError(
+                        f"data root {unit} is on a separate mount ({mount}); the offline "
+                        "restore cannot swap it in place. Restore with that mount removed."
+                    )
         control = stage / "control-plane"
         if "control-plane" in units:
             if self.database.is_embedded_sqlite:

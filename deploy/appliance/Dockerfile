@@ -146,9 +146,12 @@ COPY deploy/appliance/entrypoint.py /opt/mrk/entrypoint.py
 # Application files stay root-owned and read-only for the runtime user, so a
 # compromised service cannot rewrite entrypoint.py that the next start runs as root.
 # The sed is a CRLF guard: a CRLF checkout would otherwise break `set -eu`.
+# /data/modules exists in the image so a fresh named volume gets it owned by 10001;
+# otherwise Docker creates it as root for the /data/modules/s3 mount point of
+# compose.split-storage.yaml and the panel cannot add its other module folders.
 RUN sed -i 's/\r$//' /opt/mrk/devpi-start.sh /opt/mrk/devpi-configure.sh /opt/mrk/supervisord.conf \
-    && mkdir -p /data /var/lib/mrk-agent /mnt/links /var/lib/mrk-dns /run/mrk-dns \
-    && chown 10001:10001 /data /var/lib/mrk-agent /mnt/links /var/lib/mrk-dns /run/mrk-dns \
+    && mkdir -p /data/modules /var/lib/mrk-agent /mnt/links /var/lib/mrk-dns /run/mrk-dns \
+    && chown 10001:10001 /data /data/modules /var/lib/mrk-agent /mnt/links /var/lib/mrk-dns /run/mrk-dns \
     && chmod 0750 /var/lib/mrk-dns /run/mrk-dns \
     && chown -R root:root /opt/mrk \
     && chmod -R u=rwX,go=rX /opt/mrk

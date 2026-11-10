@@ -286,7 +286,9 @@ services:
       MRK_DNS_LOG_LEVEL: ${MRK_DNS_LOG_LEVEL:-info}
     volumes:
       # Settings, zones (with 50-version history) and overrides; atomic writes.
-      - mrk-dns-data:/var/lib/mrk-dns
+      # Named volume by default. Set MRK_HOST_DNS_PATH to a host directory owned by
+      # 10001:10001 (the engine drops to that uid and cannot chown) to bind-mount.
+      - ${MRK_HOST_DNS_PATH:-mrk-dns-data}:/var/lib/mrk-dns
       # Admin socket + token; also mounted read-only into mrk-mirror.
       - mrk-dns-run:/run/mrk-dns
     init: true

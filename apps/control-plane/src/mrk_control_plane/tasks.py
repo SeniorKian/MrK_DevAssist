@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import errno
 import hashlib
 import json
 import logging
@@ -322,6 +323,31 @@ def _npm_matches(reference: dict[str, str], digests: dict[str, str]) -> bool | N
         if shasum == digests["sha1"]:
             return True
     return False if compared else None
+
+
+def _move_directory(source: Path, target: Path) -> None:
+    """Move a directory: an atomic rename, or a copy when it crosses a mount point.
+
+    The npm storage can be its own volume (compose.split-storage.yaml), and a rename
+    between two mounts fails with EXDEV. The copy goes to a hidden sibling first and
+    is renamed into place, so ``target`` never exists half-written; the source is
+    removed only after that.
+    """
+    try:
+        os.replace(source, target)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+    partial = target.with_name(f".{target.name}.partial")
+    shutil.rmtree(partial, ignore_errors=True)
+    try:
+        shutil.copytree(source, partial, symlinks=True)
+        os.replace(partial, target)
+    except Exception:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+    shutil.rmtree(source)
 
 
 class TaskManager:
@@ -1173,8 +1199,7 @@ class TaskManager:
         }
         try:
             self._write_json(entry / "meta.json", meta)
-            # Same filesystem: an atomic rename, never a copy.
-            os.replace(target, entry / "payload")
+            _move_directory(target, entry / "payload")
         except Exception:
             shutil.rmtree(entry, ignore_errors=True)
             raise
@@ -1245,7 +1270,7 @@ class TaskManager:
         target = parent / parts[-1]
         if os.path.lexists(target):
             raise FileExistsError("package is cached again; purge it before restoring")
-        os.replace(payload, target)
+        _move_directory(payload, target)
         shutil.rmtree(entry, ignore_errors=True)
         self.catalog.invalidate()
         return {k: meta.get(k) for k in ("trash_id", "ecosystem", "name", "size_bytes")}

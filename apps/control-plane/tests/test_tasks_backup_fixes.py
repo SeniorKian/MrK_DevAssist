@@ -669,3 +669,34 @@ def test_restore_refuses_while_engines_listen(
         monkeypatch.setenv("MRK_RESTORE_ENGINE_PORTS", str(listener.getsockname()[1]))
         with pytest.raises(RestoreError, match="still listening"):
             _assert_offline(tmp_path)
+
+
+def test_trash_round_trips_when_npm_storage_is_a_separate_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rename between two mounts fails with EXDEV; the move then copies instead."""
+    import errno
+
+    from mrk_control_plane import tasks as tasks_module
+
+    _npm_package(tmp_path, "@scope/pkg", {"1.0.0": b"content"})
+    manager = TaskManager(tmp_path, PackageCatalog(tmp_path))
+    storage = tmp_path / "npm" / "storage"
+    real_replace = os.replace
+
+    def replace(source: object, target: object) -> None:
+        inside = [storage in Path(str(item)).parents for item in (source, target)]
+        if inside[0] != inside[1]:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        real_replace(source, target)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(tasks_module.os, "replace", replace)
+    package_dir = storage / "@scope" / "pkg"
+    trash_id = str(manager._purge_npm("t", "@scope/pkg")["trash_id"])  # noqa: SLF001
+    assert not package_dir.exists()
+    payload = manager.trash_dir / trash_id / "payload"
+    assert (payload / "pkg-1.0.0.tgz").read_bytes() == b"content"
+    manager.restore_trash(trash_id)
+    assert (package_dir / "pkg-1.0.0.tgz").read_bytes() == b"content"
+    assert not (package_dir.parent / ".pkg.partial").exists()
+    assert manager.list_trash() == []

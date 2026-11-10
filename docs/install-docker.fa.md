@@ -69,6 +69,41 @@ echo 'MRK_HOST_DATA_PATH=/srv/devassist-data' >> .env
 
 </div>
 
+### پوشه‌های جدا برای npm، PyPI، S3 و DNS
+
+برای اینکه داده هر بخش پوشه (یا دیسک) خودش را روی سرور داشته باشد، به‌جای `compose.yaml` از
+`compose.split-storage.yaml` استفاده کنید (در Dokploy: مقدار **Compose Path** را
+`./compose.split-storage.yaml` بگذارید):
+
+<div dir="ltr">
+
+```bash
+sudo install -d -o 10001 -g 10001 -m 0750 /storage/npm /storage/pypi /storage/s3 /opt/dnsconfig
+cat >> .env <<'EOF'
+MRK_HOST_NPM_PATH=/storage/npm
+MRK_HOST_PYPI_PATH=/storage/pypi
+MRK_HOST_S3_PATH=/storage/s3
+MRK_HOST_DNS_PATH=/opt/dnsconfig
+EOF
+docker compose -f compose.split-storage.yaml up -d --build
+```
+
+</div>
+
+هر سه متغیر npm، PyPI و S3 در این فایل اجباری‌اند. `MRK_HOST_DNS_PATH` در هر دو فایل کار می‌کند و
+فقط با پروفایل `dns` استفاده می‌شود. بقیه وضعیت پنل (دیتابیس، تنظیمات، پشتیبان‌ها و لاگ) روی همان
+volume `mrk-dev-data` یا `MRK_HOST_DATA_PATH` می‌ماند. همه پوشه‌ها باید از قبل با مالک `10001:10001`
+ساخته شده باشند؛ کانتینر بدون دسترسی اجرا می‌شود و نمی‌تواند مالک را عوض کند.
+
+بهای mount جدا (rename از یک mount به mount دیگر ممکن نیست):
+
+- انتقال پکیج npm به سطل بازیافت و برگرداندنش به‌جای rename با کپی انجام می‌شود؛ برای پکیج‌های
+  بزرگ کندتر است.
+- بازگردانی آفلاین (`mrk-restore apply`) ریشه‌های `npm` و `pypi` را **رد می‌کند**، چون کل پوشه را
+  با rename جابه‌جا می‌کند. ساخت و اعتبارسنجی پشتیبان مثل قبل کار می‌کند. برای بازگردانی داده npm
+  یا PyPI، بازگردانی را با `compose.yaml` (یک mount) اجرا کنید و بعد پوشه‌ها را به مسیر خودشان
+  کپی کنید.
+
 ## 3. نصب واقعی (ایمیج منتشرشده)
 
 فایل `deploy/appliance/compose.production.yaml` ایمیج منتشرشده را می‌کشد. `MRK_IMAGE` اجباری

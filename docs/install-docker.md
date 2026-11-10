@@ -56,6 +56,37 @@ sudo install -d -o 10001 -g 10001 -m 0750 /srv/devassist-data
 echo 'MRK_HOST_DATA_PATH=/srv/devassist-data' >> .env
 ```
 
+### Separate host folders for npm, PyPI, S3 and DNS
+
+To give each part its own folder (or disk) on the server, use `compose.split-storage.yaml`
+instead of `compose.yaml` (in Dokploy: set **Compose Path** to `./compose.split-storage.yaml`):
+
+```bash
+sudo install -d -o 10001 -g 10001 -m 0750 /storage/npm /storage/pypi /storage/s3 /opt/dnsconfig
+cat >> .env <<'EOF'
+MRK_HOST_NPM_PATH=/storage/npm
+MRK_HOST_PYPI_PATH=/storage/pypi
+MRK_HOST_S3_PATH=/storage/s3
+MRK_HOST_DNS_PATH=/opt/dnsconfig
+EOF
+docker compose -f compose.split-storage.yaml up -d --build
+```
+
+The npm, PyPI and S3 variables are all required in this file. `MRK_HOST_DNS_PATH` works in
+both files and is only used with the `dns` profile. The rest of the panel state (database,
+settings, backups, logs) stays on the `mrk-dev-data` volume or `MRK_HOST_DATA_PATH`. Every
+folder must already exist and be owned by `10001:10001`; the container runs unprivileged and
+cannot change ownership.
+
+What separate mounts cost (a rename cannot cross a mount point):
+
+- Moving an npm package to the recycle bin, and restoring it, copies the package instead of
+  renaming it; slower for big packages.
+- The offline restore (`mrk-restore apply`) **refuses** the `npm` and `pypi` data roots, because
+  it swaps whole directories with a rename. Creating and validating backups works as before. To
+  restore npm or PyPI data, run the restore with `compose.yaml` (one mount) and copy the folders
+  to their own directories afterwards.
+
 ## 3. Production (published image)
 
 `deploy/appliance/compose.production.yaml` pulls a published image. `MRK_IMAGE` is required and
