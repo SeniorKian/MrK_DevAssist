@@ -419,37 +419,45 @@ class RestoreManager:
                 code = classify(exc)
             LOGGER.warning("server restore failed",
                            extra={"run_id": run["id"], "error_code": code, "mode": record["mode"]})
-            record.update(state="failed", error_code=code, finished_at=int(time.time()))
-            await asyncio.to_thread(self._store, record)
-            self._live.pop(record["id"], None)
-            self._busy_runs.discard(run["id"])
-            await asyncio.to_thread(self.ctx.audit, actor, action, "server_backup_run",
-                                    run["id"], "failure")
-            kind = "restore_failed" if record["mode"] == "restore" else "verify_failed"
-            title = ("Server backup restore failed" if record["mode"] == "restore"
-                     else "Server backup test restore failed")
-            self.ctx.events.publish(Event(
-                type=f"server_backup.{kind}", severity="error",
-                title=f"{title}: {job['name']}", message=f"error_code={code}",
-                module="server_backups", dedupe_key=f"server_backup_{kind}:{job['id']}",
-                details={"job_id": job["id"], "run_id": run["id"], "restore_id": record["id"],
-                         "error_code": code},
-            ))
+            # Audit and notify before the final state is visible, so anyone who
+            # sees "failed" also finds the audit entry and the notification.
+            try:
+                await asyncio.to_thread(self.ctx.audit, actor, action, "server_backup_run",
+                                        run["id"], "failure")
+                kind = "restore_failed" if record["mode"] == "restore" else "verify_failed"
+                title = ("Server backup restore failed" if record["mode"] == "restore"
+                         else "Server backup test restore failed")
+                self.ctx.events.publish(Event(
+                    type=f"server_backup.{kind}", severity="error",
+                    title=f"{title}: {job['name']}", message=f"error_code={code}",
+                    module="server_backups", dedupe_key=f"server_backup_{kind}:{job['id']}",
+                    details={"job_id": job["id"], "run_id": run["id"],
+                             "restore_id": record["id"], "error_code": code},
+                ))
+            finally:
+                record.update(state="failed", error_code=code, finished_at=int(time.time()))
+                await self._finish(record, run)
             return
-        record.update(state="succeeded", phase="done", progress=100, details=details,
-                      finished_at=int(time.time()))
+        try:
+            await asyncio.to_thread(self.ctx.audit, actor, action, "server_backup_run",
+                                    run["id"], "success")
+            if record["mode"] == "restore":
+                self.ctx.events.publish(Event(
+                    type="server_backup.restored", severity="info",
+                    title=f"Server backup restored: {job['name']}", module="server_backups",
+                    dedupe_key=f"server_backup_restore:{job['id']}",
+                    details={"job_id": job["id"], "run_id": run["id"],
+                             "restore_id": record["id"]},
+                ))
+        finally:
+            record.update(state="succeeded", phase="done", progress=100, details=details,
+                          finished_at=int(time.time()))
+            await self._finish(record, run)
+
+    async def _finish(self, record: dict[str, Any], run: dict[str, Any]) -> None:
         await asyncio.to_thread(self._store, record)
         self._live.pop(record["id"], None)
         self._busy_runs.discard(run["id"])
-        await asyncio.to_thread(self.ctx.audit, actor, action, "server_backup_run", run["id"],
-                                "success")
-        if record["mode"] == "restore":
-            self.ctx.events.publish(Event(
-                type="server_backup.restored", severity="info",
-                title=f"Server backup restored: {job['name']}", module="server_backups",
-                dedupe_key=f"server_backup_restore:{job['id']}",
-                details={"job_id": job["id"], "run_id": run["id"], "restore_id": record["id"]},
-            ))
 
     async def _run(self, record: dict[str, Any], run: dict[str, Any],
                    job: dict[str, Any]) -> dict[str, Any]:
