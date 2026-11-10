@@ -4,7 +4,7 @@
 # the control plane's own requirements resolve any of these to another version.
 # Versions only, no hashes yet (see the TODO in the Dockerfile).
 supervisor==4.3.0
-setuptools==81.0.0
+setuptools==84.2.1
 msgpack==1.2.4
 urllib3==2.8.0
 devpi-server==6.21.0
