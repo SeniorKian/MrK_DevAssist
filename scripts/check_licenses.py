@@ -70,7 +70,10 @@ PYTHON_LICENSE_OVERRIDES = {
     ("py", "1.11.0"): "MIT",
     ("pyramid", "2.1"): "LicenseRef-Repoze-BSD-derived",
     ("pyramid-chameleon", "0.3"): "LicenseRef-Repoze-BSD-derived",
+    # LICENSE: Apache-2.0 for contributions since 2017, BSD-3-Clause for earlier code.
+    ("python-dateutil", "2.9.0.post0"): "Apache-2.0 AND BSD-3-Clause",
     ("repoze-lru", "0.8"): "LicenseRef-Repoze-BSD-derived",
+    ("socksio", "1.0.0"): "MIT",
     ("supervisor", "4.3.0"): "LicenseRef-Repoze-BSD-derived",
     ("translationstring", "1.4"): "LicenseRef-Repoze-BSD-derived",
     # PyPI wheel metadata exposes the placeholder "License" on Linux, while
