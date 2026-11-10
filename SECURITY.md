@@ -51,7 +51,7 @@ In scope:
 
 Out of scope:
 
-- vulnerabilities in upstream projects we use unmodified (Verdaccio, devpi, PGlite, Python, Node,
+- vulnerabilities in upstream projects we use unmodified (Verdaccio, devpi, PostgreSQL, Python, Node,
   Go, libraries): report them upstream; tell us if DevAssist's use makes them exploitable;
 - issues that need an already compromised host, root access or the owner account;
 - missing hardening on deployments that changed the documented defaults (for example a panel

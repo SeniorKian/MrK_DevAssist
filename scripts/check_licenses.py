@@ -188,7 +188,6 @@ def main() -> int:
     for relative in (
         "apps/admin-ui/package-lock.json",
         "deploy/verdaccio/package-lock.json",
-        "deploy/pglite/package-lock.json",
     ):
         inventory.extend(_npm_inventory(root / relative))
     findings: list[dict[str, str]] = []

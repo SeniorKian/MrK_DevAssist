@@ -72,7 +72,7 @@ cd devassist && docker compose up -d
 
 | سرویس | image |
 |---|---|
-| پنل (لازم) | `ghcr.io/seniorkian/mrk-panel` |
+| پنل (لازم) | `ghcr.io/seniorkian/mrk-panel` + PostgreSQL 17 (`mrk-db`، volume ‏`mrk-db-data`) |
 | دستیار سرور | `ghcr.io/seniorkian/mrk-agent` |
 | DNS | `ghcr.io/seniorkian/mrk-dns` |
 | فایروال | `ghcr.io/seniorkian/mrk-firewall` |
@@ -105,7 +105,7 @@ cd devassist && docker compose up -d
 ## مستندات
 
 - [نصب با Docker](docs/install-docker.fa.md) · [نصب بدون Docker](docs/install-native.fa.md)
-- [Runbookهای عملیاتی](docs/18-operations-runbooks.md) (بازگردانی، نگهداری PGlite)
+- [Runbookهای عملیاتی](docs/18-operations-runbooks.md) (بازگردانی، PostgreSQL)
 - چه ساخته شده و چه در راه است: [Storyها](docs/03-user-stories.md) · [جدا کردن سرویس‌ها](docs/44-split-services-and-install-wizard.md)
 
 ## مشارکت
@@ -123,7 +123,7 @@ DevAssist رایگان است و رایگان می‌ماند. اگر وقت ی�
 
 ## مجوز
 
-[MIT](LICENSE). اجزای دیگران مجوز خودشان را دارند (Verdaccio با MIT، devpi با MIT، PGlite با
-Apache-2.0/PostgreSQL، miekg/dns با BSD-3-Clause و بقیه که `scripts/check_licenses.py` فهرست می‌کند).
+[MIT](LICENSE). اجزای دیگران مجوز خودشان را دارند (Verdaccio با MIT، devpi با MIT، PostgreSQL با
+مجوز PostgreSQL، miekg/dns با BSD-3-Clause و بقیه که `scripts/check_licenses.py` فهرست می‌کند).
 
 </div>

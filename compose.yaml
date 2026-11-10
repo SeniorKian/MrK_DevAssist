@@ -1,6 +1,6 @@
 # MrK DevAssist - the panel (docs/44). Step 1 of every install.
 #
-# This stack runs ONLY the admin panel and its embedded database. Open it, create
+# This stack runs ONLY the admin panel and its PostgreSQL database. Open it, create
 # the owner account, then add the services you want (server agent, DNS, firewall,
 # S3, npm, PyPI) from «My services -> Add a service»: the wizard gives a
 # ready Compose file and .env for each one, for Dokploy, Coolify or docker compose.
@@ -14,9 +14,11 @@
 # internal network mrk-net and the volumes mrk-dns-run, mrk-firewall-run,
 # mrk-npm-data and mrk-pypi-data.
 services:
-  mrk-panel:
+  # One-shot: creates the database password once, in a volume only mrk-db and the
+  # panel mount. No password lives in .env; restarts keep the same one.
+  mrk-db-init:
     image: ${MRK_PANEL_IMAGE:-ghcr.io/seniorkian/mrk-panel:latest}
-    build:
+    build: &panel-build
       context: .
       dockerfile: deploy/images/Dockerfile
       target: panel
@@ -25,10 +27,83 @@ services:
         PIP_INDEX_URL: ${MRK_BUILD_PIP_INDEX_URL:-}
         GOPROXY: ${MRK_BUILD_GOPROXY:-}
         APT_MIRROR: ${MRK_BUILD_APT_MIRROR:-}
+    entrypoint: ["mrk-db-secret", "/run/mrk-db/password"]
+    restart: "no"
+    user: "10001:10001"
+    volumes:
+      - mrk-db-secret:/run/mrk-db
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # PostgreSQL for the panel. Its data is the volume mrk-db-data (or a host folder,
+  # MRK_HOST_DB_PATH). Reachable only by the panel, on the internal mrk-db-net.
+  mrk-db:
+    image: postgres:17.11-trixie@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
     restart: unless-stopped
+    depends_on:
+      mrk-db-init:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: devassist
+      POSTGRES_DB: devassist
+      POSTGRES_PASSWORD_FILE: /run/mrk-db/password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --encoding=UTF8
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ${MRK_HOST_DB_PATH:-mrk-db-data}:/var/lib/postgresql/data
+      - mrk-db-secret:/run/mrk-db:ro
+    networks:
+      - mrk-db-net
+    shm_size: 256m
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+      - /var/run/postgresql:size=8m,uid=999,gid=999,mode=2775
+    security_opt:
+      - no-new-privileges:true
+    # The image's entrypoint fixes data-folder ownership, then drops to uid 999.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    mem_limit: ${MRK_DB_MEMORY:-1g}
+    memswap_limit: ${MRK_DB_MEMORY:-1g}
+    cpus: ${MRK_DB_CPUS:-1.0}
+    pids_limit: 256
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devassist -d devassist -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mrk-panel:
+    image: ${MRK_PANEL_IMAGE:-ghcr.io/seniorkian/mrk-panel:latest}
+    build: *panel-build
+    restart: unless-stopped
+    depends_on:
+      mrk-db:
+        condition: service_healthy
     # The image's unprivileged user; with cap_drop ALL a root start could not chown.
     user: "10001:10001"
     environment:
+      # PostgreSQL (mrk-db). The password is read from the generated file.
+      MRK_DATABASE_URL: postgresql+psycopg://devassist@mrk-db:5432/devassist?sslmode=disable
+      MRK_DATABASE_PASSWORD_FILE: /run/mrk-db/password
       MRK_LOG_LEVEL: ${MRK_LOG_LEVEL:-INFO}
       MRK_UPSTREAM_SECRET_KEY_FILE: ${MRK_UPSTREAM_SECRET_KEY_FILE:-}
       # Host names the panel answers to. Domains added in the panel are trusted
@@ -41,6 +116,7 @@ services:
       # Named volume by default. Set MRK_HOST_DATA_PATH to a host directory owned by
       # 10001:10001 to bind-mount instead.
       - ${MRK_HOST_DATA_PATH:-mrk-panel-data}:/data
+      - mrk-db-secret:/run/mrk-db:ro
       # Admin socket of the DNS service and the firewall helper's socket, once added.
       - mrk-dns-run:/run/mrk-dns:ro
       - mrk-firewall-run:/run/mrk-firewall:ro
@@ -54,6 +130,7 @@ services:
       - "${MRK_ADMIN_BIND:-127.0.0.1}:${MRK_ADMIN_PORT:-8080}:8080"
     networks:
       default:
+      mrk-db-net:
       mrk-net:
         # devpi (mrk-pypi) reaches the panel's PyPI router as http://mrk-panel:3142.
         aliases: [mrk-panel]
@@ -76,15 +153,14 @@ services:
       nofile:
         soft: 65536
         hard: 65536
-    # PGlite is stopped last by Supervisor.
-    stop_grace_period: 180s
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "python", "-m", "mrk_control_plane.healthcheck"]
       interval: 30s
       timeout: 8s
       retries: 3
-      # First boot (database init and migrations) can take a few minutes.
-      start_period: 300s
+      # First boot (migrations) can take a minute.
+      start_period: 120s
     logging:
       driver: json-file
       options:
@@ -93,6 +169,9 @@ services:
 
 volumes:
   mrk-panel-data:
+  # The panel's PostgreSQL data, and the generated database password.
+  mrk-db-data:
+  mrk-db-secret:
   # Fixed names: the DNS and firewall stacks (added later) attach to these.
   mrk-dns-run:
     name: mrk-dns-run
@@ -104,6 +183,9 @@ volumes:
     name: mrk-pypi-data
 
 networks:
+  # Panel <-> PostgreSQL only; no egress.
+  mrk-db-net:
+    internal: true
   # Internal, no egress: the panel talks to the service stacks here
   # (e.g. http://mrk-agent:7070). Fixed name so other stacks can join it.
   mrk-net:

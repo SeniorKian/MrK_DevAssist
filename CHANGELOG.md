@@ -15,6 +15,10 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
   `mrk-firewall` and `mrk-dns` from `deploy/images/Dockerfile`, published to GHCR with the panel's
   version. The agent and firewall take their pairing key from the wizard's `.env`
   (`MRK_AGENT_PAIRING_KEY`, `MRK_FIREWALL_PAIRING_KEY`) instead of printing it in their logs.
+- PostgreSQL instead of the embedded PGlite: the panel stack runs `mrk-db` (PostgreSQL 17, data
+  in the volume `mrk-db-data` or `MRK_HOST_DB_PATH`); a one-shot `mrk-db-init` generates the
+  password into a private volume (`MRK_DATABASE_PASSWORD_FILE`), so no password lives in `.env`.
+  The native install uses the distro's PostgreSQL. Node and PGlite left the panel image.
 - npm (`mrk-npm`) and PyPI (`mrk-pypi`) as their own images, added from the wizard. They share
   their data volumes with the panel, which writes Verdaccio's config (the container restarts
   Verdaccio on change) and keeps the PyPI router; devpi mirrors through it over `mrk-net`.

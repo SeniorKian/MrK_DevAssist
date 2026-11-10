@@ -60,7 +60,7 @@ def _check_workflows(root: Path, dockerfile: str, failures: list[str]) -> None:
                 )
 
 
-# (Compose file, service holding PGlite): the panel-only stack (docs/44). The
+# (Compose file, panel service): the panel-only stack (docs/44). The
 # service stacks are rendered by the panel's wizard and checked by its tests.
 _DATABASE_SERVICES = (("compose.yaml", "mrk-panel"),)
 _LEGACY_COMPOSE: tuple[str, ...] = ()
@@ -76,18 +76,28 @@ def _check_runtime_limits(root: Path, failures: list[str]) -> None:
             continue
         for key in ("mem_limit", "cpus", "pids_limit"):
             _require(key in service, f"{relative}: resource limit {key} is missing", failures)
-        _require(
-            _seconds(service.get("stop_grace_period", "")) >= 180,
-            f"{relative}: stop_grace_period must be >= 180s (PGlite is stopped last)",
-            failures,
-        )
         healthcheck = service.get("healthcheck", {})
         start_period = healthcheck.get("start_period", "") if isinstance(healthcheck, dict) else ""
         _require(
-            _seconds(start_period) >= 300,
-            f"{relative}: healthcheck start_period must be >= 300s for first boot",
+            _seconds(start_period) >= 60,
+            f"{relative}: healthcheck start_period must be >= 60s for first boot",
             failures,
         )
+        database = services.get("mrk-db") if isinstance(services, dict) else None
+        _require(isinstance(database, dict), f"{relative}: service mrk-db is missing", failures)
+        if isinstance(database, dict):
+            image = str(database.get("image", ""))
+            _require(image.startswith("postgres:") and "@sha256:" in image,
+                     f"{relative}: mrk-db must be a digest-pinned postgres image", failures)
+            _require("ports" not in database, f"{relative}: mrk-db must not publish ports",
+                     failures)
+            _require(
+                any(str(volume).endswith(":/var/lib/postgresql/data")
+                    for volume in database.get("volumes") or []),
+                f"{relative}: mrk-db needs a volume for /var/lib/postgresql/data", failures,
+            )
+            _require("POSTGRES_PASSWORD" not in (database.get("environment") or {}),
+                     f"{relative}: mrk-db must read its password from a file", failures)
 
 
 def _check_runtime_pins(root: Path, failures: list[str]) -> None:

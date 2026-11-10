@@ -18,11 +18,11 @@ from sqlalchemy import text
 
 def main() -> int:
     database_url = os.environ["MRK_SMOKE_DATABASE_URL"]
-    with tempfile.TemporaryDirectory(prefix="mrk-pglite-smoke-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="mrk-db-smoke-") as temporary:
         data_dir = Path(temporary)
         artifact = data_dir / "npm" / "storage" / "smoke" / "artifact.tgz"
         artifact.parent.mkdir(parents=True, exist_ok=True)
-        artifact.write_bytes(b"pglite-restore-original")
+        artifact.write_bytes(b"db-restore-original")
         database = Database(data_dir, database_url)
         database.initialize()
         suffix = secrets.token_hex(4)
@@ -32,7 +32,7 @@ def main() -> int:
         user_id = auth.create_user(username, password, "owner", None)
         authenticated = auth.authenticate(username, password, "127.0.0.1", "smoke")
         if authenticated is None:
-            raise RuntimeError("PGlite authentication round trip failed")
+            raise RuntimeError("database authentication round trip failed")
         tasks = TaskManager(data_dir, PackageCatalog(data_dir), database=database)
         task_id = tasks.enqueue("integrity.scan", {}, user_id)
         queued = tasks.get_payload(task_id)
@@ -47,7 +47,7 @@ def main() -> int:
             str(backup_validation["confirmation"]),
             user_id,
         )
-        artifact.write_bytes(b"pglite-restore-mutated")
+        artifact.write_bytes(b"db-restore-mutated")
         auth.create_user(
             f"extra-{suffix}",
             f"extra-test-password-{secrets.token_urlsafe(18)}",
@@ -62,7 +62,7 @@ def main() -> int:
         )
         restore_ok = (
             restore_receipt["state"] == "applied"
-            and artifact.read_bytes() == b"pglite-restore-original"
+            and artifact.read_bytes() == b"db-restore-original"
             and len(auth.list_users()) == 1
         )
         with database.engine.connect() as connection:
@@ -84,7 +84,7 @@ def main() -> int:
         database.dispose()
     failed = sorted(name for name, state in checks.items() if state != "ok")
     if failed:
-        print(f"PGlite smoke test failed: {', '.join(failed)}", file=sys.stderr)
+        print(f"database smoke test failed: {', '.join(failed)}", file=sys.stderr)
         return 1
     return 0
 

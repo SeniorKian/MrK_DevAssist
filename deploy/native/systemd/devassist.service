@@ -1,14 +1,13 @@
 # MrK DevAssist panel (native install, docs/install-native.md).
 #
 # The same process tree as the `panel` image (deploy/images/Dockerfile): supervisord
-# with deploy/images/panel/supervisord.conf (PGlite, control-plane, fatal-exit
+# with deploy/images/panel/supervisord.conf (control plane, PyPI router, fatal-exit
 # listener). Every other service runs in Docker, added from the panel's wizard.
 #
 # The mount namespace recreates the paths the image uses, so the code and
 # supervisord.conf run unchanged:
 #   /data            <- the data directory (default /var/lib/devassist)
-#   /usr/local/bin   <- /opt/mrk/bin (supervisord, mrk-* entry points, node)
-#   /opt/pglite      <- /opt/mrk/pglite
+#   /usr/local/bin   <- /opt/mrk/bin (supervisord, mrk-* entry points)
 #   /tmp             <- private tmpfs (noexec,nosuid,nodev), like the container
 # @DEVASSIST_DATA_DIR@ is replaced by scripts/install-native.sh.
 
@@ -30,7 +29,7 @@ Environment=HOME=/tmp
 # Same as the image ENV.
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 ExecStart=/opt/mrk/venv/bin/python /opt/mrk/devassist_supervise.py
-# supervisord stops the control plane first and PGlite last (see supervisord.conf).
+# supervisord stops its programs in reverse priority (see supervisord.conf).
 # Only the main process gets SIGTERM.
 KillMode=mixed
 TimeoutStopSec=180
@@ -41,7 +40,7 @@ RestartSec=5
 
 # Paths the image provides (see the header).
 BindPaths=@DEVASSIST_DATA_DIR@:/data
-BindReadOnlyPaths=/opt/mrk/bin:/usr/local/bin /opt/mrk/pglite:/opt/pglite
+BindReadOnlyPaths=/opt/mrk/bin:/usr/local/bin
 TemporaryFileSystem=/tmp:size=64m,mode=1777,noexec,nosuid,nodev
 # Sockets of the Docker DNS and firewall services: /run/mrk-dns and /run/mrk-firewall
 # (created by /etc/tmpfiles.d/devassist.conf, 2750 10001:devassist). ProtectSystem=strict
@@ -49,6 +48,10 @@ TemporaryFileSystem=/tmp:size=64m,mode=1777,noexec,nosuid,nodev
 # so no extra ReadWritePaths= is needed; a per-directory bind is deliberately not
 # used, so a directory recreated by Docker after the panel started is still seen.
 # Agent (127.0.0.1:7070) and S3 admin (127.0.0.1:9001) are reached over loopback.
+# PostgreSQL: TCP to MRK_DATABASE_URL (local cluster 127.0.0.1:5432; AF_INET is allowed
+# and there is no IPAddressDeny=). The password file /etc/devassist/db-password
+# (0640 root:devassist) is read through the read-only /etc. The installer adds
+# devassist.service.d/postgresql.conf (Wants/After=postgresql.service) for a local cluster.
 
 # Hardening, mirroring the container: no capabilities, no-new-privileges,
 # read-only system, resource ceilings.

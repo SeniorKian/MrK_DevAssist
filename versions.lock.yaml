@@ -37,7 +37,7 @@ components:
   sqlalchemy:
     version: "2.1.8"
     source: "https://github.com/sqlalchemy/sqlalchemy"
-    note: "Shared control-plane ORM; embedded PGlite and external PostgreSQL use the same repositories."
+    note: "Control-plane ORM over PostgreSQL (SQLite only in source-level tests)."
   alembic:
     version: "1.20.1"
     source: "https://github.com/sqlalchemy/alembic"
@@ -45,15 +45,12 @@ components:
   psycopg:
     version: "3.3.8"
     source: "https://github.com/psycopg/psycopg"
-    note: "PostgreSQL 3 driver used by both embedded PGlite and external PostgreSQL modes."
-  pglite:
-    version: "0.5.8"
-    source: "https://github.com/electric-sql/pglite"
-    note: "Embedded single-node PostgreSQL mode; data persists below /data/database/pglite."
-  pglite_socket:
-    version: "0.2.11"
-    source: "https://github.com/electric-sql/pglite"
-    note: "Loopback-only PostgreSQL wire bridge. External PostgreSQL is recommended for HA."
+    note: "PostgreSQL 3 driver."
+  postgresql:
+    version: "17.11"
+    image: "postgres:17.11-trixie"
+    digest: "sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f"
+    note: "The panel's database (mrk-db in compose.yaml; the distro PostgreSQL in a native install)."
   uvicorn:
     version: "0.54.0"
     source: "https://github.com/encode/uvicorn"

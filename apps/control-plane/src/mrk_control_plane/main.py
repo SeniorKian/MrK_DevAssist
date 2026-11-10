@@ -76,7 +76,6 @@ from .upstream_store import UpstreamStore
 LOGGER = logging.getLogger(__name__)
 DATA_DIRECTORIES = (
     "control-plane",
-    "database/pglite",
     "npm/storage",
     "npm/config",
     "npm/auth",

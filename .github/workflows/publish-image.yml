@@ -22,6 +22,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:17.11-trixie@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+        env:
+          POSTGRES_USER: devassist
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: devassist
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U devassist -d devassist"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -70,35 +82,21 @@ jobs:
         working-directory: deploy/verdaccio
       - run: ./node_modules/.bin/verdaccio --version
         working-directory: deploy/verdaccio
-      - run: npm ci --omit=dev --ignore-scripts
-        working-directory: deploy/pglite
-      - run: npm audit --registry=https://registry.npmjs.org --audit-level=high
-        working-directory: deploy/pglite
-      - run: ./node_modules/.bin/pglite-server --help
-        working-directory: deploy/pglite
 
       # Same database and engine gates as CI, so a tag on a commit that never
       # passed CI cannot skip them.
-      - name: Start PGlite for the smoke test
-        run: bash scripts/ci_pglite_server.sh start "$RUNNER_TEMP/pglite/smoke"
-      - name: Smoke test auth, tasks, backup and restore on PGlite
+      - name: Smoke test auth, tasks, backup and restore on PostgreSQL
         env:
-          MRK_SMOKE_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5433/postgres?sslmode=disable
-        run: python scripts/smoke_pglite.py
-      - name: Stop PGlite after the smoke test
-        if: always()
-        continue-on-error: true
-        run: bash scripts/ci_pglite_server.sh stop "$RUNNER_TEMP/pglite/smoke"
-      - name: Start a fresh PGlite for the migration rehearsal
-        run: bash scripts/ci_pglite_server.sh start "$RUNNER_TEMP/pglite/rehearsal"
-      - name: Rehearse migrations against PGlite
+          MRK_SMOKE_DATABASE_URL: postgresql+psycopg://devassist:ci-only-password@127.0.0.1:5432/devassist?sslmode=disable
+        run: python scripts/smoke_database.py
+      - name: Fresh database for the migration rehearsal
+        env:
+          PGPASSWORD: ci-only-password
+        run: psql -h 127.0.0.1 -U devassist -d devassist -c "CREATE DATABASE rehearsal"
+      - name: Rehearse migrations against PostgreSQL
         run: >-
           python scripts/rehearse_migrations.py --database-url
-          "postgresql+psycopg://postgres:postgres@127.0.0.1:5433/postgres?sslmode=disable"
-      - name: Stop PGlite after the migration rehearsal
-        if: always()
-        continue-on-error: true
-        run: bash scripts/ci_pglite_server.sh stop "$RUNNER_TEMP/pglite/rehearsal"
+          "postgresql+psycopg://devassist:ci-only-password@127.0.0.1:5432/rehearsal?sslmode=disable"
       - name: Exercise real npm and PyPI engines across restart and offline download
         run: python scripts/e2e_local_engines.py
 

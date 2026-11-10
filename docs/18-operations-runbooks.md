@@ -97,21 +97,26 @@ CLI در صورت heartbeat تازه، plan منقضی، confirmation نادرس
 - مسیر artifact بزرگ: router کل فایل را spool و verify می‌کند و سپس به devpi می‌دهد؛ clientها برای
   پکیج‌های بزرگ timeout بالاتری لازم دارند (مثلاً `pip --timeout 900`).
 
-## PGlite maintenance and upgrade
+## PostgreSQL
 
-PGlite در حالت single-user اجرا می‌شود و autovacuum ندارد، بنابراین جدول‌های پرتغییر (session، job)
-به‌مرور bloat می‌شوند. ماهانه یا پس از purgeهای بزرگ، در یک پنجره نگهداری:
+پنل از PostgreSQL استفاده می‌کند: در Docker سرویس `mrk-db` (داده در volume ‏`mrk-db-data`، یا پوشه
+`MRK_HOST_DB_PATH`)، در نصب بومی PostgreSQL خود سیستم‌عامل. رمز را `mrk-db-init` یک بار می‌سازد
+(volume ‏`mrk-db-secret`) و در هیچ `.env`ی نیست. autovacuum خود PostgreSQL روشن است؛ پنل هم دوره‌ای
+`VACUUM (ANALYZE)` می‌زند.
+
+پشتیبان مستقیم دیتابیس (کنار پشتیبان رمزنگاری‌شده پنل):
 
 ```sh
-docker compose exec mrk-panel supervisorctl -c /opt/mrk/supervisord.conf stop control-plane
-docker compose exec mrk-panel python -c "import psycopg; c = psycopg.connect('postgresql://postgres:postgres@127.0.0.1:5433/postgres?sslmode=disable', autocommit=True); c.execute('VACUUM (ANALYZE)'); c.close()"
-docker compose exec mrk-panel supervisorctl -c /opt/mrk/supervisord.conf start control-plane
+docker compose exec -T mrk-db pg_dump -U devassist -d devassist --format=custom > devassist.dump
 ```
 
-(PGlite فقط یک اتصال می‌پذیرد، پس control plane باید در این مدت متوقف باشد.)
+بازگردانی همان فایل (پنل را اول متوقف کنید):
 
-ارتقای نسخه `@electric-sql/pglite` ممکن است قالب on-disk را تغییر دهد. پیش از deploy imageی که
-نسخه PGlite آن عوض شده، backup رمزنگاری‌شده بسازید و restore drill انجام دهید؛ اگر PGlite جدید
-پوشه `/data/database/pglite` را باز نکرد، به digest قبلی برگردید و از مسیر backup/restore مهاجرت کنید.
-container را همیشه با stop timeout حداقل 180 ثانیه متوقف کنید (`stop_grace_period` در Compose،
-`docker stop --time 180` یا `docker run --stop-timeout 180`)؛ PGlite آخرین سرویسی است که متوقف می‌شود.
+```sh
+docker compose stop mrk-panel
+docker compose exec -T mrk-db pg_restore -U devassist -d devassist --clean --if-exists < devassist.dump
+docker compose start mrk-panel
+```
+
+ارتقای نسخه اصلی PostgreSQL (مثلاً 17 به 18) قالب پوشه داده را عوض می‌کند: اول با `pg_dump` پشتیبان
+بگیرید، image را عوض کنید و روی volume تازه `pg_restore` کنید.

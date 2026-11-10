@@ -25,7 +25,9 @@ cd devassist && docker compose up -d
 - **Coolify:** «New Resource ← Docker Compose» با `compose.yaml` همین مخزن.
 - **بدون Docker** (فقط پنل، با systemd): [install-native.fa.md](install-native.fa.md).
 
-پنل روی `127.0.0.1:8080` باز می‌شود. با تونل SSH بازش کنید و همان اول حساب مالک را بسازید:
+این Stack پنل است به‌علاوه PostgreSQL خودش (`mrk-db`؛ داده در volume ‏`mrk-db-data` یا با
+`MRK_HOST_DB_PATH` در پوشه‌ای روی سرور)؛ رمز دیتابیس در اولین اجرا خودکار ساخته می‌شود. پنل روی
+`127.0.0.1:8080` باز می‌شود. با تونل SSH بازش کنید و همان اول حساب مالک را بسازید:
 
 <div dir="ltr">
 

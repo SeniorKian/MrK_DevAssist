@@ -48,7 +48,7 @@ Then open <http://localhost:8080> through `ssh -L 8080:127.0.0.1:8080 you@your-s
 
 | Service | Image |
 |---|---|
-| Panel (required) | `ghcr.io/seniorkian/mrk-panel` |
+| Panel (required) | `ghcr.io/seniorkian/mrk-panel` + PostgreSQL 17 (`mrk-db`, volume `mrk-db-data`) |
 | Server agent | `ghcr.io/seniorkian/mrk-agent` |
 | DNS | `ghcr.io/seniorkian/mrk-dns` |
 | Firewall | `ghcr.io/seniorkian/mrk-firewall` |

@@ -27,9 +27,9 @@ def default_database_url(data_dir: Path) -> str:
 class Database:
     """Application database boundary shared by repositories and future modules.
 
-    SQLite remains available for source-level tests. The appliance supplies a
-    PostgreSQL URL backed by loopback-only PGlite, and production clusters can
-    point the same boundary at managed PostgreSQL without changing repositories.
+    SQLite remains available for source-level tests. The panel stack supplies
+    PostgreSQL (the mrk-db container, or the host's own PostgreSQL in a native
+    install); any managed PostgreSQL works the same way.
     """
 
     def __init__(self, data_dir: Path, url: str | None = None) -> None:

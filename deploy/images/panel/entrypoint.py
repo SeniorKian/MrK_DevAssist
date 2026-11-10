@@ -17,7 +17,6 @@ APP_UID = 10001
 APP_GID = 10001
 DATA_ROOT = Path("/data")
 DATA_DIRECTORIES = (
-    "database",
     "npm",
     "npm/config",
     "npm/storage",

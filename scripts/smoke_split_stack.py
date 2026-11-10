@@ -104,8 +104,11 @@ def deploy(panel: Panel, service: str, tag: str, registry: str, workdir: Path) -
     env = re.sub(r"^MRK_IMAGE=.*$", f"MRK_IMAGE={registry}mrk-{service}:{tag}", bundle["env"],
                  flags=re.MULTILINE)
     (folder / ".env").write_text(env, encoding="utf-8")
-    sh("docker", "compose", "--project-directory", str(folder), "-p", f"mrk-smoke-{service}",
-       "up", "--detach")
+    # Only the wizard's .env: MRK_* variables of the calling shell must not leak in.
+    clean = {key: value for key, value in os.environ.items() if not key.startswith("MRK_")}
+    sh("docker", "compose", "--project-directory", str(folder),
+       "--env-file", str(folder / ".env"), "-p", f"mrk-smoke-{service}",
+       "up", "--detach", env=clean)
 
 
 def connect(panel: Panel, service: str) -> None:
@@ -173,9 +176,11 @@ def main() -> int:
             for service in services:
                 folder = workdir / service
                 if folder.exists():
-                    sh("docker", "compose", "--project-directory", str(folder), "-p",
+                    sh("docker", "compose", "--project-directory", str(folder),
+       "--env-file", str(folder / ".env"), "-p",
                        f"mrk-smoke-{service}", "logs", "--tail", "80", check=False)
-                    sh("docker", "compose", "--project-directory", str(folder), "-p",
+                    sh("docker", "compose", "--project-directory", str(folder),
+       "--env-file", str(folder / ".env"), "-p",
                        f"mrk-smoke-{service}", "down", "--volumes", check=False)
             sh(*compose, "logs", "--tail", "80", check=False, env=env)
             sh(*compose, "down", "--volumes", check=False, env=env)

@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help=(
             "SQLAlchemy URL of an empty database to rehearse against "
-            "(e.g. PGlite on 127.0.0.1:5433); defaults to a temporary SQLite file"
+            "(e.g. PostgreSQL on 127.0.0.1:5432); defaults to a temporary SQLite file"
         ),
     )
     args = parser.parse_args(argv)

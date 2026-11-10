@@ -41,13 +41,6 @@ updates:
     commit-message:
       prefix: deps
 
-  - package-ecosystem: npm
-    directory: /deploy/pglite
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: deps
-
   # Base image digests. scripts/validate_release.py fails if the node/python
   # digests used by workflow `docker run` steps drift from the Dockerfile's, so
   # update those in the same PR.

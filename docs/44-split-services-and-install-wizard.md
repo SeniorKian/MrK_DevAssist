@@ -91,7 +91,7 @@ Compose معتبر، فقط‌خواندنی، بدون capability اضافه و
 
 | target | محتوا | کاربر |
 |---|---|---|
-| `panel` | پنل، رابط کاربری، PGlite | 10001 |
+| `panel` | پنل، رابط کاربری، روتر PyPI (دیتابیس: سرویس `mrk-db` با PostgreSQL 17) | 10001 |
 | `agent` | `mrk-agent` | root با `DAC_READ_SEARCH`+`DAC_OVERRIDE` (مثل قبل) |
 | `firewall` | `mrk-firewall` + `nft` | root فقط با `NET_ADMIN` |
 | `dns` | باینری Go موتور DNS | از uid 0 شروع و فوراً به 10001 |

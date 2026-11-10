@@ -46,12 +46,6 @@ RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm con
 # Pre-publish size quota for «My space» scopes (no dependencies).
 COPY deploy/verdaccio/plugins ./plugins
 
-FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS pglite-builder
-ARG NPM_REGISTRY
-WORKDIR /opt/pglite
-COPY deploy/pglite/package.json deploy/pglite/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY" && npm config set replace-registry-host always; fi; npm ci --omit=dev --ignore-scripts
-
 FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS dns-builder
 ARG GOPROXY
 ENV CGO_ENABLED=0 \
@@ -160,12 +154,18 @@ ENTRYPOINT ["mrk-s3-engine"]
 FROM python-base AS npm
 ARG VCS_REF
 ARG BUILD_DATE
-LABEL org.opencontainers.image.title="MrK DevAssist npm"       org.opencontainers.image.description="npm registry (Verdaccio) managed by the MrK DevAssist panel"       org.opencontainers.image.licenses="MIT"       org.opencontainers.image.revision="$VCS_REF"       org.opencontainers.image.created="$BUILD_DATE"
+LABEL org.opencontainers.image.title="MrK DevAssist npm" \
+      org.opencontainers.image.description="npm registry (Verdaccio) managed by the MrK DevAssist panel" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.created="$BUILD_DATE"
 COPY --from=verdaccio-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=verdaccio-builder /opt/verdaccio /opt/verdaccio
 # /data/npm is the volume shared with the panel (config, storage, auth). A fresh
 # named volume copies these 10001-owned directories.
-RUN mkdir -p /data/npm/config /data/npm/storage /data/npm/auth     && chown -R 10001:10001 /data     && chown -R root:root /opt/verdaccio && chmod -R u=rwX,go=rX /opt/verdaccio
+RUN mkdir -p /data/npm/config /data/npm/storage /data/npm/auth \
+    && chown -R 10001:10001 /data \
+    && chown -R root:root /opt/verdaccio && chmod -R u=rwX,go=rX /opt/verdaccio
 USER 10001:10001
 ENV HOME=/tmp
 EXPOSE 4873
@@ -176,12 +176,24 @@ ENTRYPOINT ["mrk-npm-runner"]
 FROM python-base AS pypi
 ARG VCS_REF
 ARG BUILD_DATE
-LABEL org.opencontainers.image.title="MrK DevAssist PyPI"       org.opencontainers.image.description="PyPI registry (devpi) managed by the MrK DevAssist panel"       org.opencontainers.image.licenses="MIT"       org.opencontainers.image.revision="$VCS_REF"       org.opencontainers.image.created="$BUILD_DATE"
+LABEL org.opencontainers.image.title="MrK DevAssist PyPI" \
+      org.opencontainers.image.description="PyPI registry (devpi) managed by the MrK DevAssist panel" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.created="$BUILD_DATE"
 # devpi fetches through the panel's PyPI router (MRK_PYPI_UPSTREAM_URL, on mrk-net).
-ENV MRK_DATA_DIR=/data     MRK_PYPI_SERVER_DIR=/data/pypi/server     MRK_PYPI_AUTH_DIR=/data/pypi/auth     MRK_PYPI_UPSTREAM_URL=http://mrk-panel:3142/simple/     MRK_PYPI_REQUEST_TIMEOUT=900     HOME=/tmp
+ENV MRK_DATA_DIR=/data \
+    MRK_PYPI_SERVER_DIR=/data/pypi/server \
+    MRK_PYPI_AUTH_DIR=/data/pypi/auth \
+    MRK_PYPI_UPSTREAM_URL=http://mrk-panel:3142/simple/ \
+    MRK_PYPI_REQUEST_TIMEOUT=900 \
+    HOME=/tmp
 COPY deploy/images/pypi/devpi-start.sh deploy/images/pypi/devpi-configure.sh deploy/images/pypi/entrypoint.sh /opt/mrk/
 # The CRLF guard keeps a Windows checkout from breaking `set -eu`.
-RUN sed -i 's/$//' /opt/mrk/*.sh     && mkdir -p /data/pypi/server /data/pypi/auth     && chown -R 10001:10001 /data     && chown -R root:root /opt/mrk && chmod -R u=rwX,go=rX /opt/mrk
+RUN sed -i 's/\r$//' /opt/mrk/*.sh \
+    && mkdir -p /data/pypi/server /data/pypi/auth \
+    && chown -R 10001:10001 /data \
+    && chown -R root:root /opt/mrk && chmod -R u=rwX,go=rX /opt/mrk
 USER 10001:10001
 EXPOSE 3141
 ENTRYPOINT ["/bin/sh", "/opt/mrk/entrypoint.sh"]
@@ -220,10 +232,13 @@ LABEL org.opencontainers.image.title="MrK DevAssist panel" \
       org.opencontainers.image.created="$BUILD_DATE"
 ENV MRK_ENV=production \
     MRK_DATA_DIR=/data \
-    MRK_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5433/postgres?sslmode=disable \
+    MRK_DATABASE_URL=postgresql+psycopg://devassist@mrk-db:5432/devassist?sslmode=disable \
+    MRK_DATABASE_PASSWORD_FILE=/run/mrk-db/password \
     MRK_ADMIN_UI_DIR=/opt/mrk/admin-ui \
     MRK_NPM_ENABLED=false \
-    MRK_PYPI_ENABLED=false     MRK_PYPI_ROUTER_HOST=0.0.0.0     MRK_PYPI_UPSTREAM_URL=http://127.0.0.1:3142/simple/ \
+    MRK_PYPI_ENABLED=false \
+    MRK_PYPI_ROUTER_HOST=0.0.0.0 \
+    MRK_PYPI_UPSTREAM_URL=http://127.0.0.1:3142/simple/ \
     MRK_AUTH_COOKIE_SECURE=true \
     MRK_SESSION_TTL_SECONDS=28800 \
     MRK_BUILD_COMMIT=$VCS_REF \
@@ -231,8 +246,6 @@ ENV MRK_ENV=production \
     MRK_IMAGE_TAG=$IMAGE_TAG \
     MRK_HOST=0.0.0.0 \
     MRK_PORT=8080
-COPY --from=pglite-builder /usr/local/bin/node /usr/local/bin/node
-COPY --from=pglite-builder /opt/pglite /opt/pglite
 COPY --from=admin-builder /build/admin-ui/dist /opt/mrk/admin-ui
 COPY deploy/images/panel/supervisord.conf /opt/mrk/supervisord.conf
 COPY deploy/images/panel/entrypoint.py /opt/mrk/entrypoint.py
@@ -242,10 +255,10 @@ COPY deploy/images/panel/entrypoint.py /opt/mrk/entrypoint.py
 # writable by the DNS engine, which runs as 10001 too. /data/npm and /data/pypi are
 # the mount points of the volumes shared with the npm and PyPI services (docs/44).
 RUN sed -i 's/\r$//' /opt/mrk/supervisord.conf \
-    && mkdir -p /data/modules /mnt/links /run/mrk-dns /data/tmp/pypi-router \
+    && mkdir -p /data/modules /mnt/links /run/mrk-dns /run/mrk-db /data/tmp/pypi-router \
        /data/npm/config /data/npm/storage /data/npm/auth /data/pypi/server /data/pypi/auth \
     && chown -R 10001:10001 /data \
-    && chown 10001:10001 /mnt/links /run/mrk-dns \
+    && chown 10001:10001 /mnt/links /run/mrk-dns /run/mrk-db \
     && chmod 0750 /run/mrk-dns \
     && chown -R root:root /opt/mrk \
     && chmod -R u=rwX,go=rX /opt/mrk

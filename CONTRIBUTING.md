@@ -19,7 +19,7 @@ and you follow the [Code of Conduct](CODE_OF_CONDUCT.md). Security problems go t
 | `apps/dns-engine` | Go DNS engine (`mrk-dns`, `mrk-dnsbench`) |
 | `deploy/images` | the images: one Dockerfile, one target per service (panel, agent, firewall, dns, s3, npm, pypi), runtime pins |
 | `deploy/native` | systemd unit and helpers for the native (panel-only) install |
-| `deploy/verdaccio`, `deploy/pglite` | pinned npm packages of Verdaccio and PGlite |
+| `deploy/verdaccio` | pinned npm packages of Verdaccio |
 | `scripts` | CI checks, smoke/e2e tests, release validation, `install-native.sh` |
 | `docs` | install guides, user stories (what is built), plans for what is not built yet |
 | `versions.lock.yaml` | every pinned component and base image digest |
@@ -35,7 +35,7 @@ pip install -e "./apps/control-plane[dev]"
 pip install -r deploy/images/requirements.txt
 ```
 
-Run it against a local SQLite database in `./.data` (no PGlite needed):
+Run it against a local SQLite database in `./.data` (no PostgreSQL needed for development):
 
 ```bash
 MRK_ENV=development MRK_AUTH_COOKIE_SECURE=false MRK_HOST=127.0.0.1 MRK_PORT=8080 \
@@ -53,11 +53,10 @@ npm run dev                               # http://localhost:5173, proxies /api 
 
 Set `VITE_PROXY_TARGET` to point the dev server at another control plane.
 
-### Verdaccio and PGlite (for end-to-end tests)
+### Verdaccio (for end-to-end tests)
 
 ```bash
 (cd deploy/verdaccio && npm ci --omit=dev --ignore-scripts)
-(cd deploy/pglite && npm ci --omit=dev --ignore-scripts)
 python scripts/e2e_local_engines.py       # real npm/PyPI engines across restart and offline mode
 ```
 

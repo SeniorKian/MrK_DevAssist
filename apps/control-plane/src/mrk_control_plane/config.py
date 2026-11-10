@@ -148,6 +148,29 @@ def _getenv(name: str, default: str = "") -> str:
     return default if value is None else value
 
 
+def database_url_with_password(url: str | None, password_file: str | None) -> str | None:
+    """Put the password from ``MRK_DATABASE_PASSWORD_FILE`` into the URL.
+
+    The compose stack generates the PostgreSQL password once into a file shared
+    by the database and the panel; it never appears in an environment variable.
+    A URL that already has a password is left alone.
+    """
+    if not url or not password_file:
+        return url
+    from sqlalchemy.engine import make_url
+
+    parsed = make_url(url)
+    if parsed.password:
+        return url
+    try:
+        password = Path(password_file).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ValueError("MRK_DATABASE_PASSWORD_FILE cannot be read") from exc
+    if not password:
+        raise ValueError("MRK_DATABASE_PASSWORD_FILE is empty")
+    return parsed.set(password=password).render_as_string(hide_password=False)
+
+
 def _csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
@@ -278,7 +301,10 @@ class Settings:
                     else (Path.cwd() / ".data").resolve()
                 )
             ),
-            database_url=_getenv("MRK_DATABASE_URL", "").strip() or None,
+            database_url=database_url_with_password(
+                _getenv("MRK_DATABASE_URL", "").strip() or None,
+                _getenv("MRK_DATABASE_PASSWORD_FILE", "").strip() or None,
+            ),
             log_level=log_level,
             cors_origins=cors_origins,
             trusted_hosts=trusted_hosts,

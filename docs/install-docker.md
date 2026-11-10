@@ -19,7 +19,9 @@ cd devassist && docker compose up -d
 - **Coolify:** New Resource → Docker Compose → this repository's `compose.yaml`.
 - **Without Docker** (panel only, systemd): see [install-native.md](install-native.md).
 
-The panel listens on `127.0.0.1:8080`. Open it through an SSH tunnel and create the owner account
+The stack is the panel plus its PostgreSQL (`mrk-db`, data in the volume `mrk-db-data`, or a host
+folder with `MRK_HOST_DB_PATH`); the database password is generated on first start. The panel listens
+on `127.0.0.1:8080`. Open it through an SSH tunnel and create the owner account
 right away:
 
 ```bash

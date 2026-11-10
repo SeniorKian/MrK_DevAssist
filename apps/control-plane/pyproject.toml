@@ -48,6 +48,7 @@ mrk-s3-engine = "mrk_control_plane.s3engine.main:run"
 mrk-backup-decrypt = "mrk_control_plane.modules.server_backups_crypto:run"
 mrk-firewall = "mrk_control_plane.firewall.main:run"
 mrk-npm-runner = "mrk_control_plane.npm_runner:run"
+mrk-db-secret = "mrk_control_plane.db_secret:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mrk_control_plane"]

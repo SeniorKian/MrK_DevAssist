@@ -2,12 +2,15 @@
 # install-native.sh — install the MrK DevAssist PANEL without Docker (systemd),
 # on Debian 12/13 or Ubuntu 22.04/24.04, amd64 or arm64.
 #
-# Only the panel is native: the same two programs as the `panel` image target of
-# deploy/images/Dockerfile (PGlite + control plane, deploy/images/panel/supervisord.conf),
-# built from this checkout with the versions of versions.lock.yaml:
+# Only the panel is native: the same programs as the `panel` image target of
+# deploy/images/Dockerfile (deploy/images/panel/supervisord.conf), built from this
+# checkout with the versions of versions.lock.yaml:
 #   * Python in a venv with apps/control-plane and deploy/images/requirements.txt
 #     (pins checked like the Dockerfile);
-#   * Node for PGlite (`npm ci`, lockfile hashes enforced) and the built admin UI.
+#   * the admin UI, built with a pinned Node (build only, lockfile hashes enforced);
+#   * the distribution's PostgreSQL (default cluster) with role and database
+#     `devassist`; the password lives in /etc/devassist/db-password. Or an existing
+#     server with --external-db.
 # Every other service (agent, DNS, firewall, S3, npm, PyPI) runs in Docker and is
 # added from the panel: My services -> Add a service (docs/44).
 #
@@ -44,11 +47,16 @@ readonly RUN_USER="devassist"
 # uid/gid of the service images: Docker services write their sockets as 10001.
 readonly PREFERRED_ID=10001
 # Data layout of the panel image (deploy/images/Dockerfile, deploy/images/panel/entrypoint.py).
-readonly DATA_SUBDIRS=(database control-plane modules tmp tmp/pypi-router npm npm/config npm/storage npm/auth pypi pypi/server pypi/auth)
+readonly DATA_SUBDIRS=(control-plane modules tmp tmp/pypi-router npm npm/config npm/storage npm/auth pypi pypi/server pypi/auth)
 # Host directories the DNS and firewall containers bind-mount for their sockets.
 readonly SOCKET_DIRS=(/run/mrk-dns /run/mrk-firewall)
 # Units of older native installs (before docs/44); only ever removed.
 readonly LEGACY_UNITS=(devassist-agent devassist-firewall devassist-dns)
+# Local PostgreSQL (distribution package, default cluster).
+readonly DB_NAME="devassist"
+readonly DB_ROLE="devassist"
+readonly DB_PASSWORD_FILE="$CONF_DIR/db-password"
+readonly UNIT_DROPIN="$UNIT_DIR/$UNIT.d/postgresql.conf"
 
 # ----------------------------------------------------------------------------- options
 
@@ -66,6 +74,11 @@ NPM_REGISTRY=""
 NO_START=0
 REBUILD=0
 LANG_MODE="both"
+EXTERNAL_DB_URL=""
+EXTERNAL_DB_PASSWORD_FILE=""
+ROTATE_DB_PASSWORD=0
+DB_MODE="local"     # local | external (kept in install.conf)
+DB_PORT=5432        # port of the local cluster (read from PostgreSQL)
 
 NODE_DIST="${DEVASSIST_NODE_DIST:-https://nodejs.org/dist}"
 UV_DIST="${DEVASSIST_UV_DIST:-https://github.com/astral-sh/uv/releases/download}"
@@ -80,9 +93,13 @@ Commands:
   install     install or repair (default; safe to run again)
   upgrade     build the current checkout, then switch with a short restart
   status      show the unit, release and health
-  uninstall   remove programs and units (data and /etc/devassist are kept)
+  uninstall   remove programs and units (data, database and /etc/devassist are kept)
 
 Options:
+  --external-db URL     use this PostgreSQL (postgresql+psycopg://user@host:port/db?sslmode=...)
+                        instead of installing the distribution's PostgreSQL
+  --db-password-file F  with --external-db: file with the password (readable by devassist)
+  --rotate-db-password  local PostgreSQL: set a new random password
   --data-dir DIR        data directory on the host (default /var/lib/devassist)
   --python PATH         use an existing Python 3.13 instead of the pinned build
   --pip-index-url URL   PyPI mirror for the build (trusted like PyPI: pip checks no hashes)
@@ -92,7 +109,8 @@ Options:
   --skip-port-check     do not stop when a needed port is in use
   --skip-os-check       allow an untested distribution (unsupported)
   --min-free-gb N       free disk space required (default 3)
-  --purge               with uninstall: also delete data, config and the user
+  --purge               with uninstall: also delete data, config, the user and the
+                        local devassist database and role (PostgreSQL itself stays)
   --yes                 do not ask for confirmation
   --dry-run             print what would be done, change nothing
   --lang fa|en|both     message language (default both)
@@ -114,6 +132,9 @@ parse_args() {
             --python) PYTHON_OVERRIDE="${2:?--python needs a value}"; shift ;;
             --pip-index-url) PIP_INDEX_URL="${2:?--pip-index-url needs a value}"; shift ;;
             --npm-registry) NPM_REGISTRY="${2:?--npm-registry needs a value}"; shift ;;
+            --external-db) EXTERNAL_DB_URL="${2:?--external-db needs a value}"; shift ;;
+            --db-password-file) EXTERNAL_DB_PASSWORD_FILE="${2:?--db-password-file needs a value}"; shift ;;
+            --rotate-db-password) ROTATE_DB_PASSWORD=1 ;;
             --rebuild) REBUILD=1 ;;
             --no-start) NO_START=1 ;;
             --skip-port-check) SKIP_PORT_CHECK=1 ;;
@@ -134,7 +155,26 @@ parse_args() {
     esac
     case "$LANG_MODE" in fa|en|both) ;; *) die "زبان باید fa، en یا both باشد" "--lang must be fa, en or both" ;; esac
     [[ "$MIN_FREE_GB" =~ ^[0-9]+$ ]] || die "--min-free-gb باید عدد باشد" "--min-free-gb must be a number"
+    if [[ -n "$EXTERNAL_DB_URL" ]]; then
+        # SQLAlchemy needs the psycopg driver name.
+        [[ "$EXTERNAL_DB_URL" == postgresql://* ]] && EXTERNAL_DB_URL="postgresql+psycopg://${EXTERNAL_DB_URL#postgresql://}"
+        [[ "$EXTERNAL_DB_URL" =~ ^postgresql\+psycopg://[^[:space:]]+$ ]] || die \
+            "--external-db باید postgresql+psycopg://... باشد" "--external-db must be postgresql+psycopg://..."
+    fi
+    if [[ -n "$EXTERNAL_DB_PASSWORD_FILE" ]]; then
+        [[ -n "$EXTERNAL_DB_URL" ]] || die "--db-password-file فقط همراه --external-db" \
+            "--db-password-file needs --external-db"
+        [[ "$EXTERNAL_DB_PASSWORD_FILE" == /* ]] || die "--db-password-file باید مسیر مطلق باشد" \
+            "--db-password-file must be an absolute path"
+    fi
+    if [[ -n "$EXTERNAL_DB_URL" && $ROTATE_DB_PASSWORD -eq 1 ]]; then
+        die "--rotate-db-password فقط برای PostgreSQL محلی است" "--rotate-db-password is for the local PostgreSQL only"
+    fi
+    return 0
 }
+
+# mask_url URL -> the URL with any password replaced by ***
+mask_url() { printf '%s' "$1" | sed -E 's#^([^:/]+://[^:@/]*):[^@/]*@#\1:***@#'; }
 
 # ----------------------------------------------------------------------------- output
 
@@ -320,17 +360,20 @@ check_ports() {
     [[ $SKIP_PORT_CHECK -eq 1 ]] && return 0
     unit_active "$UNIT" && return 0
     have ss || { warn "ss نیست؛ بررسی پورت‌ها انجام نشد" "ss not found; ports not checked"; return 0; }
-    local port used failed=0
-    # 8080: the panel. 5433: PGlite, loopback only.
-    for port in 8080 5433; do
-        used="$(port_users "$port")"
-        if [[ -n "$used" ]]; then
-            warn "پورت $port در حال استفاده است: $used" "port $port is already in use: $used"
-            failed=1
-        fi
-    done
-    [[ $failed -eq 0 ]] || die "پورت‌ها را آزاد کنید یا با --skip-port-check ادامه دهید" \
-        "free the ports or continue with --skip-port-check"
+    local used
+    # 8080: the panel. PostgreSQL's port is read from the cluster after install.
+    used="$(port_users 8080)"
+    if [[ -n "$used" ]]; then
+        warn "پورت 8080 در حال استفاده است: $used" "port 8080 is already in use: $used"
+        die "پورت را آزاد کنید یا با --skip-port-check ادامه دهید" \
+            "free the port or continue with --skip-port-check"
+    fi
+}
+
+warn_old_pglite() {
+    [[ -e "$DATA_DIR/database/pglite" ]] || return 0
+    warn "پایگاه داده داخلی قدیمی (PGlite) در $DATA_DIR/database/pglite پیدا شد؛ منتقل نمی‌شود. از آن پشتیبان بگیرید یا حذفش کنید" \
+        "old embedded database (PGlite) found in $DATA_DIR/database/pglite; it is not migrated. Back it up or remove it"
 }
 
 check_docker_panel() {
@@ -362,7 +405,10 @@ warn_legacy_units() {
 install_packages() {
     step "System packages / بسته‌های سیستم"
     local missing=() pkg
-    for pkg in ca-certificates curl xz-utils tar gzip coreutils util-linux iproute2 git; do
+    local -a wanted=(ca-certificates curl xz-utils tar gzip coreutils util-linux iproute2 git)
+    # The distribution's PostgreSQL (its default major version); never removed by uninstall.
+    [[ "$DB_MODE" == local ]] && wanted+=(postgresql)
+    for pkg in "${wanted[@]}"; do
         dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed" || missing+=("$pkg")
     done
     [[ ${#missing[@]} -eq 0 ]] && return 0
@@ -422,22 +468,23 @@ install_python() {
     [[ -x "$PYTHON_BIN" ]] || die "Python $PY_VERSION نصب نشد" "Python $PY_VERSION was not installed"
 }
 
+# Node only builds the admin UI; nothing at runtime uses it, so it lives in the cache.
 install_node() {
-    step "Node.js $NODE_VERSION"
+    step "Node.js $NODE_VERSION (build only)"
     local dir="node-v$NODE_VERSION-linux-$NODE_ARCH" tmp="$CACHE_DIR/downloads"
-    NODE_HOME="$RUNTIMES/$dir"
+    NODE_HOME="$CACHE_DIR/tools/$dir"
     if [[ -x "$NODE_HOME/bin/node" ]]; then
         info "Node $NODE_VERSION از قبل نصب است" "Node $NODE_VERSION already installed"
         return 0
     fi
-    run install -d -m 0755 "$tmp" "$RUNTIMES"
+    run install -d -m 0755 "$tmp" "$CACHE_DIR/tools"
     download "$NODE_DIST/v$NODE_VERSION/$dir.tar.xz" "$tmp/$dir.tar.xz"
     download "$NODE_DIST/v$NODE_VERSION/SHASUMS256.txt" "$tmp/node-v$NODE_VERSION-SHASUMS256.txt"
     if [[ $DRY_RUN -eq 0 ]]; then
         verify_sha256 "$tmp/$dir.tar.xz" \
             "$(awk -v f="$dir.tar.xz" '$2 == f { print $1 }' "$tmp/node-v$NODE_VERSION-SHASUMS256.txt")"
     fi
-    run tar -xJf "$tmp/$dir.tar.xz" -C "$RUNTIMES" --no-same-owner
+    run tar -xJf "$tmp/$dir.tar.xz" -C "$CACHE_DIR/tools" --no-same-owner
 }
 
 # ----------------------------------------------------------------------------- build
@@ -492,11 +539,8 @@ build_python_env() {
     run "$venv/bin/python" -m pip uninstall --yes pip wheel
 }
 
-build_node_parts() {
-    step "PGlite, admin UI"
-    run install -d -m 0755 "$RELEASE_DIR/pglite"
-    run cp "$REPO_ROOT/deploy/pglite/package.json" "$REPO_ROOT/deploy/pglite/package-lock.json" "$RELEASE_DIR/pglite/"
-    npm_in "$RELEASE_DIR/pglite" ci --omit=dev --ignore-scripts
+build_admin_ui() {
+    step "Admin UI"
     local build="$CACHE_DIR/build/admin-ui"
     run rm -rf "$build"
     run install -d -m 0755 "$build"
@@ -514,7 +558,7 @@ build_bin_dir() {
     local bin="$RELEASE_DIR/bin" venv_bin="$RELEASE_DIR/venv/bin" entry name
     run install -d -m 0755 "$bin"
     if [[ $DRY_RUN -eq 1 ]]; then
-        printf '  + link venv entry points, node and python wrappers into %s\n' "$bin"
+        printf '  + link venv entry points and python wrappers into %s\n' "$bin"
         return 0
     fi
     for entry in "$venv_bin"/*; do
@@ -522,7 +566,6 @@ build_bin_dir() {
         case "$name" in activate*|python*|pip*|Activate*|deactivate*) continue ;; esac
         [[ -f "$entry" && -x "$entry" ]] && ln -sfn "$entry" "$bin/$name"
     done
-    ln -sfn "$NODE_HOME/bin/node" "$bin/node"
     # A symlinked venv python would not find pyvenv.cfg; use small wrappers.
     for name in python python3; do
         # shellcheck disable=SC2016 # "$@" is written into the wrapper literally
@@ -541,7 +584,7 @@ copy_release_files() {
         | put_file 0644 root root "$RELEASE_DIR/RELEASE"
 }
 
-release_complete() { [[ -d "$1" && ! -e "$1/.incomplete" && -x "$1/venv/bin/python" && -d "$1/pglite" ]]; }
+release_complete() { [[ -d "$1" && ! -e "$1/.incomplete" && -x "$1/venv/bin/python" && -d "$1/admin-ui" ]]; }
 
 build_release() {
     source_commit
@@ -561,7 +604,7 @@ build_release() {
     install_python
     install_node
     build_python_env
-    build_node_parts
+    build_admin_ui
     build_bin_dir
     copy_release_files
     # Application files stay root-owned and read-only for the runtime user (like the image).
@@ -646,7 +689,16 @@ ensure_layout() {
     done
     # Mount points for the container paths the code expects.
     mount_point /data
-    mount_point /opt/pglite
+    # /opt/pglite was a mount point of the PGlite era: remove it if this installer made it.
+    local kept=() path
+    for path in "${CREATED_MOUNT_POINTS[@]}"; do
+        if [[ "$path" == /opt/pglite ]]; then
+            [[ -d "$path" ]] && run rmdir --ignore-fail-on-non-empty "$path"
+            continue
+        fi
+        kept+=("$path")
+    done
+    CREATED_MOUNT_POINTS=("${kept[@]}")
     # Socket directories the DNS and firewall containers bind-mount (recreated at boot):
     # owned by the images' uid 10001, group devassist (setgid) so the panel can read them.
     {
@@ -658,15 +710,131 @@ ensure_layout() {
     run systemd-tmpfiles --create "$TMPFILES"
 }
 
-# set_env KEY VALUE: replace or append one line of the env file.
+# set_env KEY VALUE: replace or append one line of the env file (any characters in VALUE).
 set_env() {
     if [[ $DRY_RUN -eq 1 ]]; then
-        printf '  + set %s=%s in %s\n' "$1" "$2" "$ENV_FILE"
-    elif grep -q "^$1=" "$ENV_FILE"; then
-        sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
-    else
-        printf '%s=%s\n' "$1" "$2" >>"$ENV_FILE"
+        printf '  + set %s=%s in %s\n' "$1" "$(mask_url "$2")" "$ENV_FILE"
+        return 0
     fi
+    local tmp
+    tmp="$(mktemp)"
+    KEY="$1" VALUE="$2" awk '
+        BEGIN { key = ENVIRON["KEY"]; value = ENVIRON["VALUE"] }
+        index($0, key "=") == 1 { if (!done) print key "=" value; done = 1; next }
+        { print }
+        END { if (!done) print key "=" value }
+    ' "$ENV_FILE" >"$tmp"
+    cat "$tmp" >"$ENV_FILE"   # keeps mode and owner
+    rm -f "$tmp"
+}
+
+# unset_env KEY: drop the line of the env file.
+unset_env() {
+    if [[ $DRY_RUN -eq 1 ]]; then
+        printf '  + unset %s in %s\n' "$1" "$ENV_FILE"
+        return 0
+    fi
+    local tmp
+    tmp="$(mktemp)"
+    KEY="$1" awk 'index($0, ENVIRON["KEY"] "=") != 1' "$ENV_FILE" >"$tmp"
+    cat "$tmp" >"$ENV_FILE"
+    rm -f "$tmp"
+}
+
+# ----------------------------------------------------------------------------- database
+
+# pg_sql: run SQL from stdin as the postgres superuser over the local socket.
+# SQL (and so the password) goes through stdin, never onto a command line.
+pg_sql() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -d postgres "$@"; }
+
+# Local PostgreSQL: start the default cluster, then create or update role and database.
+ensure_database() {
+    [[ "$DB_MODE" == local ]] || return 0
+    step "PostgreSQL"
+    run systemctl enable --now postgresql.service
+    if [[ $DRY_RUN -eq 1 ]]; then
+        printf '  + wait for the default cluster, read its port\n'
+        local when="if missing"
+        [[ $ROTATE_DB_PASSWORD -eq 1 ]] && when="with a new password"
+        printf '  + write %s (0640 root:%s) %s\n' "$DB_PASSWORD_FILE" "$RUN_USER" "$when"
+        printf '  + psql (stdin): role %s LOGIN NOSUPERUSER, scram-sha-256 password; database %s owned by it\n' \
+            "$DB_ROLE" "$DB_NAME"
+        return 0
+    fi
+    local waited=0
+    until pg_sql -tA -c 'SELECT 1' >/dev/null 2>&1; do
+        [[ $waited -ge 60 ]] && die "PostgreSQL محلی آماده نشد؛ ببینید: pg_lsclusters و journalctl -u postgresql" \
+            "the local PostgreSQL is not ready; see: pg_lsclusters, journalctl -u postgresql"
+        sleep 2
+        waited=$((waited + 2))
+    done
+    # Debian picks another port when 5432 was taken while the cluster was created.
+    DB_PORT="$(pg_sql -tA -c 'SHOW port')"
+    [[ "$DB_PORT" =~ ^[0-9]+$ ]] || die "پورت PostgreSQL خوانده نشد" "could not read the PostgreSQL port"
+    [[ "$DB_PORT" == 5432 ]] || warn "PostgreSQL محلی روی پورت $DB_PORT است" "the local PostgreSQL listens on port $DB_PORT"
+
+    local password=""
+    if [[ -s "$DB_PASSWORD_FILE" && $ROTATE_DB_PASSWORD -eq 0 ]]; then
+        password="$(cat "$DB_PASSWORD_FILE")"
+        info "رمز پایگاه داده موجود حفظ می‌شود ($DB_PASSWORD_FILE)" "keeping the existing database password ($DB_PASSWORD_FILE)"
+    else
+        password="$(head -c 48 /dev/urandom | base64 -w0 | tr -d '/+=')"
+        password="${password:0:40}"
+        # Written first: every run sets the role to the file's password, so a failure
+        # below heals on the next run.
+        printf '%s' "$password" | put_file 0640 root "$RUN_USER" "$DB_PASSWORD_FILE"
+        info "رمز تازه پایگاه داده در $DB_PASSWORD_FILE" "new database password in $DB_PASSWORD_FILE"
+    fi
+    [[ -n "$password" && "$password" != *$'\n'* ]] || die "$DB_PASSWORD_FILE نامعتبر است" "$DB_PASSWORD_FILE is invalid"
+    run chown root:"$RUN_USER" "$DB_PASSWORD_FILE"
+    run chmod 0640 "$DB_PASSWORD_FILE"
+    # Standard SQL string literal (standard_conforming_strings is on by default).
+    local quoted="${password//\'/\'\'}"
+    pg_sql >/dev/null <<SQL
+SET password_encryption = 'scram-sha-256';
+SELECT 'CREATE ROLE $DB_ROLE' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$DB_ROLE')\gexec
+ALTER ROLE $DB_ROLE WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '$quoted';
+SELECT 'CREATE DATABASE $DB_NAME OWNER $DB_ROLE' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DB_NAME')\gexec
+ALTER DATABASE $DB_NAME OWNER TO $DB_ROLE;
+SQL
+    ok "پایگاه داده $DB_NAME و نقش $DB_ROLE آماده است (127.0.0.1:$DB_PORT)" \
+        "database $DB_NAME and role $DB_ROLE are ready (127.0.0.1:$DB_PORT)"
+}
+
+# purge_database: drop the local database and role (uninstall --purge).
+purge_database() {
+    if [[ "$DB_MODE" != local ]]; then
+        warn "پایگاه داده خارجی دست نخورد" "the external database was not touched"
+        return 0
+    fi
+    if [[ $DRY_RUN -eq 0 ]] && ! { have psql && pg_sql -tA -c 'SELECT 1' >/dev/null 2>&1; }; then
+        warn "PostgreSQL محلی در دسترس نیست؛ پایگاه داده $DB_NAME و نقش $DB_ROLE حذف نشدند" \
+            "the local PostgreSQL is not reachable; database $DB_NAME and role $DB_ROLE were not dropped"
+        return 0
+    fi
+    info "حذف پایگاه داده $DB_NAME و نقش $DB_ROLE (خود PostgreSQL می‌ماند)" \
+        "dropping database $DB_NAME and role $DB_ROLE (PostgreSQL itself stays)"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        printf '  + psql (stdin): DROP DATABASE IF EXISTS %s WITH (FORCE); DROP ROLE IF EXISTS %s\n' "$DB_NAME" "$DB_ROLE"
+        return 0
+    fi
+    pg_sql >/dev/null <<SQL
+DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE);
+DROP ROLE IF EXISTS $DB_ROLE;
+SQL
+}
+
+# db_target -> "host port" of MRK_DATABASE_URL in the env file (default 127.0.0.1 5432)
+db_target() {
+    local url="" hostport host port
+    [[ -r "$ENV_FILE" ]] && url="$(sed -n 's/^MRK_DATABASE_URL=//p' "$ENV_FILE" | head -n 1)"
+    hostport="${url#*://}"
+    hostport="${hostport%%/*}"
+    hostport="${hostport##*@}"
+    host="${hostport%%:*}"
+    port="${hostport##*:}"
+    [[ "$port" =~ ^[0-9]+$ ]] || port=5432
+    printf '%s %s\n' "${host:-127.0.0.1}" "$port"
 }
 
 install_config() {
@@ -685,15 +853,35 @@ install_config() {
     set_env MRK_PYPI_ENABLED false
     set_env MRK_BUILD_COMMIT "$COMMIT"
     set_env MRK_BUILD_DATE "$BUILD_DATE"
+    # Database: the panel puts the password file's content into the URL.
+    if [[ "$DB_MODE" == local ]]; then
+        set_env MRK_DATABASE_URL "postgresql+psycopg://$DB_ROLE@127.0.0.1:$DB_PORT/$DB_NAME?sslmode=disable"
+        set_env MRK_DATABASE_PASSWORD_FILE "$DB_PASSWORD_FILE"
+    elif [[ -n "$EXTERNAL_DB_URL" ]]; then
+        set_env MRK_DATABASE_URL "$EXTERNAL_DB_URL"
+        if [[ -n "$EXTERNAL_DB_PASSWORD_FILE" ]]; then
+            set_env MRK_DATABASE_PASSWORD_FILE "$EXTERNAL_DB_PASSWORD_FILE"
+        else
+            unset_env MRK_DATABASE_PASSWORD_FILE
+        fi
+    fi
     {
         printf '# Written by scripts/install-native.sh. Do not edit by hand.\n'
         printf 'DEVASSIST_DATA_DIR=%s\n' "$DATA_DIR"
         printf 'DEVASSIST_REPO=%s\n' "$REPO_ROOT"
         printf 'DEVASSIST_CREATED_MOUNT_POINTS=%s\n' "${CREATED_MOUNT_POINTS[*]}"
+        printf 'DEVASSIST_DB_MODE=%s\n' "$DB_MODE"
     } | put_file 0644 root root "$INSTALL_CONF"
     run install -m 0755 -o root -g root "$REPO_ROOT/deploy/native/devassist-exec.sh" "$EXEC_HELPER"
     sed -e "s|@DEVASSIST_DATA_DIR@|$DATA_DIR|g" "$REPO_ROOT/deploy/native/systemd/$UNIT" \
         | put_file 0644 root root "$UNIT_DIR/$UNIT"
+    if [[ "$DB_MODE" == local ]]; then
+        run install -d -m 0755 "$UNIT_DIR/$UNIT.d"
+        printf '# Written by scripts/install-native.sh: the panel uses the local PostgreSQL.\n[Unit]\nWants=postgresql.service\nAfter=postgresql.service\n' \
+            | put_file 0644 root root "$UNIT_DROPIN"
+    else
+        run rm -f "$UNIT_DROPIN"
+    fi
     run systemctl daemon-reload
 }
 
@@ -702,7 +890,32 @@ load_install_conf() {
     local value
     value="$(sed -n 's/^DEVASSIST_DATA_DIR=//p' "$INSTALL_CONF" | head -n 1)"
     [[ -n "$value" ]] && DATA_DIR="$value"
+    # Installs from before DEVASSIST_DB_MODE used PGlite; they move to the local PostgreSQL.
+    value="$(sed -n 's/^DEVASSIST_DB_MODE=//p' "$INSTALL_CONF" | head -n 1)"
+    [[ "$value" == external ]] && DB_MODE="external"
     return 0
+}
+
+# choose_db_mode: --external-db wins; otherwise keep the recorded mode.
+choose_db_mode() {
+    [[ -n "$EXTERNAL_DB_URL" ]] && DB_MODE="external"
+    if [[ "$DB_MODE" == external && -z "$EXTERNAL_DB_URL" ]] \
+        && ! grep -q '^MRK_DATABASE_URL=' "$ENV_FILE" 2>/dev/null; then
+        die "پایگاه داده خارجی بدون نشانی؛ --external-db بدهید" "external database without a URL; pass --external-db"
+    fi
+    if [[ "$DB_MODE" == external ]]; then
+        info "پایگاه داده خارجی: $(mask_url "${EXTERNAL_DB_URL:-(از $ENV_FILE)}")" \
+            "external database: $(mask_url "${EXTERNAL_DB_URL:-(from $ENV_FILE)}")"
+        if [[ -n "$EXTERNAL_DB_PASSWORD_FILE" && $DRY_RUN -eq 0 ]]; then
+            [[ -r "$EXTERNAL_DB_PASSWORD_FILE" ]] || die "فایل رمز پیدا نشد: $EXTERNAL_DB_PASSWORD_FILE" \
+                "password file not found: $EXTERNAL_DB_PASSWORD_FILE"
+            case "$EXTERNAL_DB_PASSWORD_FILE" in
+                /home/*|/root/*|/tmp/*|/run/user/*)
+                    die "سرویس این مسیر را نمی‌بیند (ProtectHome، /tmp خصوصی)؛ مثلاً $CONF_DIR را به کار ببرید" \
+                        "the service cannot see this path (ProtectHome, private /tmp); use e.g. $CONF_DIR" ;;
+            esac
+        fi
+    fi
 }
 
 # ----------------------------------------------------------------------------- activate
@@ -711,16 +924,20 @@ activate_release() {
     step "Activate / فعال‌سازی $RELEASE_ID"
     local link
     if unit_active "$UNIT" && [[ $NO_START -eq 0 ]]; then
-        info "توقف سرویس (تا 3 دقیقه؛ PGlite آخر از همه بسته می‌شود)" \
-            "stopping the service (up to 3 minutes; PGlite stops last)"
+        info "توقف سرویس" "stopping the service"
         run systemctl stop "$UNIT"
     fi
     run ln -sfn "releases/$RELEASE_ID" "$PREFIX/current"
-    for link in venv admin-ui pglite bin supervisord.conf devassist_supervise.py LICENSE; do
+    for link in venv admin-ui bin supervisord.conf devassist_supervise.py LICENSE; do
         run ln -sfn "current/$link" "$PREFIX/$link"
     done
-    # Leftovers of the pre-docs/44 layout (npm and PyPI ran inside the panel).
-    run rm -f "$PREFIX/verdaccio" "$PREFIX/devpi-start.sh" "$PREFIX/devpi-configure.sh"
+    # Leftovers of older layouts: npm and PyPI inside the panel (pre-docs/44), PGlite
+    # and the runtime Node it needed.
+    run rm -f "$PREFIX/verdaccio" "$PREFIX/devpi-start.sh" "$PREFIX/devpi-configure.sh" "$PREFIX/pglite"
+    local old_node
+    for old_node in "$RUNTIMES"/node-v*; do
+        [[ -d "$old_node" ]] && run rm -rf "$old_node"
+    done
     [[ $NO_START -eq 1 ]] && return 0
     run systemctl enable "$UNIT"
     run systemctl start "$UNIT"
@@ -764,9 +981,18 @@ summary() {
   Logs / لاگ:           journalctl -u devassist -f
   Config / تنظیمات:     $ENV_FILE  (then: systemctl restart devassist)
   Data / داده:          $DATA_DIR
+  DB / پایگاه داده:     $(db_summary)
   Upgrade / ارتقا:      git pull && sudo bash scripts/install-native.sh upgrade
   Uninstall / حذف:      sudo bash scripts/install-native.sh uninstall
 EOF
+}
+
+db_summary() {
+    if [[ "$DB_MODE" == local ]]; then
+        printf 'local PostgreSQL, database %s, password in %s' "$DB_NAME" "$DB_PASSWORD_FILE"
+    else
+        printf 'external (MRK_DATABASE_URL in %s)' "$ENV_FILE"
+    fi
 }
 
 # ----------------------------------------------------------------------------- commands
@@ -795,9 +1021,11 @@ cmd_install() {
         check_ports
     fi
     warn_legacy_units
+    warn_old_pglite
+    choose_db_mode
     [[ $DRY_RUN -eq 1 ]] && info "حالت پیش‌نمایش: هیچ چیزی تغییر نمی‌کند" "dry run: nothing is changed"
-    info "نسخه‌های پین‌شده: Python $PY_VERSION، Node $NODE_VERSION" \
-        "pinned versions: Python $PY_VERSION, Node $NODE_VERSION"
+    info "نسخه‌های پین‌شده: Python $PY_VERSION، Node $NODE_VERSION (فقط ساخت)" \
+        "pinned versions: Python $PY_VERSION, Node $NODE_VERSION (build only)"
     if [[ "$COMMAND" == upgrade ]]; then
         warn "پیش از ارتقا از پنل یک پشتیبان رمزنگاری‌شده بگیرید" "take an encrypted backup in the panel before upgrading"
         confirm "ارتقا پنل را چند دقیقه متوقف می‌کند." "The upgrade stops the panel for a few minutes." "UPGRADE"
@@ -805,6 +1033,7 @@ cmd_install() {
     install_packages
     ensure_user
     ensure_layout
+    ensure_database
     clean_incomplete_releases
     build_release
     install_config
@@ -820,6 +1049,16 @@ cmd_status() {
         [[ -e "$UNIT_DIR/$unit.service" ]] || continue
         printf '%-18s %s\n' "$unit" "$(systemctl is-active "$unit" 2>/dev/null || true)"
     done
+    load_install_conf
+    local host port state
+    read -r host port <<<"$(db_target)"
+    if have pg_isready; then
+        state="$(pg_isready -q -t 3 -h "$host" -p "$port" >/dev/null 2>&1 && echo accepting || echo "not reachable")"
+    else
+        # shellcheck disable=SC2016 # $1 and $2 expand in the inner bash
+        state="$(timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null && echo "port open" || echo "not reachable")"
+    fi
+    printf '%-18s %s (%s, %s:%s)\n' "database" "$state" "$DB_MODE" "$host" "$port"
     if [[ ! -r "$PREFIX/current/RELEASE" ]]; then
         info "نصب بومی پیدا نشد" "no native install found"
         return 0
@@ -842,12 +1081,12 @@ cmd_uninstall() {
     # Data of the native agent/DNS/firewall of older installs.
     local -a legacy_data=(/var/lib/mrk-dns /var/lib/mrk-firewall /var/lib/mrk-agent)
     if [[ $PURGE -eq 1 ]]; then
-        warn "--purge همه داده‌ها را برای همیشه پاک می‌کند: $DATA_DIR، $CONF_DIR و ${legacy_data[*]}" \
-            "--purge permanently deletes all data: $DATA_DIR, $CONF_DIR and ${legacy_data[*]}"
+        warn "--purge همه داده‌ها را برای همیشه پاک می‌کند: $DATA_DIR، $CONF_DIR، ${legacy_data[*]} و پایگاه داده PostgreSQL «$DB_NAME» با نقش «$DB_ROLE» (اگر محلی باشد؛ خود PostgreSQL می‌ماند)" \
+            "--purge permanently deletes all data: $DATA_DIR, $CONF_DIR, ${legacy_data[*]} and the PostgreSQL database '$DB_NAME' with role '$DB_ROLE' (when local; PostgreSQL itself stays)"
         confirm "این کار برگشت‌پذیر نیست." "This cannot be undone." "DELETE"
     else
-        confirm "برنامه‌ها و unitها حذف می‌شوند؛ داده و $CONF_DIR می‌مانند." \
-            "Programs and units are removed; data and $CONF_DIR are kept." "UNINSTALL"
+        confirm "برنامه‌ها و unitها حذف می‌شوند؛ داده، پایگاه داده و $CONF_DIR می‌مانند." \
+            "Programs and units are removed; data, the database and $CONF_DIR are kept." "UNINSTALL"
     fi
     local unit
     for unit in "${LEGACY_UNITS[@]}" devassist; do
@@ -856,6 +1095,7 @@ cmd_uninstall() {
             run rm -f "$UNIT_DIR/$unit.service"
         fi
     done
+    run rm -rf "$UNIT_DIR/$UNIT.d"
     run systemctl daemon-reload
     # A legacy native firewall helper's table must not outlive it (it would keep dropping traffic).
     if have nft && nft list table inet mrk >/dev/null 2>&1 && ! docker_firewall_running; then
@@ -874,14 +1114,17 @@ cmd_uninstall() {
         [[ -d "$path" ]] && run rmdir --ignore-fail-on-non-empty "$path"
     done
     if [[ $PURGE -eq 1 ]]; then
+        # The panel is stopped above, so nothing holds a connection.
+        purge_database
+        run rm -f "$DB_PASSWORD_FILE"
         run rm -rf "$DATA_DIR" "${legacy_data[@]}" "$CONF_DIR"
         if getent passwd "$RUN_USER" >/dev/null; then run userdel "$RUN_USER"; fi
         if getent group "$RUN_USER" >/dev/null; then run groupdel "$RUN_USER"; fi
         ok "پنل DevAssist و همه داده‌هایش حذف شد" "the DevAssist panel and all its data were removed"
     else
         run rm -f "$INSTALL_CONF"
-        ok "پنل DevAssist حذف شد؛ داده در $DATA_DIR و تنظیمات در $CONF_DIR ماند" \
-            "the DevAssist panel was removed; data stays in $DATA_DIR and config in $CONF_DIR"
+        ok "پنل DevAssist حذف شد؛ داده در $DATA_DIR، پایگاه داده $DB_NAME و تنظیمات در $CONF_DIR ماند" \
+            "the DevAssist panel was removed; data stays in $DATA_DIR, the database $DB_NAME, config in $CONF_DIR"
     fi
     info "سرویس‌های Docker (agent، DNS، فایروال، S3) دست نخوردند؛ آن‌ها را جدا حذف کنید" \
         "Docker services (agent, DNS, firewall, S3) are untouched; remove them separately"

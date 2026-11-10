@@ -529,7 +529,12 @@ def run() -> None:
     data_dir = Path(os.getenv("MRK_DATA_DIR", "/data")).resolve()
     _assert_offline(data_dir)
     passphrase = _read_secret(args.passphrase_file) if args.command == "apply" else ""
-    database_url = os.getenv("MRK_DATABASE_URL", "").strip() or None
+    from .config import database_url_with_password
+
+    database_url = database_url_with_password(
+        os.getenv("MRK_DATABASE_URL", "").strip() or None,
+        os.getenv("MRK_DATABASE_PASSWORD_FILE", "").strip() or None,
+    )
     pglite: subprocess.Popen[bytes] | None = None
     try:
         if database_url:
