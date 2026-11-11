@@ -45,6 +45,8 @@ service through their API, deploys it and connects it by itself.
 | File storage (S3) | S3-compatible buckets for apps and backups | `mrk-s3` |
 | npm registry | Private npm registry and cache, with upstream failover | `mrk-npm` |
 | PyPI registry | Private PyPI mirror; fetches through the panel (failover, proxies, quarantine) | `mrk-pypi` |
+| Git | Your code repositories and mirrors of GitHub/GitLab (Gitea) | `gitea/gitea` |
+| Docker image registry | Private images and a Docker Hub/ghcr.io mirror with fallbacks (Zot) | `project-zot/zot` |
 
 Images are `ghcr.io/seniorkian/mrk-<name>` with the same version as the panel. Every service runs
 on the same server as the panel (they share its internal network `mrk-net`; npm and PyPI also share

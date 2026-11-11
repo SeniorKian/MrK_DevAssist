@@ -79,6 +79,8 @@ cd devassist && docker compose up -d
 | فضای فایل (S3) | `ghcr.io/seniorkian/mrk-s3` |
 | مخزن npm | `ghcr.io/seniorkian/mrk-npm` |
 | مخزن PyPI | `ghcr.io/seniorkian/mrk-pypi` |
+| Git ‏(Gitea) | `gitea/gitea` (رسمی، نسخه ثابت) |
+| مخزن ایمیج Docker ‏(Zot) | `ghcr.io/project-zot/zot` (رسمی، نسخه ثابت) |
 
 بیشتر: [نصب با Docker](docs/install-docker.fa.md) · [نصب بدون Docker](docs/install-native.fa.md)
 

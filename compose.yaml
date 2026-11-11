@@ -12,7 +12,7 @@
 # Coolify: New resource -> Docker Compose -> this file.
 # The stack also creates the shared pieces the service stacks attach to: the
 # internal network mrk-net and the volumes mrk-dns-run, mrk-firewall-run,
-# mrk-npm-data and mrk-pypi-data.
+# mrk-npm-data, mrk-pypi-data and mrk-registry-config.
 services:
   # One-shot: creates the database password once, in a volume only mrk-db and the
   # panel mount. No password lives in .env; restarts keep the same one.
@@ -124,6 +124,8 @@ services:
       # config (users, upstreams, quotas) and browses their packages here.
       - mrk-npm-data:/data/npm
       - mrk-pypi-data:/data/pypi
+      # Config and users of the Docker image registry (Zot reloads them), once added.
+      - mrk-registry-config:/data/registry
     ports:
       # Loopback by default. MRK_ADMIN_BIND=0.0.0.0 publishes the panel on every
       # interface over plain HTTP: do that only temporarily and firewall the port.
@@ -181,6 +183,8 @@ volumes:
     name: mrk-npm-data
   mrk-pypi-data:
     name: mrk-pypi-data
+  mrk-registry-config:
+    name: mrk-registry-config
 
 networks:
   # Panel <-> PostgreSQL only; no egress.

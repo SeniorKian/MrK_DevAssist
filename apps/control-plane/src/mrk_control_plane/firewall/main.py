@@ -106,7 +106,104 @@ def prepare_socket(path: str) -> None:
     target.unlink()
 
 
+RECOVER_USAGE = """usage: mrk-firewall recover [--open]
+
+Emergency recovery from the server console (docs/45), e.g.
+  docker compose exec mrk-firewall mrk-firewall recover
+  docker exec <firewall container> mrk-firewall recover --open
+
+  recover         load the last confirmed (last-known-good) port policy now
+  recover --open  turn the port policy off: every port is open again as before it was
+                  enabled (blocked attacker addresses stay blocked)
+
+It asks the running helper over its socket; if the helper is not running it loads the
+ruleset itself. Last resort on the host: sudo nft delete table inet mrk
+"""
+
+
+def _read_key(state_dir: Path) -> bytes | None:
+    path = state_dir / KEY_FILE_NAME
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if len(raw) == KEY_BYTES:
+        return raw
+    try:
+        return decode_key(raw.decode("ascii").strip())
+    except ValueError:
+        return None
+
+
+def _recover_online(listen: str, key: bytes, open_ports: bool) -> dict[str, object]:
+    import json
+
+    import httpx
+
+    from ..agent.signing import sign_headers
+
+    kind, host_or_path, port = parse_listen(listen)
+    if kind == "unix":
+        transport = httpx.HTTPTransport(uds=host_or_path)
+        base = "http://mrk-firewall"
+    else:
+        transport = httpx.HTTPTransport()
+        base = f"http://{host_or_path}:{port}"
+    body = json.dumps({"open": open_ports}).encode()
+    headers = {"Content-Type": "application/json",
+               **sign_headers(key, "POST", "/v1/recover", body)}
+    with httpx.Client(transport=transport, base_url=base, timeout=20, trust_env=False) as client:
+        response = client.post("/v1/recover", content=body, headers=headers)
+    response.raise_for_status()
+    result = response.json()
+    return result if isinstance(result, dict) else {"result": result}
+
+
+def _recover_offline(state_dir: Path, open_ports: bool) -> dict[str, object]:
+    import time
+
+    from .app import FirewallConfig, HelperState
+    from .nft import DesiredState, NftRunner
+
+    config = FirewallConfig.from_env(b"", state_dir)
+    helper = HelperState(config, NftRunner(config.nft_binary, state_dir))
+    helper.desired = helper.load() or DesiredState(mode="dry_run")
+    helper.load_ports(time.time())
+    reason = "recover_offline_open" if open_ports else "recover_offline"
+    return {"rollback": helper.restore(reason, open_ports=open_ports)}
+
+
+def recover(argv: list[str]) -> int:
+    import json
+
+    if any(item in {"-h", "--help"} for item in argv) or set(argv) - {"--open"}:
+        print(RECOVER_USAGE)
+        return 0 if any(item in {"-h", "--help"} for item in argv) else 2
+    open_ports = "--open" in argv
+    state_dir = Path(os.getenv("MRK_FIREWALL_STATE_DIR", "").strip() or DEFAULT_STATE_DIR)
+    key = _read_key(state_dir)
+    result: dict[str, object] | None = None
+    if key is not None:
+        try:
+            result = _recover_online(os.getenv("MRK_FIREWALL_LISTEN", DEFAULT_LISTEN), key,
+                                     open_ports)
+            result["via"] = "helper"
+        except Exception as exc:  # noqa: BLE001 - any failure -> do it ourselves
+            print(f"helper not reachable ({type(exc).__name__}); applying directly")
+    if result is None:
+        result = _recover_offline(state_dir, open_ports)
+        result["via"] = "direct"
+    print(json.dumps(result, indent=2, default=str))
+    rollback = result.get("rollback")
+    outcome = rollback.get("outcome") if isinstance(rollback, dict) else None
+    return 0 if outcome in {"restored", "table_deleted"} else 1
+
+
 def run() -> None:
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "recover":
+        raise SystemExit(recover(sys.argv[2:]))
     import uvicorn
 
     from .app import FirewallConfig, create_firewall_app

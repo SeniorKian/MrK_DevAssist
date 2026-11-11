@@ -47,7 +47,7 @@ readonly RUN_USER="devassist"
 # uid/gid of the service images: Docker services write their sockets as 10001.
 readonly PREFERRED_ID=10001
 # Data layout of the panel image (deploy/images/Dockerfile, deploy/images/panel/entrypoint.py).
-readonly DATA_SUBDIRS=(control-plane modules tmp tmp/pypi-router npm npm/config npm/storage npm/auth pypi pypi/server pypi/auth)
+readonly DATA_SUBDIRS=(control-plane modules tmp tmp/pypi-router npm npm/config npm/storage npm/auth pypi pypi/server pypi/auth registry)
 # Host directories the DNS and firewall containers bind-mount for their sockets.
 readonly SOCKET_DIRS=(/run/mrk-dns /run/mrk-firewall)
 # Units of older native installs (before docs/44); only ever removed.

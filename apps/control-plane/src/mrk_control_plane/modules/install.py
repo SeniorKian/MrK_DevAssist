@@ -48,6 +48,7 @@ STATE_FILE = "install.json"
 WRITE_PERMISSION = {
     "agent": "agent:write", "firewall": "firewall:write", "dns": "dns:write", "s3": "s3:admin",
     "npm": "upstream:write", "pypi": "upstream:write",
+    "git": "git:write", "registry": "registry:write",
 }
 
 
@@ -116,6 +117,14 @@ class InstallService:
             return s3_module.ACTIVE_STORE
         if service_id in {"npm", "pypi"}:
             return self.ctx.settings
+        if service_id == "git":
+            from . import git_service
+
+            return git_service.ACTIVE_SERVICE
+        if service_id == "registry":
+            from . import registry_service
+
+            return registry_service.ACTIVE_SERVICE
         return None
 
     def env_managed(self, service_id: str) -> bool:
@@ -163,6 +172,14 @@ class InstallService:
             if not remote_services.is_remote(service_id, self.ctx.data_dir):
                 return "not_connected"
             return "connected" if await self._registry_healthy(service_id) else "unreachable"
+        if service_id == "git":
+            if helper.connected() is None:
+                return "not_connected"
+            return "connected" if (await helper.status())["reachable"] else "unreachable"
+        if service_id == "registry":
+            if helper.connected() is None:
+                return "not_connected"
+            return "connected" if await helper.reachable() else "unreachable"
         return "unavailable"
 
     async def _registry_healthy(self, service_id: str) -> bool:
@@ -233,9 +250,17 @@ class InstallService:
             state[service_id] = {"secret_ref": reference, "created_at": int(time.time())}
         else:
             state[service_id] = {"created_at": int(time.time())}
+        # Non-secret values the panel reads later (public addresses, ports).
+        state[service_id]["env"] = values
         if isinstance(previous_entry.get("deployment"), dict):
             # Where the panel deployed it (Dokploy/Coolify): domains are routed there.
             state[service_id]["deployment"] = previous_entry["deployment"]
+        if service_id == "registry":
+            # Zot starts from the config the panel writes into the shared volume.
+            helper = self._helper("registry")
+            if helper is None:
+                raise InstallError("module_unavailable", 503, "The registry module is not loaded")
+            helper.write_files()
         if service_id == "npm":
             # The npm container waits for this config in the shared volume (docs/44).
             remote_services.write_npm_config(self.ctx.data_dir)
@@ -260,6 +285,33 @@ class InstallService:
         if self.env_managed(service_id):
             raise InstallError("managed_by_environment", 409,
                                "This connection is managed by environment variables")
+        if service_id == "registry":
+            from .registry_service import RegistryError
+
+            try:
+                await asyncio.to_thread(helper.connect, (url or "").strip() or default_url(item))
+            except RegistryError as exc:
+                raise InstallError(exc.code, exc.status_code, exc.message, **exc.extra) from exc
+            return {"id": service_id, "connection": await self.connection_state(service_id)}
+        if service_id == "git":
+            from .git_service import GitError
+
+            pending = self.pending(service_id)
+            reference = pending.get("secret_ref") if pending else None
+            if not isinstance(reference, str):
+                raise InstallError("bundle_required", 409,
+                                   "Create the install files first; they carry the admin password")
+            try:
+                password = self.ctx.secret_store.get(reference)["key"]
+                await helper.connect((url or "").strip() or default_url(item) or "", password)
+            except GitError as exc:
+                if exc.code in {"git_unreachable", "git_auth_failed"}:
+                    return {"id": service_id, "connection": "unreachable"}
+                raise InstallError(exc.code, exc.status_code, exc.message, **exc.extra) from exc
+            except (KeyError, ValueError) as exc:
+                raise InstallError("bundle_required", 409,
+                                   "Create the install files again") from exc
+            return {"id": service_id, "connection": await self.connection_state(service_id)}
         if service_id in {"npm", "pypi"}:
             target = urlsplit((url or "").strip() or default_url(item) or "")
             if target.scheme != "http" or not target.hostname or target.path not in {"", "/"}:

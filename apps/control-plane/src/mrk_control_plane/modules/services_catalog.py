@@ -132,6 +132,33 @@ SERVICES: tuple[ServiceDef, ...] = (
         "#/dns/status",
         False,
     ),
+    # docs/46: Git (Gitea) and the Docker image registry (Zot), each in its own stack.
+    ServiceDef(
+        "git",
+        "Git (مخزن کد)",
+        "Git (code repositories)",
+        "مخزن‌های کد شما و آینه مخزن‌های GitHub و GitLab روی همین سرور.",
+        "Your code repositories, and mirrors of GitHub and GitLab repositories, on this server.",
+        3000,
+        (),
+        (),
+        (),
+        "#/code/git",
+        True,
+    ),
+    ServiceDef(
+        "registry",
+        "مخزن ایمیج Docker",
+        "Docker image registry",
+        "ایمیج‌های خصوصی شما و آینه Docker Hub، ghcr.io و quay.io.",
+        "Your private images, and a mirror of Docker Hub, ghcr.io and quay.io.",
+        5000,
+        (),
+        (),
+        (),
+        "#/code/registry",
+        True,
+    ),
     # docs/40 §5: plain-HTTP DoH of the DNS engine behind Traefik (the public
     # certificate comes from Traefik). Listed only while ``encrypted.doh`` is on
     # with ``tls:false`` (or while it still has domains); the port is the engine's

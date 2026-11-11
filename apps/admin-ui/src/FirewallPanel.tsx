@@ -24,6 +24,7 @@ import {
 } from "./kit";
 import { formatNumber } from "./format";
 import type { Language } from "./i18n";
+import FirewallPorts from "./FirewallPorts";
 
 /**
  * Security › «دیوار آتش» (docs/32 §3.1, docs/33 §4.2).
@@ -233,6 +234,11 @@ const COPY = {
   ev_expire: { fa: "زمان مسدودی {ip} تمام شد.", en: "The block on {ip} ended." },
   ev_clear: { fa: "همه مسدودی‌ها یک‌جا برداشته شد.", en: "Every block was lifted at once." },
   ev_mode: { fa: "حالت دیوار آتش شد: {mode}.", en: "The firewall changed to: {mode}." },
+  ev_ports_apply: { fa: "قوانین پورت روی سرور اعمال شد ({why}).", en: "Port rules were applied on the server ({why})." },
+  ev_ports_confirm: { fa: "قوانین پورت تأیید شد و ماندگار است.", en: "Port rules were confirmed and kept." },
+  ev_ports_rollback: { fa: "قوانین پورت به نسخه تأییدشده قبلی برگشت.", en: "Port rules went back to the last confirmed version." },
+  ev_ports_disable: { fa: "قوانین پورت خاموش شد.", en: "Port rules were turned off." },
+  allowNoPorts: { fa: "این فهرست فقط جلوی مسدود شدن نشانی را می‌گیرد و هیچ پورتی را باز نمی‌کند؛ باز و بسته کردن پورت‌ها در «پورت‌ها و سرویس‌ها» است.", en: "This list only keeps an address from being blocked; it never opens a port. Opening and closing ports is under “Ports and services”." },
   ev_other: { fa: "یک تغییر در دیوار آتش ثبت شد.", en: "A firewall change was recorded." },
   because: { fa: " (به خاطر «{rule}»)", en: " (because of “{rule}”)" },
   // preview & helper (Advanced)
@@ -548,7 +554,11 @@ export default function FirewallPanel({ permissions }: { permissions: readonly s
       />
 
       {/* ── always allowed ── */}
+      <Notice>{pick(language, COPY.allowNoPorts)}</Notice>
       <AllowlistCard settings={settings} canWrite={canWrite} onSave={putSettings} onSaved={() => void refreshAll()} />
+
+      {/* ── ports and services (docs/45) ── */}
+      <FirewallPorts canWrite={canWrite} />
 
       {/* ── rules (Advanced) ── */}
       <SectionCard
@@ -1190,6 +1200,10 @@ function HistoryCard({ rulesById }: { rulesById: Map<string, Rule> }) {
       case "expire": return say(language, COPY.ev_expire, { ip: ipText });
       case "clear": return pick(language, COPY.ev_clear);
       case "mode": return say(language, COPY.ev_mode, { mode: modeWord(language, event.mode) });
+      case "ports_apply": return say(language, COPY.ev_ports_apply, { why: event.reason });
+      case "ports_confirm": return pick(language, COPY.ev_ports_confirm);
+      case "ports_rollback": return pick(language, COPY.ev_ports_rollback);
+      case "ports_disable": return pick(language, COPY.ev_ports_disable);
       default: return pick(language, COPY.ev_other);
     }
   };

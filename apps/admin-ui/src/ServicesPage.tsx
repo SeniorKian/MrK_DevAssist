@@ -13,6 +13,8 @@ import type { SvgIconComponent } from "@mui/icons-material";
 import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
+import LayersRoundedIcon from "@mui/icons-material/LayersRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import StopRoundedIcon from "@mui/icons-material/StopRounded";
 import RestartAltRoundedIcon from "@mui/icons-material/RestartAltRounded";
@@ -104,7 +106,9 @@ const SERVICE_ICONS: Record<string, SvgIconComponent> = {
   s3: FolderRoundedIcon,
   agent: SupportAgentRoundedIcon,
   firewall: ShieldRoundedIcon,
-  dns: TravelExploreRoundedIcon
+  dns: TravelExploreRoundedIcon,
+  git: AccountTreeRoundedIcon,
+  registry: LayersRoundedIcon
 };
 
 const ACTION_ICONS: Record<ServiceAction, SvgIconComponent> = { start: PlayArrowRoundedIcon, stop: StopRoundedIcon, restart: RestartAltRoundedIcon };

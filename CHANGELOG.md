@@ -8,6 +8,12 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Git service (Gitea) and Docker image registry (Zot), both added from the wizard (docs/46).
+  Gitea keeps its own SQLite database; the panel creates its admin, keeps only an API token and
+  manages repositories, mirrors of GitHub/GitLab, users and organizations. Zot is a private
+  registry plus an on-demand mirror of Docker Hub, ghcr.io, quay.io and registry.k8s.io with
+  fallback URLs; the panel writes its config and bcrypt htpasswd (Zot reloads them). New
+  permissions git:read/write and registry:read/write and the page "Code & images".
 - Split install (docs/44): the panel runs alone first (`compose.yaml` at the repository root,
   image `mrk-panel`), and every other service is added from **My services → Add a service**. The
   wizard gives a ready `compose.yaml` and `.env` for Dokploy, Coolify or `docker compose`, with the

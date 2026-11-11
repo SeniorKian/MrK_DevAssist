@@ -9,6 +9,17 @@ Routes (signed, JSON):
   re-applied on startup.
 * ``POST /v1/signals`` ``{sources: [{name, kind, path}], sensitive_paths: [..]}`` -> new
   signals parsed from the appended part of each log file since the previous call.
+
+Port policy (docs/45), carried as ``ports`` in ``/v1/apply``:
+
+* The helper keeps the last-known-good (LKG = last confirmed) policy. An apply whose
+  policy differs from the LKG (temporary allows aside) must carry ``rollback_seconds``;
+  it becomes *pending* and is rolled back to the LKG when not confirmed in time, also
+  when the helper restarts meanwhile. Turning the policy off is always allowed.
+* ``POST /v1/confirm``  ``{token}`` -> the pending policy becomes the LKG.
+* ``POST /v1/recover``  ``{open: bool}`` -> LKG now (or policy off); used by the panel's
+  "undo now" and by the console command ``mrk-firewall recover``.
+* ``GET  /v1/import``   read-only UFW / PAASIFY-DOCKER-FW / sshd facts as proposals.
 """
 
 from __future__ import annotations
@@ -20,6 +31,7 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,7 +41,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from ..agent.signing import RequestVerifier, SignatureError
-from . import FIREWALL_VERSION, netinfo
+from . import FIREWALL_VERSION, importers, netinfo
 from .nft import (
     DEFAULT_NFT,
     DesiredState,
@@ -41,16 +53,21 @@ from .nft import (
     render_ruleset,
 )
 from .parsers import SOURCE_KINDS, PathMatcher, parse_lines, validate_patterns
+from .ports import PortError, PortPolicy, risk_key
 from .tail import DEFAULT_MAX_BYTES, FileTailer
 
 LOGGER = logging.getLogger("mrk_control_plane.firewall")
 STATE_FILE = "desired.json"
+PORTS_FILE = "ports.json"
 DEFAULT_STATE_DIR = "/var/lib/mrk-firewall"
 DEFAULT_LOG_ROOT = "/host/log"
+DEFAULT_HOST_ETC = "/host/etc"
+MIN_ROLLBACK_SECONDS, MAX_ROLLBACK_SECONDS = 30, 900
 _MAX_BODY_BYTES = 4 * 1024 * 1024
 _MAX_SOURCES = 8
 _MAX_SIGNALS = 5000
-_SIGNED_ROUTES = {("GET", "/v1/info"), ("POST", "/v1/apply"), ("POST", "/v1/signals")}
+_SIGNED_ROUTES = {("GET", "/v1/info"), ("POST", "/v1/apply"), ("POST", "/v1/signals"),
+                  ("POST", "/v1/confirm"), ("POST", "/v1/recover"), ("GET", "/v1/import")}
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
@@ -66,6 +83,9 @@ class FirewallConfig:
     nft_binary: str = DEFAULT_NFT
     force_dry_run: bool = False
     proc_net: Path = field(default_factory=lambda: Path("/proc/net"))
+    # Read-only host config mounts (ufw/, ssh/) used by /v1/import and the SSH check.
+    host_etc: Path = field(default_factory=lambda: Path(DEFAULT_HOST_ETC))
+    clock: Callable[[], float] = time.time
 
     @classmethod
     def from_env(cls, key: bytes, state_dir: Path) -> FirewallConfig:
@@ -73,6 +93,7 @@ class FirewallConfig:
             key=key,
             state_dir=state_dir,
             log_root=Path(os.getenv("MRK_FIREWALL_LOG_ROOT", "").strip() or DEFAULT_LOG_ROOT),
+            host_etc=Path(os.getenv("MRK_FIREWALL_HOST_ETC", "").strip() or DEFAULT_HOST_ETC),
             nft_binary=os.getenv("MRK_FIREWALL_NFT", "").strip() or DEFAULT_NFT,
             force_dry_run=_truthy(os.getenv("MRK_FIREWALL_FORCE_DRY_RUN", "")),
         )
@@ -163,23 +184,77 @@ class HelperState:
         self.applied_at: float | None = None
         self.last_error: str | None = None
         self.tailers: dict[tuple[str, str], FileTailer] = {}
+        # Port policy safety (docs/45): last confirmed policy, the unconfirmed change.
+        self.lkg: PortPolicy | None = None
+        self.pending: dict[str, Any] | None = None  # {token, key, deadline, started_at}
+        self.last_rollback: dict[str, Any] | None = None
 
     @property
     def state_path(self) -> Path:
         return self.config.state_dir / STATE_FILE
 
+    @property
+    def ports_path(self) -> Path:
+        return self.config.state_dir / PORTS_FILE
+
     def effective(self, state: DesiredState) -> DesiredState:
-        if self.config.force_dry_run and state.mode == "enforce":
+        if self.config.force_dry_run and (state.mode == "enforce" or state.ports is not None):
             return DesiredState(mode="dry_run", allow=state.allow, blocks=state.blocks)
         return state
 
-    def persist(self, state: DesiredState) -> None:
+    def _write(self, path: Path, payload: Any) -> None:
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
-        temporary = self.state_path.with_name(f".{STATE_FILE}.{secrets.token_hex(4)}.tmp")
+        temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(state.to_payload(), handle, separators=(",", ":"))
-        os.replace(temporary, self.state_path)
+            json.dump(payload, handle, separators=(",", ":"))
+        os.replace(temporary, path)
+
+    def persist(self, state: DesiredState) -> None:
+        self._write(self.state_path, state.to_payload())
+
+    def persist_ports(self) -> None:
+        self._write(self.ports_path, {
+            "lkg": None if self.lkg is None else self.lkg.to_payload(),
+            "pending": self.pending,
+            "last_rollback": self.last_rollback,
+        })
+
+    def load_ports(self, now: float) -> None:
+        try:
+            payload = json.loads(self.ports_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError):
+            LOGGER.error("ignoring unreadable port policy state file")
+            return
+        if not isinstance(payload, dict):
+            return
+        try:
+            lkg = payload.get("lkg")
+            self.lkg = None if lkg is None else PortPolicy.from_payload(lkg, now=now)
+        except PortError:
+            LOGGER.error("ignoring an invalid last-known-good port policy")
+            self.lkg = None
+        pending = payload.get("pending")
+        self.pending = pending if isinstance(pending, dict) else None
+        last = payload.get("last_rollback")
+        self.last_rollback = last if isinstance(last, dict) else None
+
+    def ports_info(self, now: float | None = None) -> dict[str, Any]:
+        current = self.config.clock() if now is None else now
+        pending = None
+        if self.pending is not None:
+            deadline = float(self.pending.get("deadline", 0))
+            pending = {**self.pending, "remaining": max(0, int(deadline - current))}
+        return {
+            "active": self.desired.ports_active(),
+            "key": risk_key(self.desired.ports),
+            "lkg_key": risk_key(self.lkg),
+            "lkg": None if self.lkg is None else self.lkg.to_payload(),
+            "pending": pending,
+            "last_rollback": self.last_rollback,
+        }
 
     def load(self) -> DesiredState | None:
         try:
@@ -192,36 +267,153 @@ class HelperState:
                          extra={"error": type(exc).__name__})
             return None
 
-    def apply(self, state: DesiredState) -> dict[str, Any]:
-        effective = self.effective(state)
-        result = self.manager.apply(effective)
+    def apply(self, state: DesiredState, *, rollback_seconds: int | None = None,
+              now: float | None = None) -> dict[str, Any]:
+        """Apply a state; a port policy that differs from the LKG needs a rollback timer."""
+        current = self.config.clock() if now is None else now
+        new_key = risk_key(state.ports)
+        if self.pending is not None and new_key == self.pending.get("key"):
+            plan = "keep"  # the pending change itself (e.g. a block was added meanwhile)
+        elif new_key == risk_key(self.lkg):
+            plan = "lkg"
+        elif new_key == "off" or self.config.force_dry_run:
+            plan = "safe"  # opening everything (or never enforcing) cannot lock anyone out
+        elif rollback_seconds is None:
+            raise DesiredStateError(
+                "this port policy is not the last confirmed one; apply it with a rollback "
+                "timer and confirm it", "rollback_required")
+        else:
+            plan = "risky"
+        result = self.manager.apply(self.effective(state), now=current)
         self.desired = state
         self.applied_at = time.time()
         self.last_error = None
+        if plan == "lkg":
+            self.pending = None
+        elif plan == "safe":
+            self.lkg = state.ports if state.ports_active() else None
+            self.pending = None
+        elif plan == "risky":
+            assert rollback_seconds is not None
+            self.pending = {"token": secrets.token_hex(8), "key": new_key,
+                            "deadline": int(current) + rollback_seconds,
+                            "started_at": int(current)}
+            LOGGER.warning("port policy applied; automatic rollback armed",
+                           extra={"seconds": rollback_seconds})
         self.persist(state)
-        return result
+        self.persist_ports()
+        return {**result, "plan": plan}
+
+    def confirm(self, token: object) -> None:
+        if self.pending is None:
+            raise DesiredStateError("there is no unconfirmed port policy", "no_pending_change")
+        if not isinstance(token, str) or not secrets.compare_digest(
+            token, str(self.pending.get("token", ""))
+        ):
+            raise DesiredStateError("the confirmation token does not match", "token_mismatch")
+        self.lkg = self.desired.ports if self.desired.ports_active() else None
+        self.pending = None
+        self.persist_ports()
+        LOGGER.info("port policy confirmed")
+
+    def restore(self, reason: str, *, open_ports: bool = False,
+                now: float | None = None) -> dict[str, Any]:
+        """Load the LKG port policy (or none at all); fail open if that cannot be loaded."""
+        current = self.config.clock() if now is None else now
+        if open_ports:
+            self.lkg = None
+        previous_key = risk_key(self.desired.ports)
+        if self.lkg is not None:
+            ports: PortPolicy | None = PortPolicy.from_payload(self.lkg.to_payload(), now=current)
+        else:
+            ports = None
+        target = DesiredState(mode=self.desired.mode, allow=self.desired.allow,
+                              blocks=self.desired.blocks, ports=ports)
+        try:
+            self.manager.apply(self.effective(target), now=current)
+            outcome = "restored"
+        except NftError as exc:
+            LOGGER.error("restoring the last-known-good ruleset failed; removing our table",
+                         extra={"code": exc.code})
+            self.last_error = exc.message
+            try:
+                self.manager.delete_table()
+                outcome = "table_deleted"
+            except NftError as again:
+                self.last_error = again.message
+                outcome = "failed"
+        self.desired = target
+        self.pending = None
+        self.last_rollback = {"at": int(current), "reason": reason, "outcome": outcome,
+                              "from_key": previous_key, "to_key": risk_key(ports)}
+        self.persist(target)
+        self.persist_ports()
+        LOGGER.warning("port policy rolled back", extra={"reason": reason, "outcome": outcome})
+        return self.last_rollback
+
+    def check_rollback(self, now: float | None = None) -> dict[str, Any] | None:
+        current = self.config.clock() if now is None else now
+        if self.pending is None or current < float(self.pending.get("deadline", 0)):
+            return None
+        return self.restore("timeout", now=current)
 
 
-def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None) -> FastAPI:
+def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None,
+                        iptables: importers.IptablesRunner | None = None) -> FastAPI:
     verifier = RequestVerifier(config.key)
+    iptables = iptables or importers.IptablesRunner()
     helper = HelperState(config, runner or NftRunner(config.nft_binary, config.state_dir))
+
+    async def rollback_loop() -> None:
+        while True:
+            await asyncio.sleep(1.0)
+            pending = helper.pending
+            if pending is None or config.clock() < float(pending.get("deadline", 0)):
+                continue
+            try:
+                async with helper.lock:
+                    await asyncio.to_thread(helper.check_rollback)
+            except Exception:  # pragma: no cover - keep the safety net alive
+                LOGGER.exception("automatic rollback failed")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         stored = await asyncio.to_thread(helper.load)
         target = stored or DesiredState(mode="dry_run")
+        now = config.clock()
+        await asyncio.to_thread(helper.load_ports, now)
+        if helper.pending is not None:
+            # Restarted while a port change was unconfirmed: start from the LKG.
+            target = DesiredState(mode=target.mode, allow=target.allow, blocks=target.blocks,
+                                  ports=helper.lkg)
+            helper.pending = None
+            helper.last_rollback = {"at": int(now), "reason": "restart", "outcome": "restored",
+                                    "from_key": risk_key(stored.ports if stored else None),
+                                    "to_key": risk_key(helper.lkg)}
+        elif helper.lkg is None and target.ports_active() and not helper.ports_path.exists():
+            helper.lkg = target.ports
+        elif risk_key(target.ports) != risk_key(helper.lkg):
+            # Interrupted between the two state files: never start from an unconfirmed policy.
+            target = DesiredState(mode=target.mode, allow=target.allow, blocks=target.blocks,
+                                  ports=helper.lkg)
         try:
-            # Startup reconcile: enforce -> rebuild our table with remaining timeouts;
-            # anything else -> make sure no table of ours is left behind.
+            # Startup reconcile: rebuild our table with remaining timeouts, or make sure
+            # no table of ours is left behind.
             async with helper.lock:
-                await asyncio.to_thread(helper.apply, target)
+                await asyncio.to_thread(helper.apply, target, rollback_seconds=None)
             LOGGER.info("mrk-firewall started", extra={"mode": target.mode,
                                                        "blocks": len(target.blocks)})
-        except (NftError, OSError) as exc:
-            helper.last_error = getattr(exc, "message", type(exc).__name__)
+        except (NftError, OSError, DesiredStateError) as exc:
+            helper.last_error = getattr(exc, "message", None) or str(exc) or type(exc).__name__
             helper.desired = target
             LOGGER.error("startup reconcile failed", extra={"error": helper.last_error})
+        task = asyncio.create_task(rollback_loop(), name="mrk-firewall-rollback")
         yield
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
         LOGGER.info("mrk-firewall stopped")
 
     app = FastAPI(title="mrk-firewall", docs_url=None, redoc_url=None, openapi_url=None,
@@ -257,18 +449,34 @@ def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None)
             "last_error": helper.last_error,
             "table": table,
             "local_addresses": addresses,
+            "ports": helper.ports_info(),
+            "ssh": await asyncio.to_thread(importers.read_sshd_ports, config.host_etc),
+            "listening": await asyncio.to_thread(netinfo.listening_ports, config.proc_net),
         }
 
     @app.post("/v1/apply")
     async def apply(request: Request):
         payload = await body_json(request)
+        rollback_seconds = None
+        if isinstance(payload, dict) and "rollback_seconds" in payload:
+            payload = dict(payload)
+            rollback_seconds = payload.pop("rollback_seconds")
+            if rollback_seconds is not None and (
+                not isinstance(rollback_seconds, int) or isinstance(rollback_seconds, bool)
+                or not MIN_ROLLBACK_SECONDS <= rollback_seconds <= MAX_ROLLBACK_SECONDS
+            ):
+                return _error("invalid_state", 422, message="rollback_seconds must be "
+                              f"{MIN_ROLLBACK_SECONDS}..{MAX_ROLLBACK_SECONDS}")
         try:
-            state = DesiredState.from_payload(payload)
+            state = DesiredState.from_payload(payload, now=config.clock())
         except DesiredStateError as exc:
             return _error(exc.code, 422, message=str(exc))
         async with helper.lock:
             try:
-                result = await asyncio.to_thread(helper.apply, state)
+                result = await asyncio.to_thread(helper.apply, state,
+                                                 rollback_seconds=rollback_seconds)
+            except DesiredStateError as exc:
+                return _error(exc.code, 409, message=str(exc), ports=helper.ports_info())
             except NftError as exc:
                 helper.last_error = exc.message
                 LOGGER.error("nft apply failed", extra={"code": exc.code})
@@ -284,8 +492,51 @@ def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None)
             "nft_available": result["nft_available"],
             "allow_count": len(state.allow),
             "block_count": len(state.blocks),
-            "ruleset": render_ruleset(DesiredState("enforce", state.allow, state.blocks))[:200_000],
+            "ruleset": render_ruleset(DesiredState("enforce", state.allow, state.blocks,
+                                                   state.ports))[:200_000],
+            "ports": helper.ports_info(),
         }
+
+    @app.post("/v1/confirm")
+    async def confirm(request: Request):
+        payload = await body_json(request)
+        if not isinstance(payload, dict) or set(payload) != {"token"}:
+            return _error("invalid_request", 422, message="body is {token}")
+        async with helper.lock:
+            try:
+                await asyncio.to_thread(helper.confirm, payload["token"])
+            except DesiredStateError as exc:
+                return _error(exc.code, 409, message=str(exc), ports=helper.ports_info())
+        return {"ok": True, "ports": helper.ports_info()}
+
+    @app.post("/v1/recover")
+    async def recover(request: Request):
+        payload = await body_json(request)
+        if not isinstance(payload, dict) or set(payload) - {"open", "reason"} or not isinstance(
+            payload.get("open", False), bool
+        ):
+            return _error("invalid_request", 422, message="body is {open: bool}")
+        reason = payload.get("reason", "recover")
+        if reason not in {"recover", "undo"}:
+            return _error("invalid_request", 422, message="reason is recover or undo")
+        async with helper.lock:
+            outcome = await asyncio.to_thread(
+                helper.restore, f"{reason}_open" if payload.get("open") else reason,
+                open_ports=bool(payload.get("open")))
+        return {"ok": outcome["outcome"] != "failed", "rollback": outcome,
+                "ports": helper.ports_info()}
+
+    @app.get("/v1/import")
+    async def import_rules() -> dict[str, Any]:
+        def collect() -> dict[str, Any]:
+            return {
+                "ufw": importers.read_ufw(config.host_etc),
+                "legacy": importers.read_legacy_chain(iptables),
+                "ssh": importers.read_sshd_ports(config.host_etc),
+                "listening": netinfo.listening_ports(config.proc_net),
+            }
+
+        return await asyncio.to_thread(collect)
 
     @app.post("/v1/signals")
     async def signals(request: Request):

@@ -15,6 +15,7 @@ from .firewall_engine import BUILTIN_RULES, FirewallError, RuleSpec
 
 DECISION_ACTIONS = (
     "block", "would_block", "skipped", "manual_block", "unblock", "expire", "clear", "mode",
+    "ports_apply", "ports_confirm", "ports_rollback", "ports_disable",
 )
 MAX_REASON = 500
 

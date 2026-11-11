@@ -140,6 +140,10 @@ export const PERMISSIONS: Record<string, PermissionInfo> = {
   "task:read": { group: "alerts", name: { fa: "دیدن کارهای در حال انجام", en: "See background jobs" }, danger: "none" },
   "task:write": { group: "alerts", name: { fa: "لغو یا تکرار کارها", en: "Cancel or retry jobs" }, danger: "low", requires: ["task:read"] },
   "audit:read": { group: "alerts", name: { fa: "دیدن تاریخچه فعالیت", en: "See activity history" }, danger: "medium" },
+  "git:read": { group: "server", name: { fa: "دیدن مخزن‌های کد", en: "See code repositories" }, danger: "none" },
+  "git:write": { group: "server", name: { fa: "ساختن و آینه کردن مخزن‌های کد", en: "Create and mirror code repositories" }, danger: "high", requires: ["git:read"] },
+  "registry:read": { group: "server", name: { fa: "دیدن ایمیج‌های Docker", en: "See Docker images" }, danger: "none" },
+  "registry:write": { group: "server", name: { fa: "مدیریت مخزن ایمیج Docker", en: "Manage the Docker image registry" }, danger: "high", requires: ["registry:read"] },
   "tenancy:admin": { group: "people", name: { fa: "مدیریت فضاهای کاری، بسته‌ها و ثبت‌نام‌ها", en: "Manage workspaces, plans and sign-ups" }, danger: "high", requires: ["user:read"] },
   "tenancy:impersonate_write": { group: "people", name: { fa: "تغییر دادن هنگام «دیدن به‌جای» کاربر", en: "Make changes while viewing as a user" }, danger: "critical", requires: ["tenancy:admin"] },
   "*": { group: "people", name: { fa: "همه اجازه‌ها (فقط مالک)", en: "All permissions (owner only)" }, danger: "critical" }
@@ -154,11 +158,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, readonly string[]> = {
     "audit:read", "backup:read", "notification:read", "agent:read", "metrics:read", "logs:read", "docker:operate",
     "dokploy:read", "dokploy:deploy", "s3:read", "s3:write", "backup:server:read", "updates:read", "updates:write",
     "firewall:read", "vuln:read", "vuln:write", "services:read", "services:operate", "domains:read",
-    "dns:read", "dns:write"
+    "dns:read", "dns:write", "git:read", "git:write", "registry:read", "registry:write"
   ],
   developer: [
     "system:read", "upstream:read", "cache:read", "task:read", "token:read", "token:write", "metrics:read",
-    "dokploy:read", "s3:read", "updates:read", "vuln:read", "services:read", "domains:read", "dns:read"
+    "dokploy:read", "s3:read", "updates:read", "vuln:read", "services:read", "domains:read", "dns:read", "git:read", "registry:read"
   ],
   viewer: ["system:read", "upstream:read", "cache:read", "task:read", "metrics:read", "updates:read", "vuln:read", "services:read", "domains:read", "dns:read"]
 };

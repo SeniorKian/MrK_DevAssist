@@ -207,5 +207,8 @@ class HelperClient:
                               f"The helper rejected the request ({code}: {message})")
         if code in {"nft_unavailable", "nft_failed"}:
             raise HelperError(code, 502, str(message or code))
+        if response.status_code == 409 and code in {"rollback_required", "no_pending_change",
+                                                    "token_mismatch"}:
+            raise HelperError(code, 409, str(message or code))
         raise HelperError("firewall_unreachable", 502,
                           f"The helper returned HTTP {response.status_code}")

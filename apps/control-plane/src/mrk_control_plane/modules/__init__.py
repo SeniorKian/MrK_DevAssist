@@ -27,6 +27,8 @@ def _load() -> None:
         "dbadmin",
         "dns",  # before services: the services card and domain sync read it
         "services",  # after dokploy/s3/host_agent/firewall: it reads their services
+        "git_service",  # Git (Gitea), docs/46
+        "registry_service",  # Docker image registry (Zot), docs/46
         "install",  # add-service wizard (docs/44): reads agent/firewall/dns
         "install_auto",  # docs/44 phase 6: installs through the Dokploy/Coolify API
         "tenancy",  # «my space» (docs/43): after dns/s3, it reuses their services

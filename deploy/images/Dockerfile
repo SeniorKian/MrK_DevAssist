@@ -140,8 +140,10 @@ RUN if [ -n "$APT_MIRROR" ]; then \
         sed -i "s|http://deb.debian.org|${APT_MIRROR%/}|g" /etc/apt/sources.list.d/debian.sources; \
     fi \
     && apt-get update \
-    && apt-get install --yes --no-install-recommends nftables \
+    && apt-get install --yes --no-install-recommends nftables iptables \
     && rm -rf /var/lib/apt/lists/*
+# iptables is only used read-only (`iptables -S PAASIFY-DOCKER-FW|DOCKER-USER`) to import
+# the legacy Docker chain into the panel (docs/45); the helper never writes iptables rules.
 ENTRYPOINT ["mrk-firewall"]
 
 # ----------------------------------------------------------------------------- s3
@@ -273,6 +275,7 @@ COPY deploy/images/panel/entrypoint.py /opt/mrk/entrypoint.py
 RUN sed -i 's/\r$//' /opt/mrk/supervisord.conf \
     && mkdir -p /data/modules /mnt/links /run/mrk-dns /run/mrk-db /data/tmp/pypi-router \
        /data/npm/config /data/npm/storage /data/npm/auth /data/pypi/server /data/pypi/auth \
+       /data/registry \
     && chown -R 10001:10001 /data \
     && chown 10001:10001 /mnt/links /run/mrk-dns /run/mrk-db \
     && chmod 0750 /run/mrk-dns \

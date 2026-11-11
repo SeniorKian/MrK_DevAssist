@@ -21,6 +21,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Button, Card, CardActions, CardContent, Grid, LinearProgress, MenuItem, Skeleton, Stack, TextField, Typography } from "@mui/material";
 import type { SvgIconComponent } from "@mui/icons-material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
+import LayersRoundedIcon from "@mui/icons-material/LayersRounded";
 import SupportAgentRoundedIcon from "@mui/icons-material/SupportAgentRounded";
 import TravelExploreRoundedIcon from "@mui/icons-material/TravelExploreRounded";
 import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
@@ -248,6 +250,22 @@ const NAMES: Record<string, { name: Bi; body: Bi; icon: SvgIconComponent }> = {
     name: { fa: "مخزن PyPI", en: "PyPI registry" },
     body: { fa: "بسته‌های پایتون را برای پروژه‌ها نگه می‌دارد و از اینترنت می‌آورد.", en: "Caches Python packages for your projects." },
     icon: Inventory2RoundedIcon
+  },
+  git: {
+    name: { fa: "Git (مخزن کد)", en: "Git (code repositories)" },
+    body: {
+      fa: "مخزن‌های کد تیم شما روی همین سرور، و آینه مخزن‌های GitHub و GitLab تا همیشه نسخه‌ای در دسترس باشد.",
+      en: "Your team's code repositories on this server, and mirrors of GitHub and GitLab repositories so a copy is always at hand."
+    },
+    icon: AccountTreeRoundedIcon
+  },
+  registry: {
+    name: { fa: "مخزن ایمیج Docker", en: "Docker image registry" },
+    body: {
+      fa: "ایمیج‌های خصوصی شما، و آینه Docker Hub و ghcr.io با منبع‌های پشتیبان تا دریافت ایمیج‌ها قطع نشود.",
+      en: "Your private images, and a mirror of Docker Hub and ghcr.io with fallback sources so image pulls keep working."
+    },
+    icon: LayersRoundedIcon
   }
 };
 

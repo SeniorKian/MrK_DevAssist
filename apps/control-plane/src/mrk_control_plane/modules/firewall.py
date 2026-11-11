@@ -40,6 +40,7 @@ from .firewall_engine import (
     refusal,
     validate_rule,
 )
+from .firewall_ports_api import PortPolicyState, register_port_routes
 from .firewall_store import DECISION_ACTIONS, FirewallStore
 
 LOGGER = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ SETTINGS_FILE = "firewall.json"
 RESYNC_SECONDS = 600
 PRUNE_EVERY_SECONDS = 3600
 ACTIVE_SERVICE: FirewallService | None = None
+_SENT: Any = object()  # desired(): use the applied port policy snapshot
 
 
 class ConfigRequest(BaseModel):
@@ -84,6 +86,7 @@ class FirewallService:
         self.last_poll_at: float | None = None
         self.sources: dict[str, Any] = {}
         self._last_prune = 0.0
+        self.ports = PortPolicyState(self)
 
     # ----- settings --------------------------------------------------------
     def settings(self) -> dict[str, Any]:
@@ -106,7 +109,10 @@ class FirewallService:
             else []
 
     # ----- desired state ---------------------------------------------------
-    def desired(self, settings: dict[str, Any], *, mode: str | None = None) -> DesiredState:
+    def desired(self, settings: dict[str, Any], *, mode: str | None = None,
+                ports: Any = _SENT) -> DesiredState:
+        """Dynamic defense from settings + DB; the port policy is the applied snapshot
+        (``ports`` overrides it for preview/apply; never the editable draft)."""
         blocks: list[Block] = []
         for item in self.store.active_blocks(include_simulated=False):
             try:
@@ -114,7 +120,8 @@ class FirewallService:
             except AddressError:
                 continue
         return DesiredState(mode=mode or settings["mode"], allow=effective_allowlist(settings),
-                            blocks=blocks)
+                            blocks=blocks,
+                            ports=self.ports.sent_policy() if ports is _SENT else ports)
 
     def configured(self) -> bool:
         source, url, _key, _error = self.client.resolve()
@@ -133,10 +140,21 @@ class FirewallService:
         ):
             return {"applied": False, "in_sync": True, "state_hash": digest}
         try:
-            result = await self.client.request("POST", "/v1/apply", state.to_payload())
+            try:
+                result = await self.client.request("POST", "/v1/apply", state.to_payload())
+            except HelperError as exc:
+                if exc.code != "rollback_required":
+                    raise
+                # The helper rolled back (timer, restart or console recovery) while we
+                # still pushed the unconfirmed policy: follow it, then retry once.
+                await self.probe()
+                state = await asyncio.to_thread(self.desired, settings)
+                digest = state.state_hash()
+                result = await self.client.request("POST", "/v1/apply", state.to_payload())
         except HelperError as exc:
             self.last_apply_error = exc.code
-            self._mark(False, exc.message)
+            if exc.status_code != 409:
+                self._mark(False, exc.message)
             return {"applied": False, "error": exc.code, "message": exc.message}
         self._mark(True, None)
         self.applied_hash = self.helper_hash = str(result.get("state_hash") or digest)
@@ -181,6 +199,10 @@ class FirewallService:
         self.helper_hash = info.get("state_hash") if isinstance(info.get("state_hash"), str) \
             else None
         self._mark(True, None)
+        try:
+            await asyncio.to_thread(self.ports.adopt, info.get("ports"))
+        except Exception:  # pragma: no cover - never break the probe
+            LOGGER.exception("port policy sync failed")
         return True, round((time.perf_counter() - started) * 1000, 1), None
 
     # ----- detection -------------------------------------------------------
@@ -714,6 +736,8 @@ def register(ctx: ModuleContext) -> None:
             "state_hash": DesiredState(settings["mode"], state.allow, state.blocks).state_hash(),
         }
 
+    register_port_routes(router, ctx, service, reader=reader, writer=writer, body=_body,
+                         audit=audit)
     ctx.routers.append(router)
     ctx.start_hooks.append(service.start)
     ctx.stop_hooks.append(service.stop)

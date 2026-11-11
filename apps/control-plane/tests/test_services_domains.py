@@ -442,7 +442,7 @@ def test_services_list_and_actions_with_fake_supervisor(app_client, supervisor) 
     assert listing.status_code == 200
     payload = listing.json()
     ids = [item["id"] for item in payload["items"]]
-    assert ids == ["panel", "npm", "pypi", "s3", "agent", "firewall", "dns"]
+    assert ids == ["panel", "npm", "pypi", "s3", "agent", "firewall", "dns", "git", "registry"]
     by_id = {item["id"]: item for item in payload["items"]}
     assert by_id["panel"]["state"] == "running" and by_id["panel"]["controllable"] is False
     assert by_id["panel"]["actions"] == [] and by_id["panel"]["internal_port"] == 8080

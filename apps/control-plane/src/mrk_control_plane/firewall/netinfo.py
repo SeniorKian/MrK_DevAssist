@@ -47,3 +47,57 @@ def local_addresses(proc_net: Path = Path("/proc/net")) -> list[str]:
         except OSError:
             continue
     return sorted(addresses, key=lambda item: (":" in item, item))
+
+
+def _hex_address(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        raw = bytes.fromhex(text)
+    except ValueError:
+        return None
+    if len(raw) == 4:
+        return ipaddress.IPv4Address(raw[::-1])
+    if len(raw) == 16:
+        # /proc/net/*6 prints four host-order 32-bit words.
+        words = b"".join(raw[index:index + 4][::-1] for index in range(0, 16, 4))
+        return ipaddress.IPv6Address(words)
+    return None
+
+
+def parse_proc_net_sockets(text: str, protocol: str) -> list[dict[str, object]]:
+    """Listening TCP (state 0A) / bound UDP (state 07) sockets of /proc/net/{tcp,udp}[6]."""
+    wanted = "0A" if protocol == "tcp" else "07"
+    found: list[dict[str, object]] = []
+    for line in text.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 4 or parts[3] != wanted or ":" not in parts[1]:
+            continue
+        address_hex, _, port_hex = parts[1].rpartition(":")
+        try:
+            port = int(port_hex, 16)
+        except ValueError:
+            continue
+        address = _hex_address(address_hex)
+        if address is None or port == 0:
+            continue
+        mapped = getattr(address, "ipv4_mapped", None)
+        if mapped is not None:
+            address = mapped
+        found.append({"protocol": protocol, "port": port,
+                      "loopback_only": address.is_loopback})
+    return found
+
+
+def listening_ports(proc_net: Path = Path("/proc/net")) -> list[dict[str, object]]:
+    """Ports open on the host: [{protocol, port, loopback_only}] (loopback_only when every
+    listener of that port binds a loopback address)."""
+    merged: dict[tuple[str, int], bool] = {}
+    for name, protocol in (("tcp", "tcp"), ("tcp6", "tcp"), ("udp", "udp"), ("udp6", "udp")):
+        try:
+            text = (proc_net / name).read_text(encoding="ascii", errors="ignore")
+        except OSError:
+            continue
+        for item in parse_proc_net_sockets(text, protocol):
+            key = (protocol, int(item["port"]))  # type: ignore[call-overload]
+            merged[key] = merged.get(key, True) and bool(item["loopback_only"])
+    return [{"protocol": protocol, "port": port, "loopback_only": loopback}
+            for (protocol, port), loopback in sorted(merged.items())]

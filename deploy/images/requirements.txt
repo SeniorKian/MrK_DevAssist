@@ -16,3 +16,4 @@ PyMySQL==1.2.3
 pymongo==4.19.0
 dnspython==2.9.2
 redis==8.1.0
+bcrypt==5.0.0

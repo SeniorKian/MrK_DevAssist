@@ -79,6 +79,7 @@ const GROUP_PAGES: Record<GroupPageKey, LazyPage> = {
   PackagesPage: lazy(() => import("./PackagesPage")) as unknown as LazyPage,
   ServerPage: lazy(() => import("./ServerPage")) as unknown as LazyPage,
   FilesPage: lazy(() => import("./FilesPage")) as unknown as LazyPage,
+  CodePage: lazy(() => import("./CodePage")) as unknown as LazyPage,
   SecurityPage: lazy(() => import("./SecurityPage")) as unknown as LazyPage,
   PeoplePage: lazy(() => import("./PeoplePage")) as unknown as LazyPage,
   AlertsPage: lazy(() => import("./AlertsPage")) as unknown as LazyPage

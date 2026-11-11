@@ -55,6 +55,8 @@ Then open <http://localhost:8080> through `ssh -L 8080:127.0.0.1:8080 you@your-s
 | File storage (S3) | `ghcr.io/seniorkian/mrk-s3` |
 | npm registry | `ghcr.io/seniorkian/mrk-npm` |
 | PyPI registry | `ghcr.io/seniorkian/mrk-pypi` |
+| Git (Gitea) | `gitea/gitea` (official, pinned) |
+| Docker image registry (Zot) | `ghcr.io/project-zot/zot` (official, pinned) |
 
 More: [Docker install](docs/install-docker.md) · [Native install](docs/install-native.md)
 

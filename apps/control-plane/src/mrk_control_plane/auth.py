@@ -71,6 +71,8 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             "dns:read", "dns:write", "dns:logs", "dns:admin",
             # docs/43 (my space)
             "tenancy:admin", "tenancy:impersonate_write",
+            # Git (Gitea) and the Docker registry (Zot)
+            "git:read", "git:write", "registry:read", "registry:write",
         }
     ),
     "operator": frozenset(
@@ -88,6 +90,7 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             "services:read", "services:operate", "domains:read",
             # docs/37 (DNS server)
             "dns:read", "dns:write",
+            "git:read", "git:write", "registry:read", "registry:write",
         }
     ),
     "developer": frozenset(
@@ -102,6 +105,7 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
             "services:read", "domains:read",
             # docs/37 (DNS server)
             "dns:read",
+            "git:read", "registry:read",
         }
     ),
     "viewer": frozenset(
@@ -210,6 +214,20 @@ PERMISSION_CATALOG: Final[tuple[PermissionSpec, ...]] = (
        "Connect/disconnect and tune Dokploy",
        "اتصال به Dokploy و کلید دسترسی آن را تنظیم می‌کند.",
        "Sets up the Dokploy connection and its access key.", "high", ("dokploy:read",)),
+    _P("git:read", "server", "دیدن مخزن‌های کد", "See code repositories",
+       "مخزن‌ها، کاربران و سازمان‌های سرویس Git را نشان می‌دهد.",
+       "Lists the repositories, users and organizations of the Git service."),
+    _P("git:write", "server", "ساختن و آینه کردن مخزن‌های کد", "Create and mirror code repositories",
+       "مخزن و آینه می‌سازد یا پاک می‌کند و کاربر Git می‌سازد.",
+       "Creates or deletes repositories and mirrors, and creates Git users.",
+       "high", ("git:read",)),
+    _P("registry:read", "server", "دیدن ایمیج‌های Docker", "See Docker images",
+       "ایمیج‌ها، برچسب‌ها و تنظیمات مخزن ایمیج را نشان می‌دهد.",
+       "Lists images, tags and the settings of the image registry."),
+    _P("registry:write", "server", "مدیریت مخزن ایمیج Docker", "Manage the Docker image registry",
+       "منبع‌های آینه و کاربران مخزن ایمیج را تنظیم می‌کند.",
+       "Sets the mirror sources and the users of the image registry.",
+       "high", ("registry:read",)),
     _P("services:read", "server", "دیدن سرویس‌های DevAssist و مصرفشان",
        "See DevAssist services and usage",
        "وضعیت روشن/خاموش، مصرف فضا و دامنه‌های هر سرویس DevAssist.",

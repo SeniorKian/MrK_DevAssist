@@ -163,6 +163,35 @@ def main() -> int:
                "download", "--no-deps", "--dest", "/tmp/pypi", "--index-url",  # noqa: S108
                "http://mrk-pypi:3141/root/pypi/+simple/", "--trusted-host", "mrk-pypi",
                "sampleproject==4.0.0")
+        if "git" in services:
+            status, repo = panel.call("POST", "/api/v1/git/repos",
+                                      {"name": "smoke", "private": True})
+            assert status == 201, (status, repo)
+            status, listed = panel.call("GET", "/api/v1/git/repos")
+            assert any(item["name"] == "smoke" for item in listed["items"]), listed
+            print("ok: git repository created through the panel", flush=True)
+        if "registry" in services:
+            status, user = panel.call("POST", "/api/v1/registry/users",
+                                      {"name": "smoke", "access": "pull"})
+            assert status == 201, (status, user)
+            # Zot reloads htpasswd by itself; then an on-demand Docker Hub mirror pull.
+            probe = (
+                "import base64,time,urllib.request as u\n"
+                f"auth=base64.b64encode(b'smoke:{user['password']}').decode()\n"
+                "req=u.Request('http://mrk-registry:5000/v2/library/busybox/manifests/latest',"
+                "headers={'Authorization':'Basic '+auth,'Accept':"
+                "'application/vnd.oci.image.index.v1+json,"
+                "application/vnd.docker.distribution.manifest.list.v2+json'})\n"
+                "for i in range(30):\n"
+                "    try:\n"
+                "        print(u.urlopen(req,timeout=120).status); break\n"
+                "    except Exception as e:\n"
+                "        print('retry', e); time.sleep(4)\n"
+                "else:\n"
+                "    raise SystemExit(1)\n"
+            )
+            sh("docker", "run", "--rm", "--network", "mrk-net", PYTHON, "python", "-c", probe)
+            print("ok: Docker Hub image pulled through the registry mirror", flush=True)
         status, view = panel.call("GET", "/api/v1/services")
         states = {item["id"]: item["state"] for item in view.get("items", [])}
         print("services:", states, flush=True)

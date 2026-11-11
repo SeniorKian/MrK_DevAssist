@@ -11,7 +11,7 @@ import type { AuthUser } from "./App";
 import type { Language } from "./i18n";
 import { PageHeader, GroupTabs, useKit } from "./kit";
 import { pick } from "./copy";
-import { findGroup, parseHash, visibleTabs } from "./nav";
+import { findGroup, parseHash, visibleTabs, type GroupKey } from "./nav";
 
 const ServerPanel = lazy(() => import("./ServerPanel").then((module) => ({ default: module.ServerPanel })));
 const MonitoringPanel = lazy(() => import("./MonitoringPanel").then((module) => ({ default: module.MonitoringPanel })));
@@ -38,7 +38,7 @@ const COPY = {
 const TAB_ALIASES: Record<string, string> = { monitoring: "resources", dokploy: "apps", dbadmin: "databases", db: "databases" };
 
 /** Current tab of a group from the hash, accepting `?query` suffixes and aliases. */
-export function useHashTab(group: "server" | "files" | "services", aliases: Record<string, string>, valid: string[], fallback: string) {
+export function useHashTab(group: GroupKey, aliases: Record<string, string>, valid: string[], fallback: string) {
   const read = () => {
     const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0];
     const [first, second] = raw.split("/");

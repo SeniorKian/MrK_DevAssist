@@ -61,7 +61,8 @@ def test_catalog_lists_ready_and_planned_services(tmp_path: Path, agent_backend)
         items = {item["id"]: item for item in client.get("/api/v1/install/catalog").json()["items"]}
     ready = {key for key, value in items.items() if value["availability"] == "ready"}
     planned = {key for key, value in items.items() if value["availability"] == "planned"}
-    assert ready == {"agent", "dns", "firewall", "s3", "npm", "pypi"} and planned == set()
+    assert ready == {"agent", "dns", "firewall", "s3", "npm", "pypi", "git", "registry"}
+    assert planned == set()
     assert items["agent"]["image"] == "ghcr.io/seniorkian/mrk-agent:latest"
     assert items["agent"]["connection"] == "not_connected"
     assert items["agent"]["methods"] == ["dokploy", "coolify", "compose"]
@@ -134,7 +135,8 @@ def test_dns_bundle_has_no_pairing_key(tmp_path: Path, agent_backend) -> None:
 
 def test_every_ready_template_is_valid_compose() -> None:
     for item in install_catalog.INSTALLABLE:
-        if item.availability != "ready":
+        # Git and the registry run official pinned images (tests/test_git_registry.py).
+        if item.availability != "ready" or item.upstream_image:
             continue
         compose = yaml.safe_load(item.compose)
         (service,) = compose["services"].values()
@@ -174,7 +176,8 @@ def test_image_registry_and_tag_are_validated(monkeypatch) -> None:
 def test_native_panel_gets_loopback_and_host_folder_variants(monkeypatch) -> None:
     monkeypatch.setenv("MRK_PANEL_RUNTIME", "native")
     for item in install_catalog.INSTALLABLE:
-        if item.availability != "ready":
+        # Git and the registry run official pinned images (tests/test_git_registry.py).
+        if item.availability != "ready" or item.upstream_image:
             continue
         text = install_catalog.compose_for(item)
         compose = yaml.safe_load(text)

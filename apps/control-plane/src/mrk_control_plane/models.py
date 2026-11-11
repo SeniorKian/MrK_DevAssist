@@ -416,6 +416,48 @@ class FirewallDecision(Base):
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class FirewallSourceList(Base):
+    """A named source allowlist (e.g. "management") that port rules can reference (docs/45)."""
+
+    __tablename__ = "firewall_source_lists"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    note: Mapped[str] = mapped_column(String(500), default="")
+    cidrs: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class FirewallPortRule(Base):
+    """An inbound port rule for host services and/or Docker-published ports (docs/45).
+
+    Rows are the editable draft; what the helper enforces is the compiled snapshot the
+    operator applied (and confirmed) from the panel.
+    """
+
+    __tablename__ = "firewall_port_rules"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    protocol: Mapped[str] = mapped_column(String(8))
+    ports: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_kind: Mapped[str] = mapped_column(String(8))
+    source_cidrs: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_list_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    scope: Mapped[str] = mapped_column(String(8))
+    action: Mapped[str] = mapped_column(String(8), default="accept")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100)
+    log: Mapped[bool] = mapped_column(Boolean, default=False)
+    log_rate: Mapped[int] = mapped_column(Integer, default=10)
+    origin: Mapped[str] = mapped_column(String(16), default="manual")
+    created_by_user_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)
+
+
 class VulnIgnore(Base):
     """Vulnerability scanner ignore rule (Gate 19 S8). Patterns are fnmatch globs."""
 

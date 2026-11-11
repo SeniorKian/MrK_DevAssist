@@ -798,6 +798,8 @@ class ServicesService:
             return "running", None, False
         if service.id in {"agent", "firewall"}:
             return await self._helper_state(service.id)
+        if service.id in {"git", "registry"}:
+            return await self._own_stack_state(service.id)
         if service.id == "dns":
             return await self._dns_state()
         if service.id == DOH_SERVICE:
@@ -875,6 +877,25 @@ class ServicesService:
             except Exception:  # noqa: BLE001
                 return False
         return False
+
+    async def _own_stack_state(self, service_id: str) -> tuple[str, str | None, bool]:
+        """Git and the registry (docs/46): added from the wizard, in their own stacks."""
+        if service_id == "git":
+            from . import git_service as module
+        else:
+            from . import registry_service as module  # type: ignore[no-redef]
+        service = module.ACTIVE_SERVICE
+        if service is None:
+            return "not_installed", "module_unavailable", False
+        if service.connected() is None:
+            return "not_installed", f"{service_id}_not_configured", False
+        if service_id == "git":
+            reachable = (await service.status())["reachable"]
+        else:
+            reachable = await service.reachable()
+        if reachable:
+            return "running", None, False
+        return "degraded", f"{service_id}_unreachable", False
 
     async def _helper_state(self, service_id: str) -> tuple[str, str | None, bool]:
         from .home import find_service

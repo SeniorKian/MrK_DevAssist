@@ -1,5 +1,5 @@
 /**
- * Information architecture as data (docs/33 §1.1): 7 groups ("rooms"), each with tabs.
+ * Information architecture as data (docs/33 §1.1): groups ("rooms"), each with tabs.
  *
  * - Routes are `#/<group>/<tab>` (`#/packages/sources`); `#/<group>` opens its first visible tab.
  * - A tab is visible when the user holds ANY permission in `anyOf` (empty = everyone) and, for
@@ -28,12 +28,13 @@ import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import InfoRoundedIcon from "@mui/icons-material/InfoRounded";
 import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
 import HistoryRoundedIcon from "@mui/icons-material/HistoryRounded";
+import CodeRoundedIcon from "@mui/icons-material/CodeRounded";
 import { hasPermission } from "./api";
 import type { Language } from "./i18n";
 import type { Bi } from "./copy/text";
 import { normalizeTyped } from "./copy/text";
 
-export type GroupKey = "home" | "services" | "dns" | "packages" | "server" | "files" | "security" | "people" | "alerts";
+export type GroupKey = "home" | "services" | "dns" | "packages" | "server" | "files" | "code" | "security" | "people" | "alerts";
 export type UtilityKey = "settings" | "about";
 export type DisplayMode = "simple" | "advanced";
 
@@ -62,6 +63,9 @@ export type PanelKey =
   | "S3Panel"
   | "ServerBackupsPanel"
   | "LifecyclePanel"
+  | "CodePage"
+  | "GitPanel"
+  | "RegistryPanel"
   | "FirewallPanel"
   | "VulnPanel"
   | "NetworkPanel"
@@ -90,7 +94,7 @@ export type NavTab = {
 };
 
 /** The page component (file name = default export) that renders a whole group with its tabs. */
-export type GroupPageKey = "HomePage" | "ServicesPage" | "DnsPage" | "PackagesPage" | "ServerPage" | "FilesPage" | "SecurityPage" | "PeoplePage" | "AlertsPage";
+export type GroupPageKey = "HomePage" | "ServicesPage" | "DnsPage" | "PackagesPage" | "ServerPage" | "FilesPage" | "CodePage" | "SecurityPage" | "PeoplePage" | "AlertsPage";
 
 export type NavGroup = {
   key: GroupKey;
@@ -374,6 +378,31 @@ export const NAV_GROUPS: NavGroup[] = [
     ]
   },
   {
+    // Git (Gitea) and the Docker image registry (Zot): our own copy of code and images.
+    key: "code",
+    label: { fa: "کد و ایمیج‌ها", en: "Code & images" },
+    icon: CodeRoundedIcon,
+    page: "CodePage",
+    tabs: [
+      {
+        key: "git",
+        label: { fa: "مخزن‌های کد", en: "Code repositories" },
+        hint: { fa: "کد پروژه‌ها روی سرور خودتان؛ آینه GitHub و GitLab برای وقتی که کند یا بسته‌اند.", en: "Your projects' code on your own server; mirrors of GitHub and GitLab for when they're slow or blocked." },
+        anyOf: ["git:read"],
+        panel: "GitPanel",
+        keywords: ["git", "gitea", "repo", "repository", "مخزن", "مخزن کد", "github", "gitlab", "mirror", "آینه", "clone", "کلون"]
+      },
+      {
+        key: "registry",
+        label: { fa: "ایمیج‌های Docker", en: "Docker images" },
+        hint: { fa: "ایمیج‌های خصوصی شما و آینه Docker Hub روی همین سرور.", en: "Your private images, and a Docker Hub mirror on this server." },
+        anyOf: ["registry:read"],
+        panel: "RegistryPanel",
+        keywords: ["docker", "registry", "رجیستری", "image", "ایمیج", "mirror", "آینه", "zot", "docker hub", "ghcr", "quay", "pull", "push", "daemon.json"]
+      }
+    ]
+  },
+  {
     key: "security",
     label: { fa: "امنیت و اینترنت", en: "Security & internet" },
     icon: ShieldRoundedIcon,
@@ -385,7 +414,7 @@ export const NAV_GROUPS: NavGroup[] = [
         hint: { fa: "نشانی‌هایی که به سرور حمله می‌کنند خودکار مسدود می‌شوند.", en: "Addresses that attack the server are blocked automatically." },
         anyOf: ["firewall:read"],
         panel: "FirewallPanel",
-        keywords: ["firewall", "فایروال", "ban", "مسدود"]
+        keywords: ["firewall", "فایروال", "ban", "مسدود", "port", "پورت", "ufw", "nftables", "iptables"]
       },
       {
         key: "vuln",
@@ -695,6 +724,16 @@ export const ROUTE_ALIASES: Record<string, { group: GroupKey; tab?: string }> = 
   "dns/restore": { group: "dns", tab: "settings" },
   "server/dns": { group: "dns", tab: "status" },
   "services/dns": { group: "dns", tab: "status" },
+  "code/gitea": { group: "code", tab: "git" },
+  "code/repos": { group: "code", tab: "git" },
+  "code/mirrors": { group: "code", tab: "git" },
+  "code/docker": { group: "code", tab: "registry" },
+  "code/images": { group: "code", tab: "registry" },
+  "code/zot": { group: "code", tab: "registry" },
+  git: { group: "code", tab: "git" },
+  gitea: { group: "code", tab: "git" },
+  "server/git": { group: "code", tab: "git" },
+  "server/registry": { group: "code", tab: "registry" },
   "home/dns": { group: "dns", tab: "status" }
 };
 

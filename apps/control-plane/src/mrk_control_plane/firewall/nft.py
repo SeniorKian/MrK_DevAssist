@@ -26,6 +26,7 @@ from .addresses import (
     element,
     parse_network,
 )
+from .ports import PortError, PortPolicy, render_chains, render_sets
 
 TABLE_FAMILY = "inet"
 TABLE_NAME = "mrk"
@@ -60,13 +61,16 @@ class DesiredState:
     mode: str = "dry_run"
     allow: list[IPNetwork] = field(default_factory=list)
     blocks: list[Block] = field(default_factory=list)
+    # Port policy (docs/45). None = not managed; it has its own on/off switch and is
+    # rendered whenever it is enabled, independent of the dynamic-defense mode.
+    ports: PortPolicy | None = None
 
     @classmethod
     def from_payload(cls, payload: object, *, now: float | None = None) -> DesiredState:
         """Strictly validate an apply request (or the persisted state file)."""
         if not isinstance(payload, dict):
             raise DesiredStateError("state must be an object")
-        unknown = set(payload) - {"mode", "allow", "blocks"}
+        unknown = set(payload) - {"mode", "allow", "blocks", "ports"}
         if unknown:
             raise DesiredStateError(f"unknown field: {sorted(unknown)[0]}")
         mode = payload.get("mode")
@@ -101,10 +105,23 @@ class DesiredState:
                 blocks.append(Block(network, expires))
         except AddressError as exc:
             raise DesiredStateError(str(exc), exc.code) from exc
-        return cls(mode=mode, allow=allow, blocks=blocks)
+        ports: PortPolicy | None = None
+        if payload.get("ports") is not None:
+            try:
+                ports = PortPolicy.from_payload(payload["ports"], now=current)
+            except PortError as exc:
+                raise DesiredStateError(str(exc), exc.code) from exc
+        return cls(mode=mode, allow=allow, blocks=blocks, ports=ports)
+
+    def ports_active(self) -> bool:
+        return self.ports is not None and self.ports.enabled
 
     def to_payload(self) -> dict[str, Any]:
+        # "ports" only when managed, so states without it hash exactly as before and an
+        # older helper never sees an unknown field.
+        extra: dict[str, Any] = {} if self.ports is None else {"ports": self.ports.to_payload()}
         return {
+            **extra,
             "mode": self.mode,
             "allow": sorted({str(item) for item in self.allow}),
             "blocks": sorted(
@@ -153,22 +170,51 @@ def _block_element(block: Block, now: int) -> str:
     return f"{text} timeout {remaining}s"
 
 
-def render_ruleset(state: DesiredState, *, now: float | None = None) -> str:
-    """Return the full ``nft -f`` input for enforce mode (golden-tested).
+def render_ruleset(state: DesiredState, *, now: float | None = None,
+                   dynamic: bool = True) -> str:
+    """Return the full ``nft -f`` input (golden-tested).
 
     ``add table inet mrk`` + ``delete table inet mrk`` first makes the file idempotent
     (create-if-missing, then drop) inside the same atomic transaction, so a re-apply
     replaces our table and nothing else. Allow sets are evaluated first; ``accept``
     only ends *our* chain, every other table still sees the packet.
+
+    ``dynamic`` renders the block/allow sets and the prerouting chain (dynamic defense
+    in enforce mode); an enabled port policy adds its sets and chains after them.
     """
     current = int(time.time() if now is None else now)
+    parts: list[str] = []
+    if dynamic:
+        parts.append(_render_dynamic(state, current))
+    if state.ports is not None and state.ports.enabled:
+        parts.extend(render_sets(state.ports, current))
+        parts.extend(render_chains(state.ports))
+    body = "\n".join(parts)
+    return (
+        HEADER
+        + f"add table {TABLE_FAMILY} {TABLE_NAME}\n"
+        + f"delete table {TABLE_FAMILY} {TABLE_NAME}\n"
+        + f"table {TABLE_FAMILY} {TABLE_NAME} {{\n{body}\n}}\n"
+    )
+
+
+def render_effective(state: DesiredState, *, now: float | None = None) -> str | None:
+    """What the helper loads for this state; None = our table is removed."""
+    if state.mode == "enforce":
+        return render_ruleset(state, now=now)
+    if state.ports_active():
+        return render_ruleset(state, now=now, dynamic=False)
+    return None
+
+
+def _render_dynamic(state: DesiredState, current: int) -> str:
     allow = drop_covered(state.allow)
     blocks = effective_blocks(state.blocks)
     allow4 = [element(item) for item in allow if item.version == 4]
     allow6 = [element(item) for item in allow if item.version == 6]
     block4 = [_block_element(item, current) for item in blocks if item.network.version == 4]
     block6 = [_block_element(item, current) for item in blocks if item.network.version == 6]
-    body = "\n".join(
+    return "\n".join(
         [
             _set(SET_ALLOW_V4, "ipv4_addr", allow4, timeout=False),
             _set(SET_ALLOW_V6, "ipv6_addr", allow6, timeout=False),
@@ -182,12 +228,6 @@ def render_ruleset(state: DesiredState, *, now: float | None = None) -> str:
             f"\t\tip6 saddr @{SET_BLOCK_V6} counter drop",
             "\t}",
         ]
-    )
-    return (
-        HEADER
-        + f"add table {TABLE_FAMILY} {TABLE_NAME}\n"
-        + f"delete table {TABLE_FAMILY} {TABLE_NAME}\n"
-        + f"table {TABLE_FAMILY} {TABLE_NAME} {{\n{body}\n}}\n"
     )
 
 
@@ -223,8 +263,8 @@ def check_args(args: list[str], state_dir: Path) -> None:
     """Allow only the argv shapes this module produces."""
     if args == LIST_ARGS or args == ["--version"]:
         return
-    if len(args) == 2 and args[0] == "-f":
-        path = Path(args[1])
+    if (len(args) == 2 and args[0] == "-f") or (len(args) == 3 and args[:2] == ["-c", "-f"]):
+        path = Path(args[-1])
         if path.parent == state_dir and path.name.startswith(".ruleset-") and path.suffix == ".nft":
             return
     raise ValueError("nft argv is not on the allowlist")
@@ -277,33 +317,47 @@ class NftManager:
         self.runner = runner
         self.state_dir = state_dir
 
-    def _run_file(self, text: str) -> NftResult:
+    def _run_file(self, text: str, *, check: bool = False) -> NftResult:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         path = self.state_dir / f".ruleset-{secrets.token_hex(6)}.nft"
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
             with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as handle:
                 handle.write(text)
+            if check:
+                checked = self.runner.run(["-c", "-f", str(path)])
+                if checked.returncode != 0:
+                    return checked
             return self.runner.run(["-f", str(path)])
         finally:
             path.unlink(missing_ok=True)
 
     def apply(self, state: DesiredState, *, now: float | None = None) -> dict[str, Any]:
-        """enforce -> atomic replace of our table; off/dry_run -> our table removed."""
-        if state.mode == "enforce":
-            text = render_ruleset(state, now=now)
-            action = "replace_table"
+        """enforce or an enabled port policy -> ``nft -c -f`` then ONE atomic ``nft -f``
+        replacing our table; otherwise our table is removed. A failed check or load
+        leaves the kernel exactly as it was."""
+        text = render_effective(state, now=now)
+        if text is None:
+            text, action = render_delete(), "delete_table"
         else:
-            text = render_delete()
-            action = "delete_table"
+            action = "replace_table"
         if not self.runner.available():
-            if state.mode == "enforce":
+            if action == "replace_table":
                 raise NftError("nft_unavailable", "the nft binary is not installed")
             return {"action": "none", "nft_available": False}
-        result = self._run_file(text)
+        result = self._run_file(text, check=action == "replace_table")
         if result.returncode != 0:
             raise NftError("nft_failed", result.stderr.strip()[:500] or "nft failed")
         return {"action": action, "nft_available": True}
+
+    def delete_table(self) -> dict[str, Any]:
+        """Last resort used by recovery: remove our table (fail open)."""
+        if not self.runner.available():
+            return {"action": "none", "nft_available": False}
+        result = self._run_file(render_delete())
+        if result.returncode != 0:
+            raise NftError("nft_failed", result.stderr.strip()[:500] or "nft failed")
+        return {"action": "delete_table", "nft_available": True}
 
     def table_status(self) -> dict[str, Any]:
         """Summarize ``nft -j list table inet mrk`` (sets, element and drop counters)."""

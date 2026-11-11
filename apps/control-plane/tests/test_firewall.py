@@ -86,18 +86,26 @@ table inet mrk {
 class FakeRunner:
     """Records nft invocations; models only our table, like the kernel would."""
 
-    def __init__(self, *, available: bool = True, fail: bool = False) -> None:
+    def __init__(self, *, available: bool = True, fail: bool = False,
+                 fail_check: bool = False) -> None:
         self.calls: list[list[str]] = []
         self.files: list[str] = []
+        self.checked: list[str] = []
         self.table: str | None = None
         self.is_available = available
         self.fail = fail
+        self.fail_check = fail_check
 
     def available(self) -> bool:
         return self.is_available
 
     def run(self, args: list[str]) -> NftResult:
         self.calls.append(list(args))
+        if args[:2] == ["-c", "-f"]:  # nft --check: validate only, the table is untouched
+            self.checked.append(Path(args[2]).read_text(encoding="ascii"))
+            if self.fail_check:
+                return NftResult(1, "", "Error: syntax error")
+            return NftResult(0, "", "")
         if args[0] == "-f":
             text = Path(args[1]).read_text(encoding="ascii")
             self.files.append(text)
@@ -206,7 +214,9 @@ def test_manager_enforce_dry_run_off_through_fake_runner(tmp_path: Path) -> None
     assert manager.table_status() == {"nft_available": True, "present": False}
     assert manager.apply(DesiredState("off"))["action"] == "delete_table"
     assert not list(tmp_path.glob(".ruleset-*"))  # temp ruleset files are removed
-    assert all(call[0] in {"-f", "-j"} for call in runner.calls)
+    assert all(call[0] in {"-f", "-j", "-c"} for call in runner.calls)
+    # Every replace is validated with nft --check first (deletes need no check).
+    assert len(runner.checked) == 1 and runner.checked[0] == runner.files[0]
 
 
 def test_manager_errors(tmp_path: Path) -> None:

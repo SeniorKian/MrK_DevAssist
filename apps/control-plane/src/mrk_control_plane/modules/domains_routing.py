@@ -60,6 +60,16 @@ def own_stack(data_dir: Any, service_id: str) -> dict[str, Any] | None:
         entry = remote_services.load(Path(data_dir)).get(service_id)
         if entry:
             host, port = entry["host"], int(entry["port"])
+    elif service_id in {"git", "registry"}:
+        if service_id == "git":
+            from . import git_service as module
+        else:
+            from . import registry_service as module  # type: ignore[no-redef]
+        service = module.ACTIVE_SERVICE
+        remote = service.connected() if service is not None else None
+        if remote:
+            parts = urlsplit(remote["url"])
+            host, port = parts.hostname, parts.port or (3000 if service_id == "git" else 5000)
     elif service_id == "s3":
         from .s3_client import remote_config
 
