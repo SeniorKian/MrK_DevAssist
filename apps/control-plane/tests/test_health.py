@@ -2,6 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from mrk_control_plane import __version__
 from mrk_control_plane.config import Settings
 from mrk_control_plane.main import DATA_DIRECTORIES, create_app
 
@@ -23,7 +24,7 @@ def test_health_and_status_contract(tmp_path: Path) -> None:
     assert status.json()["build"] == {
         "commit": "unknown",
         "built_at": "unknown",
-        "ui_version": "0.1.0",
+        "ui_version": __version__,
     }
     assert status.json()["uptime_seconds"] >= 0
     assert 0 <= status.json()["storage"]["used_percent"] <= 100

@@ -7,7 +7,13 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
 ### Added
+- Unified firewall management (docs/45): the panel is the one place for port policy and dynamic
+  defense. The firewall helper owns only its own nftables table (`inet mrk`), with an input chain
+  for host services and a forward chain for published Docker ports, applied atomically; Docker
+  and Dokploy chains are left alone.
 - Versioned releases (docs/47): `VERSION` is the single version; `scripts/release.py X.Y.Z`
   writes it everywhere (including the pinned panel image in compose.yaml), cuts the changelog
   section and tags `vX.Y.Z`. The tag publishes every image as X.Y.Z / X.Y / latest and creates
@@ -57,6 +63,11 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
   `scripts/install-native.sh` (install, upgrade, status, uninstall, `--dry-run`) and systemd units
   in `deploy/native/systemd/` that mirror the containers' processes, environment and hardening.
 - Install guides: `docs/install-docker.md` and `docs/install-native.md`, with Persian versions.
+
+### Changed
+- Node 26.13 in the image builds (the npm image now ships libatomic, which Node 26 needs),
+  fastapi 0.162.2, hatchling, ruff and the pinned GitHub Actions updated. setuptools stays
+  below 82 (devpi still imports `pkg_resources`) and the base image stays on Python 3.13.
 
 ## 0.1.0 — development history (2026-11-07 to 2026-11-09)
 
