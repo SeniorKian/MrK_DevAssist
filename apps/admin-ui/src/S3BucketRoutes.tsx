@@ -21,6 +21,7 @@ type RouteItem = {
   host: string;
   bucket: string | null;
   verified: boolean;
+  source: "admin" | "workspace" | null;
   workspace_slug: string | null;
   route: {
     state: RouteState;
@@ -33,10 +34,10 @@ type RouteItem = {
 type RoutesPayload = { items: RouteItem[]; enabled: boolean };
 
 const T = {
-  title: { fa: "دامنه پوشه‌های «فضای من»", en: "«My space» folder domains" },
+  title: { fa: "دامنه‌های اختصاصی باکت‌ها", en: "Custom bucket domains" },
   hint: {
-    fa: "دامنه‌ای که کاربری ثابت کرده مال اوست، با همان روش اتصال دامنه‌ها به فضای فایل وصل می‌شود.",
-    en: "A domain a user has proven is theirs is routed to file space the same way as other domains."
+    fa: "دامنه‌های باکت‌های مدیریتی و دامنه‌هایی که کاربران ثابت کرده‌اند، با همان روش اتصال دامنه‌ها به فضای فایل وصل می‌شوند.",
+    en: "Admin bucket domains and user-proven domains are routed to file space the same way as other domains."
   },
   off: {
     fa: "وصل کردن خودکار خاموش است؛ از تنظیمات «سرویس‌ها و دامنه‌ها» روشنش کنید.",
@@ -49,6 +50,7 @@ const T = {
   steps: { fa: "مراحل دستی", en: "Manual steps" },
   hideSteps: { fa: "بستن مراحل", en: "Hide steps" },
   owner: { fa: "پوشه «{bucket}» از فضای «{space}»", en: "Folder “{bucket}” of space “{space}”" },
+  adminOwner: { fa: "باکت مدیریتی «{bucket}»", en: "Admin bucket “{bucket}”" },
   noOwner: { fa: "صاحبی ندارد؛ مسیرش برداشته می‌شود", en: "No owner; its route is being removed" },
   via: { fa: "روش: {mode}", en: "Method: {mode}" },
   redeploy: {
@@ -151,7 +153,9 @@ export function S3BucketRoutes({ permissions }: { permissions: string[] }) {
                 )}
               </Stack>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                {item.workspace_slug && item.bucket
+                {item.source === "admin" && item.bucket
+                  ? say(language, T.adminOwner, { bucket: item.bucket })
+                  : item.workspace_slug && item.bucket
                   ? say(language, T.owner, { bucket: item.bucket, space: item.workspace_slug })
                   : pick(language, T.noOwner)}
                 {route.mode ? ` · ${say(language, T.via, { mode: routingModeWord(language, route.mode) })}` : ""}

@@ -19,8 +19,9 @@ const COPY = {
     fa: "این قدم‌ها را به ترتیب روی سرور انجام دهید. DevAssist خودش به فایل‌های سیستم دست نمی‌زند؛ فقط دستور دقیق می‌دهد و بعد بررسی می‌کند.",
     en: "Do these steps on the server, in order. DevAssist never edits system files itself; it gives you the exact commands, then checks."
   },
-  progress: { fa: "{done} از {total} قدم انجام شده", en: "{done} of {total} steps done" },
-  allDone: { fa: "همه قدم‌ها انجام شده. سرور و کانتینرها نام‌ها را از DevAssist می‌پرسند.", en: "Every step is done. The server and its containers ask DevAssist for names." },
+  progress: { fa: "{done} از {total} قدم اصلی انجام شده", en: "{done} of {total} main steps done" },
+  allDone: { fa: "همه قدم‌های اصلی انجام شده. بررسی دستی داخل کانتینر اختیاری است.", en: "Every main step is done. The manual check inside a container is optional." },
+  optional: { fa: "اختیاری", en: "Optional" },
   recheck: { fa: "دوباره بررسی کن", en: "Check again" },
   checking: { fa: "در حال بررسی…", en: "Checking…" },
   noAgent: {
@@ -49,10 +50,17 @@ const COPY = {
   technicalParams: { fa: "جزئیات", en: "Details" }
 } satisfies Record<string, Bi>;
 
+function isManualOptionalStep(step: DnsSetupStep): boolean {
+  return step.id === "verify_from_container" && step.state === "unknown" && step.detail_code === "manual_check";
+}
+
 function StepCard({ step, index }: { step: DnsSetupStep; index: number }) {
   const { language, isAdvanced } = useKit();
   const [showRevert, setShowRevert] = useState(false);
-  const state = setupStateWord(language, step.state);
+  const optional = isManualOptionalStep(step);
+  const state = optional
+    ? { tone: "off" as const, label: pick(language, COPY.optional) }
+    : setupStateWord(language, step.state);
   const why = SETUP_STEP_WORDS[step.id]?.why;
   const commands = step.commands ?? [];
   const revert = step.revert ?? [];
@@ -154,9 +162,10 @@ export default function DnsSetupTab(_props: { permissions: readonly string[] }) 
   }, [load]);
 
   const steps = setup?.steps ?? [];
-  const doneCount = steps.filter((step) => step.state === "done").length;
-  const unknownCount = steps.filter((step) => step.state === "unknown").length;
-  const allDone = steps.length > 0 && doneCount === steps.length;
+  const requiredSteps = steps.filter((step) => !isManualOptionalStep(step));
+  const doneCount = requiredSteps.filter((step) => step.state === "done").length;
+  const unknownCount = requiredSteps.filter((step) => step.state === "unknown").length;
+  const allDone = steps.length > 0 && (setup?.complete ?? (requiredSteps.length > 0 && doneCount === requiredSteps.length));
   const number = (value: number) => (language === "fa" ? new Intl.NumberFormat("fa-IR").format(value) : String(value));
 
   const recheck = (
@@ -175,10 +184,10 @@ export default function DnsSetupTab(_props: { permissions: readonly string[] }) 
       <SectionCard
         title={pick(language, { fa: "راه‌اندازی DNS روی سرور", en: "Set up DNS on the server" })}
         hint={pick(language, COPY.intro)}
-        status={setup ? <StatusPill tone={allDone ? "ok" : "info"} label={say(language, COPY.progress, { done: number(doneCount), total: number(steps.length) })} /> : undefined}
+        status={setup ? <StatusPill tone={allDone ? "ok" : "info"} label={say(language, COPY.progress, { done: number(doneCount), total: number(requiredSteps.length) })} /> : undefined}
       >
         <Stack spacing={1.5}>
-          {setup ? <LinearProgress variant="determinate" value={steps.length ? (doneCount / steps.length) * 100 : 0} sx={{ height: 8, borderRadius: 99 }} aria-hidden /> : <LinearProgress aria-hidden />}
+          {setup ? <LinearProgress variant="determinate" value={requiredSteps.length ? (doneCount / requiredSteps.length) * 100 : 0} sx={{ height: 8, borderRadius: 99 }} aria-hidden /> : <LinearProgress aria-hidden />}
           {allDone ? (
             <Stack direction="row" alignItems="center" gap={1}>
               <CheckCircleRoundedIcon color="success" aria-hidden />

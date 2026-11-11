@@ -114,6 +114,24 @@ def test_repeated_npm_config_write_does_not_restart_verdaccio(tmp_path: Path) ->
     assert env_path.stat().st_mtime_ns == env_mtime
 
 
+def test_npm_environment_is_written_before_the_yaml_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The runner restarts Verdaccio as soon as the YAML changes, so it must
+    # never see a new YAML next to the previous environment file.
+    settings = Settings.for_test(tmp_path / "cp")
+    replaced: list[str] = []
+    real_replace = os.replace
+
+    def recording_replace(source: object, target: object) -> None:
+        replaced.append(Path(str(target)).name)
+        real_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+    remote_services.write_npm_config(settings.data_dir)
+    assert replaced == [remote_services.ENV_FILE, "generated.yaml"]
+
+
 def test_npm_pypi_targets_are_validated(tmp_path: Path) -> None:
     settings = Settings.for_test(tmp_path / "cp")
     for host, port in (("bad host", 4873), ("mrk-npm", 0), ("x" * 300, 1)):

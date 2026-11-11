@@ -355,16 +355,24 @@ class S3Store:
 
     @staticmethod
     def _tenancy_snapshot(db: Any) -> tuple[list[dict[str, Any]], set[str], dict[str, str]]:
+        # Admin-created custom bucket domains live outside workspace ownership but use
+        # the same engine Host -> bucket map as verified «My space» domains.
         from ..tenancy import effective_limits
+        from .bucket_routes import read_admin_domains
 
         owners = db.scalars(select(ResourceOwner).where(
             ResourceOwner.kind.in_(["s3_bucket", "bucket_domain"]))).all()
+        bucket_names = set(db.scalars(select(S3Bucket.name)))
+        admin_hosts = {
+            host: bucket for host, bucket in read_admin_domains(db).items()
+            if bucket in bucket_names
+        }
         if not owners:
-            return [], set(), {}
+            return [], set(), admin_hosts
         workspaces = {row.id: row for row in db.scalars(select(Workspace))}
         plans = {row.id: row for row in db.scalars(select(TenancyPlan))}
         by_workspace: dict[str, list[str]] = {}
-        hosts: dict[str, str] = {}
+        hosts: dict[str, str] = dict(admin_hosts)
         for owner in owners:
             if owner.kind == "s3_bucket":
                 by_workspace.setdefault(owner.workspace_id, []).append(owner.resource_id)

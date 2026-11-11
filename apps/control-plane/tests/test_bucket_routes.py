@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -85,6 +86,146 @@ def test_manual_mode_gives_admin_steps_and_workspace_only_a_state(space: Space) 
     assert route["instructions"]["dokploy"]["port"] == 9000
     assert route["instructions"]["dokploy"]["host"] == "cdn.alice.example"
     assert any("cdn.alice.example" in step for step in route["instructions"]["steps_fa"])
+
+
+def test_admin_bucket_custom_domain_maps_host_and_is_cleaned_up(space: Space) -> None:
+    created_bucket = space.client.post(
+        "/api/v1/s3/buckets", headers=space.headers, json={"name": "sedamod"}
+    )
+    assert created_bucket.status_code == 201, created_bucket.text
+
+    created = space.client.post(
+        "/api/v1/s3/buckets/sedamod/domains",
+        headers=space.headers,
+        json={"host": "s3.sedamod.example"},
+    )
+    assert created.status_code == 201, created.text
+    item = created.json()
+    assert item["host"] == "s3.sedamod.example"
+    assert item["bucket"] == "sedamod" and item["source"] == "admin"
+    assert item["route"]["state"] == "manual"
+
+    snapshot = json.loads(
+        (space.env["cp"] / "modules" / "s3" / "config.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["bucket_hosts"] == {"s3.sedamod.example": "sedamod"}
+    aggregate = admin_item(space, "s3.sedamod.example")
+    assert aggregate["source"] == "admin" and aggregate["workspace_slug"] is None
+
+    duplicate = space.client.post(
+        "/api/v1/s3/buckets/sedamod/domains",
+        headers=space.headers,
+        json={"host": "s3.sedamod.example"},
+    )
+    assert duplicate.status_code == 409 and code(duplicate) == "domain_exists"
+
+    removed = space.client.request(
+        "DELETE",
+        "/api/v1/s3/buckets/sedamod/domains/s3.sedamod.example",
+        headers=space.headers,
+    )
+    assert removed.status_code == 200, removed.text
+    snapshot = json.loads(
+        (space.env["cp"] / "modules" / "s3" / "config.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["bucket_hosts"] == {}
+
+    space.client.post(
+        "/api/v1/s3/buckets/sedamod/domains",
+        headers=space.headers,
+        json={"host": "cdn.sedamod.example"},
+    )
+    deleted = space.client.request(
+        "DELETE",
+        "/api/v1/s3/buckets/sedamod",
+        headers=space.headers,
+        json={"confirmation": "sedamod", "force": True},
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert routes().admin_domains_for("sedamod") == []
+    assert "cdn.sedamod.example" not in routes().records()
+
+
+def admin_bucket(space: Space, name: str) -> None:
+    created = space.client.post("/api/v1/s3/buckets", headers=space.headers, json={"name": name})
+    assert created.status_code == 201, created.text
+
+
+def admin_domain(space: Space, bucket_name: str, host: str) -> httpx.Response:
+    return space.client.post(f"/api/v1/s3/buckets/{bucket_name}/domains",
+                             headers=space.headers, json={"host": host})
+
+
+def audit_records(space: Space) -> list[tuple[str, str | None, str | None]]:
+    items = space.client.get("/api/v1/audit-events?limit=200",
+                             headers=space.headers).json()["items"]
+    return [(item["action"], item.get("result"), item.get("object_id")) for item in items]
+
+
+def test_admin_and_workspace_bucket_domains_never_overlap(space: Space) -> None:
+    alice = owner_with_bucket(space)
+    attach(alice, "cdn.alice.example")
+    admin_bucket(space, "shared")
+
+    # The admin cannot take a workspace domain or a name inside a workspace zone.
+    for host in ("cdn.alice.example", "img.alice.example", "alice.example"):
+        refused = admin_domain(space, "shared", host)
+        assert refused.status_code == 409 and code(refused) == "domain_exists", host
+    assert routes().admin_domains() == {}
+
+    assert admin_domain(space, "shared", "files.shared.example").status_code == 201
+    # A workspace cannot claim an admin bucket domain, a name inside it or above it.
+    for host in ("files.shared.example", "a.files.shared.example", "shared.example"):
+        refused = alice.post("/s3/buckets/alice-files/domains", {"host": host})
+        assert refused.status_code == 409 and code(refused) == "domain_unavailable", host
+    snapshot = json.loads(
+        (space.env["cp"] / "modules" / "s3" / "config.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["bucket_hosts"]["files.shared.example"] == "shared"
+
+
+def test_admin_bucket_domain_route_errors_are_reported_and_audited(
+        space: Space, monkeypatch: pytest.MonkeyPatch) -> None:
+    admin_bucket(space, "errs")
+
+    async def boom(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("routing exploded")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(routes(), "ensure", boom)
+        failed = admin_domain(space, "errs", "a.errs.example")
+        assert failed.status_code == 502 and code(failed) == "bucket_domain_route_failed"
+    # Rolled back: neither the mapping nor the engine host is left behind.
+    assert routes().admin_domains() == {}
+    assert ("s3.bucket_domain.create", "failure", "a.errs.example") in audit_records(space)
+
+    assert admin_domain(space, "errs", "b.errs.example").status_code == 201
+    with monkeypatch.context() as patch:
+        patch.setattr(routes(), "ensure", boom)
+        retried = space.client.post("/api/v1/s3/buckets/errs/domains/B.Errs.Example./retry",
+                                    headers=space.headers)
+        assert retried.status_code == 502 and code(retried) == "bucket_domain_route_failed"
+    assert ("s3.bucket_domain.retry", "failure", "b.errs.example") in audit_records(space)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bucket_routes, "active", lambda: None)
+        unavailable = space.client.post("/api/v1/s3/buckets/errs/domains/b.errs.example/retry",
+                                        headers=space.headers)
+        assert unavailable.status_code == 503 and code(unavailable) == "routing_unavailable"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(routes(), "remove", boom)
+        patch.setattr(routes(), "reconcile_soon", lambda: None)
+        deleted = space.client.request("DELETE", "/api/v1/s3/buckets/errs/domains/b.errs.example",
+                                       headers=space.headers)
+        assert deleted.status_code == 502 and code(deleted) == "bucket_domain_route_failed"
+    # The engine no longer maps the host; the leftover route is reconciled later.
+    assert routes().admin_domains() == {}
+    assert ("s3.bucket_domain.delete", "failure", "b.errs.example") in audit_records(space)
+
+    missing = space.client.request("DELETE", "/api/v1/s3/buckets/errs/domains/not a host",
+                                   headers=space.headers)
+    assert missing.status_code == 404 and code(missing) == "domain_not_found"
 
 
 def test_unverified_domain_is_not_routed(space: Space, env: dict[str, Any]) -> None:

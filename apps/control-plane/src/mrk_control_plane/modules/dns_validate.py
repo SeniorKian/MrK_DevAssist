@@ -521,7 +521,13 @@ def upstream_address(value: Any) -> str:
     return text
 
 
-def _cidrs(value: Any, field: str, errors: list[dict[str, Any]]) -> None:
+def _cidrs(
+    value: Any,
+    field: str,
+    errors: list[dict[str, Any]],
+    *,
+    reject_open: bool,
+) -> None:
     if not isinstance(value, list) or len(value) > 256:
         errors.append(_field(field, "invalid_type"))
         return
@@ -531,7 +537,7 @@ def _cidrs(value: Any, field: str, errors: list[dict[str, Any]]) -> None:
         except ValueError:
             errors.append(_field(f"{field}.{index}", "invalid_cidr"))
             continue
-        if network.prefixlen == 0:
+        if reject_open and network.prefixlen == 0:
             errors.append(_field(f"{field}.{index}", "open_resolver"))
 
 
@@ -603,9 +609,11 @@ def engine_settings(payload: Any) -> dict[str, Any]:
             if "enabled" in recursion and not isinstance(recursion["enabled"], bool):
                 errors.append(_field("recursion.enabled", "invalid_type"))
             if "allow" in recursion:
-                _cidrs(recursion["allow"], "recursion.allow", errors)
+                _cidrs(recursion["allow"], "recursion.allow", errors, reject_open=True)
     if "query_allow" in payload:
-        _cidrs(payload["query_allow"], "query_allow", errors)
+        # A public authoritative DNS server must accept questions from the Internet.
+        # Only recursion, not authoritative queries, creates an open-resolver risk.
+        _cidrs(payload["query_allow"], "query_allow", errors, reject_open=False)
     upstreams = payload.get("upstreams")
     if upstreams is not None:
         if not isinstance(upstreams, list) or len(upstreams) > 32:

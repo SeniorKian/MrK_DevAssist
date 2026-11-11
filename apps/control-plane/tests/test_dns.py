@@ -905,6 +905,19 @@ def test_registry_writes_through_module(app_client) -> None:
 # ----------------------------------------------------------------------------- validation units
 
 
+def test_engine_settings_accepts_public_query_acl_only() -> None:
+    public = {"config_version": 1, "query_allow": ["0.0.0.0/0", "::/0"]}
+    assert dns_validate.engine_settings(public)["query_allow"] == public["query_allow"]
+
+    recursion = {"config_version": 1, "recursion": {
+        "enabled": True, "allow": ["0.0.0.0/0"],
+    }}
+    with pytest.raises(dns_validate.DnsInputError) as info:
+        dns_validate.engine_settings(recursion)
+    assert info.value.fields == [{"field": "recursion.allow.0",
+                                  "reason_code": "open_resolver"}]
+
+
 def test_validation_units() -> None:
     assert dns_validate.canonical_zone("10.IN-ADDR.arpa.") == "10.in-addr.arpa"
     assert dns_validate.canonical_zone("internal") == "internal"

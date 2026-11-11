@@ -255,13 +255,18 @@ def presign_url(
     secret: str,
     region: str,
     expires_seconds: int,
+    path_style: bool = True,
     now: dt.datetime | None = None,
 ) -> str:
-    """Query-string SigV4 (presigned URL), path-style, signing only ``host``."""
+    """Query-string SigV4 URL, signing only ``host``.
+
+    ``path_style=False`` is used when the endpoint host is already mapped to one
+    bucket (for example ``https://s3.sedamod.ir/file.jpg``).
+    """
     moment = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
     amz_date = moment.strftime("%Y%m%dT%H%M%SZ")
     scope = f"{amz_date[:8]}/{region}/s3/aws4_request"
-    path = object_path(bucket, key)
+    path = object_path(bucket, key) if path_style else "/" + uri_encode(key, keep_slash=True)
     params = [
         ("X-Amz-Algorithm", ALGORITHM),
         ("X-Amz-Credential", f"{access_key}/{scope}"),
@@ -430,7 +435,15 @@ class EngineS3:
         await response.aread()
         return response
 
-    def presign_get(self, endpoint: str, bucket: str, key: str, expires_seconds: int) -> str:
+    def presign_get(
+        self,
+        endpoint: str,
+        bucket: str,
+        key: str,
+        expires_seconds: int,
+        *,
+        path_style: bool = True,
+    ) -> str:
         return presign_url(
             method="GET",
             endpoint=endpoint,
@@ -440,6 +453,7 @@ class EngineS3:
             secret=self._secret,
             region=self.region,
             expires_seconds=expires_seconds,
+            path_style=path_style,
         )
 
     async def list_objects(

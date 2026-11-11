@@ -48,7 +48,9 @@ import { formatBytes, formatNumber } from "./format";
 import type { Language } from "./i18n";
 import { useVisibleInterval } from "./polling";
 import { KeySecretDialog, S3Connect, S3Identities, TEMPLATE_CARDS, createKeyFor, type NewKey } from "./S3Access";
+import { S3AdminBucketDomains } from "./S3AdminBucketDomains";
 import { S3BucketRoutes } from "./S3BucketRoutes";
+import { S3DokployDeploy } from "./S3DokployDeploy";
 import { S3FileManager } from "./S3FileManager";
 import { S3Lifecycle } from "./S3Lifecycle";
 import {
@@ -732,6 +734,7 @@ export function S3Panel({ language, permissions }: Props) {
               </Notice>
             )}
             {isAdvanced && status.endpoint && <CopyField label={pick(language, T.endpoint)} value={status.endpoint} />}
+            <S3DokployDeploy permissions={permissions} />
           </Stack>
         </SectionCard>
       )}
@@ -761,6 +764,7 @@ export function S3Panel({ language, permissions }: Props) {
               }
             >
               <S3FileManager key={openBucket} bucket={openBucket} language={language} canWrite={canWrite} />
+              {canAdmin && <S3AdminBucketDomains bucket={openBucket} canAdmin />}
               {isAdvanced && (
                 <Box sx={{ mt: 2 }}>
                   <S3Lifecycle key={openBucket} bucket={openBucket} canAdmin={canAdmin} />

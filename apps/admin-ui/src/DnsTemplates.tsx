@@ -79,7 +79,7 @@ export const TEMPLATE_COPY = {
   previewFailed: { fa: "پیش‌نمایش از سرور نیامد؛ فهرست زیر از روی خود قالب است.", en: "The server didn't send a preview; the list below is from the template itself." },
   // page
   pageTitle: { fa: "قالب‌های دامنه", en: "Domain templates" },
-  pageHint: { fa: "وقتی دامنه تازه می‌سازید، رکوردهای قالب پیش‌فرض خودکار ساخته می‌شوند. قالب‌های آماده را کپی کنید و به سلیقه خودتان تغییر دهید.", en: "When you make a new domain, the default template's records are made automatically. Copy a ready template and change it your way." },
+  pageHint: { fa: "وقتی دامنه تازه می‌سازید، رکوردهای قالب پیش‌فرض خودکار ساخته می‌شوند. هر قالب را می‌توانید به سلیقه خودتان تغییر دهید.", en: "When you make a new domain, the default template's records are made automatically. You can edit any template your way." },
   newTemplate: { fa: "قالب تازه", en: "New template" },
   emptyTitle: { fa: "هنوز قالبی نیست", en: "No templates yet" },
   emptyBody: { fa: "یک قالب بسازید تا دامنه‌های تازه با همان رکوردها ساخته شوند.", en: "Make a template so new domains are made with the same records." },
@@ -93,11 +93,14 @@ export const TEMPLATE_COPY = {
   defaultSet: { fa: "«{name}» قالب پیش‌فرض شد.", en: "“{name}” is now the default template." },
   defaultCleared: { fa: "دیگر قالب پیش‌فرضی نیست.", en: "There's no default template now." },
   copyOf: { fa: "کپی {name}", en: "Copy of {name}" },
-  builtinNote: { fa: "قالب‌های آماده تغییر نمی‌کنند؛ یک کپی بگیرید و کپی را تغییر دهید.", en: "Built-in templates don't change; copy one and edit the copy." },
+  editableOf: { fa: "{name} (سفارشی)", en: "{name} (custom)" },
+  builtinNote: { fa: "با تغییر قالب آماده، یک نسخه شخصی و قابل‌ویرایش از آن ساخته می‌شود؛ نسخه اصلی برای بازیابی و به‌روزرسانی سالم می‌ماند.", en: "Editing a built-in creates your own editable version; the original stays intact for recovery and updates." },
+  builtinEditHint: { fa: "نسخه اصلی سیستمی دست‌نخورده می‌ماند و تغییرها در یک نسخه شخصی ذخیره می‌شود.", en: "The original system template stays intact and your changes are saved as a personal version." },
   removeTitle: { fa: "قالب «{name}» پاک شود؟", en: "Delete the template “{name}”?" },
   removeBody: { fa: "دامنه‌هایی که با این قالب ساخته شده‌اند دست نمی‌خورند.", en: "Domains already made with it aren't touched." },
   removed: { fa: "قالب «{name}» پاک شد.", en: "The template “{name}” was deleted." },
   saved: { fa: "قالب «{name}» ذخیره شد.", en: "The template “{name}” was saved." },
+  savedAsDefault: { fa: "قالب «{name}» ذخیره و پیش‌فرض شد.", en: "The template “{name}” was saved and made the default." },
   records: { fa: "{count} رکورد", en: "{count} records" },
   variablesCount: { fa: "{count} پرسش", en: "{count} questions" },
   adminNeeded: { fa: "ساختن و تغییر قالب‌ها", en: "Making and changing templates" },
@@ -288,6 +291,10 @@ export function TemplateChooser({ zone, zoneValid, touched, onChange, fieldError
   const { data, error, loading } = useLoader<TemplateList>(loader);
   const [templateId, setTemplateId] = useState<string | null | undefined>(undefined);
   const [variables, setVariables] = useState<Record<string, string>>({});
+  // Once an automatic value is exposed for manual entry, keep its field mounted while the
+  // person types. Otherwise its warning disappears after the first character and Simple mode
+  // immediately removes the input (automatic fields are normally hidden there).
+  const [revealedAutoFields, setRevealedAutoFields] = useState<string[]>([]);
   const templates = data?.items ?? [];
   const template = templates.find((item) => item.id === templateId) ?? null;
 
@@ -301,6 +308,10 @@ export function TemplateChooser({ zone, zoneValid, touched, onChange, fieldError
 
   const server = useServerPreview(template?.id ?? null, zone, variables, zoneValid);
   const ipUnknown = Boolean(server.preview?.warnings.includes("server_ipv4_unknown")) && !(variables.server_ipv4 ?? "").trim();
+  useEffect(() => {
+    if (!server.preview?.warnings.includes("server_ipv4_unknown")) return;
+    setRevealedAutoFields((current) => current.includes("server_ipv4") ? current : [...current, "server_ipv4"]);
+  }, [server.preview?.warnings]);
   const missing = missingVariables(template, variables);
   const settled = templateId !== undefined || Boolean(error);
   const ready = settled && missing.length === 0;
@@ -328,6 +339,7 @@ export function TemplateChooser({ zone, zoneValid, touched, onChange, fieldError
     const next = id === "__none" ? null : templates.find((item) => item.id === id) ?? null;
     setTemplateId(next?.id ?? null);
     setVariables(initialVariables(next));
+    setRevealedAutoFields([]);
   };
 
   return (
@@ -354,7 +366,7 @@ export function TemplateChooser({ zone, zoneValid, touched, onChange, fieldError
       {template ? (
         <>
           {ipUnknown ? <Notice tone="warning">{pick(language, C.serverIpUnknown)}</Notice> : null}
-          <VariableFields template={template} values={variables} onChange={setVariables} touched={touched} serverValues={server.preview?.variables ?? {}} fieldErrors={fieldErrors} alsoAsk={ipUnknown ? ["server_ipv4"] : []} />
+          <VariableFields template={template} values={variables} onChange={setVariables} touched={touched} serverValues={server.preview?.variables ?? {}} fieldErrors={fieldErrors} alsoAsk={revealedAutoFields} />
           {/* «فضای من» lists templates without their records (docs/43 §0.1): nothing to summarise then. */}
           {records.length > 0 || server.loading ? <Paper variant="outlined" sx={{ p: 1.75, borderRadius: 2 }}>
             <Stack spacing={1.25}>
@@ -380,6 +392,7 @@ export function ApplyTemplateDialog({ zone, onClose, onApplied }: { zone: string
   const { data, error: listError } = useLoader<TemplateList>(loader);
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [variables, setVariables] = useState<Record<string, string>>({});
+  const [revealedAutoFields, setRevealedAutoFields] = useState<string[]>([]);
   const [replace, setReplace] = useState(false);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -395,6 +408,10 @@ export function ApplyTemplateDialog({ zone, onClose, onApplied }: { zone: string
   const fresh = preview ? preview.summary?.new ?? countOf(records, "new") : records.length;
   const conflicts = preview ? preview.summary?.conflict ?? countOf(records, "conflict") : 0;
   const ipUnknown = Boolean(preview?.warnings.includes("server_ipv4_unknown")) && !(variables.server_ipv4 ?? "").trim();
+  useEffect(() => {
+    if (!preview?.warnings.includes("server_ipv4_unknown")) return;
+    setRevealedAutoFields((current) => current.includes("server_ipv4") ? current : [...current, "server_ipv4"]);
+  }, [preview?.warnings]);
   const blockedByConflicts = conflicts > 0 && !replace;
   const nothingToDo = fromServer && fresh === 0 && conflicts === 0;
   const fieldErrors = useMemo(() => dnsFieldMessages(language, error), [language, error]);
@@ -440,6 +457,7 @@ export function ApplyTemplateDialog({ zone, onClose, onApplied }: { zone: string
           const next = templates.find((item) => item.id === event.target.value) ?? null;
           setTemplateId(next?.id ?? null);
           setVariables(initialVariables(next));
+          setRevealedAutoFields([]);
           setReplace(false);
         }} helperText={template ? templateDescription(language, template) || " " : " "} fullWidth>
           {templates.map((item) => <MenuItem key={item.id} value={item.id}>{templateName(language, item)}</MenuItem>)}
@@ -448,7 +466,7 @@ export function ApplyTemplateDialog({ zone, onClose, onApplied }: { zone: string
       {template ? (
         <>
           {ipUnknown ? <Notice tone="warning">{pick(language, C.serverIpUnknown)}</Notice> : null}
-          <VariableFields template={template} values={variables} onChange={setVariables} touched={touched} serverValues={preview?.variables ?? {}} fieldErrors={fieldErrors} alsoAsk={ipUnknown ? ["server_ipv4"] : []} />
+          <VariableFields template={template} values={variables} onChange={setVariables} touched={touched} serverValues={preview?.variables ?? {}} fieldErrors={fieldErrors} alsoAsk={revealedAutoFields} />
           {server.error ? <Typography variant="caption" color="text.secondary">{pick(language, C.previewFailed)}</Typography> : null}
           <Paper variant="outlined" sx={{ p: 1.75, borderRadius: 2 }}>
             <Stack spacing={1.25}>
@@ -500,9 +518,13 @@ function emptyFields(type: string): Record<string, string> {
 const VAR_KEY = /^[a-z][a-z0-9_]{0,31}$/;
 const digits = (text: string) => text.replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)));
 
-function TemplateEditor({ initial, mode, onClose, onSaved }: { initial: DnsTemplate | null; mode: "new" | "edit" | "copy"; onClose: () => void; onSaved: (name: string) => void }) {
+function TemplateEditor({ initial, mode, onClose, onSaved }: { initial: DnsTemplate | null; mode: "new" | "edit" | "copy" | "fork"; onClose: () => void; onSaved: (name: string, saved: DnsTemplate) => void }) {
   const { language, isAdvanced } = useKit();
-  const [name, setName] = useState(() => (mode === "copy" && initial ? say(language, C.copyOf, { name: templateName(language, initial) }) : initial ? templateName(language, initial) : ""));
+  const [name, setName] = useState(() => (mode === "copy" && initial
+    ? say(language, C.copyOf, { name: templateName(language, initial) })
+    : mode === "fork" && initial
+      ? say(language, C.editableOf, { name: templateName(language, initial) })
+      : initial ? templateName(language, initial) : ""));
   const [description, setDescription] = useState(() => (initial ? templateDescription(language, initial) : ""));
   const [records, setRecords] = useState<DraftRecord[]>(() => (initial?.records.length ? initial.records.map(toDraftRecord) : [toDraftRecord({ name: "@", type: "A", data: { address: "{server_ipv4}" } })]));
   const [variables, setVariables] = useState<DraftVariable[]>(() => (initial?.variables ?? []).map((item) => ({ key: nextKey(), name: item.key, label_fa: item.label_fa ?? "", label_en: item.label_en ?? "", default: item.default ?? "", required: Boolean(item.required) })));
@@ -581,9 +603,10 @@ function TemplateEditor({ initial, mode, onClose, onSaved }: { initial: DnsTempl
       }))
     };
     try {
-      if (mode === "edit" && initial) await updateTemplate(initial.id, body);
-      else await createTemplate(body);
-      onSaved(body.name);
+      const saved = mode === "edit" && initial
+        ? await updateTemplate(initial.id, body)
+        : await createTemplate(body);
+      onSaved(body.name, saved);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -593,7 +616,7 @@ function TemplateEditor({ initial, mode, onClose, onSaved }: { initial: DnsTempl
 
   return (
     <FormDialog
-      title={mode === "edit" && initial ? say(language, C.editorEdit, { name: templateName(language, initial) }) : pick(language, C.editorNew)}
+      title={(mode === "edit" || mode === "fork") && initial ? say(language, C.editorEdit, { name: templateName(language, initial) }) : pick(language, C.editorNew)}
       submitLabel={pick(language, C.save)}
       busy={busy}
       error={error}
@@ -602,6 +625,7 @@ function TemplateEditor({ initial, mode, onClose, onSaved }: { initial: DnsTempl
       wide
       extraActions={touched && invalid ? <Typography variant="body2" color="error">{pick(language, C.fixFirst)}</Typography> : undefined}
     >
+      {mode === "fork" ? <Notice tone="info">{pick(language, C.builtinEditHint)}</Notice> : null}
       <TextField label={pick(language, C.name)} value={name} onChange={(event) => setName(event.target.value)} error={Boolean(show("name") || serverFields.name)} helperText={show("name") ?? serverFields.name ?? " "} fullWidth autoFocus />
       <TextField label={pick(language, C.description)} value={description} onChange={(event) => setDescription(event.target.value)} fullWidth multiline minRows={1} />
 
@@ -765,7 +789,7 @@ function TemplateCard({ template, isDefault, canAdmin, onView, onCopy, onEdit, o
       <Stack direction="row" gap={0.5} flexWrap="wrap">
         {action(C.view, <VisibilityRoundedIcon />, onView)}
         {canAdmin ? action(C.copy, <ContentCopyRoundedIcon />, onCopy) : null}
-        {canAdmin && !template.builtin ? action(C.edit, <EditRoundedIcon />, onEdit) : null}
+        {canAdmin ? action(C.edit, <EditRoundedIcon />, onEdit) : null}
         {canAdmin && !isDefault ? action(C.makeDefault, <StarRoundedIcon />, onDefault) : null}
         {canAdmin && !template.builtin && !isDefault ? action(C.remove, <DeleteOutlineRoundedIcon />, onDelete, "error") : null}
       </Stack>
@@ -778,7 +802,7 @@ export default function DnsTemplatesTab({ permissions }: { permissions: readonly
   const canAdmin = hasPermission(permissions, "dns:admin");
   const loader = useCallback((signal: AbortSignal) => fetchTemplates(signal), []);
   const { data, error, loading, reload, setData } = useLoader<TemplateList>(loader);
-  const [editing, setEditing] = useState<{ template: DnsTemplate | null; mode: "new" | "edit" | "copy"; key: number } | null>(null);
+  const [editing, setEditing] = useState<{ template: DnsTemplate | null; mode: "new" | "edit" | "copy" | "fork"; key: number } | null>(null);
   const [viewing, setViewing] = useState<DnsTemplate | null>(null);
   const { ask, dialog } = useConfirmAction();
   const { notify, snackbar } = useUndoSnackbar();
@@ -833,7 +857,7 @@ export default function DnsTemplatesTab({ permissions }: { permissions: readonly
                   canAdmin={canAdmin}
                   onView={() => setViewing(template)}
                   onCopy={() => setEditing({ template, mode: "copy", key: Date.now() })}
-                  onEdit={() => setEditing({ template, mode: "edit", key: Date.now() })}
+                  onEdit={() => setEditing({ template, mode: template.builtin ? "fork" : "edit", key: Date.now() })}
                   onDelete={() => void remove(template)}
                   onDefault={() => void makeDefault(template)}
                 />
@@ -856,10 +880,22 @@ export default function DnsTemplatesTab({ permissions }: { permissions: readonly
           initial={editing.template}
           mode={editing.mode}
           onClose={() => setEditing(null)}
-          onSaved={(name) => {
+          onSaved={(name, saved) => {
+            const replaceDefault = editing.mode === "fork" && editing.template?.id === data?.defaultId;
             setEditing(null);
-            notify({ message: say(language, C.saved, { name }), tone: "success" });
-            void reload();
+            if (replaceDefault) {
+              void setDefaultTemplate(saved.id).then(() => {
+                setData((current) => (current ? { ...current, defaultId: saved.id } : current));
+                notify({ message: say(language, C.savedAsDefault, { name }), tone: "success" });
+                void reload();
+              }, (caught) => {
+                notify({ message: errorSentence(language, caught, "dns"), tone: "error" });
+                void reload();
+              });
+            } else {
+              notify({ message: say(language, C.saved, { name }), tone: "success" });
+              void reload();
+            }
           }}
         />
       ) : null}

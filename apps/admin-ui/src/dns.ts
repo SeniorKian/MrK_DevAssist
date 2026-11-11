@@ -52,7 +52,11 @@ export type DnsSetupStep = {
   commands?: DnsCommand[] | null;
   revert?: DnsCommand[] | null;
 };
-export type DnsSetup = { steps: DnsSetupStep[] };
+export type DnsSetup = {
+  steps: DnsSetupStep[];
+  /** The backend treats the manual container check as optional when it cannot run it itself. */
+  complete?: boolean;
+};
 
 export type DnsListen = { address: string; udp: boolean; tcp: boolean };
 export type DnsUpstream = { id?: string; address: string; enabled: boolean };
@@ -192,8 +196,11 @@ export const fetchDnsStatus = (signal?: AbortSignal) => getJson<DnsStatus>(`${dn
 
 /** `refresh` asks the server to run every check again instead of using its short cache. */
 export async function fetchDnsSetup(signal?: AbortSignal, refresh = false): Promise<DnsSetup> {
-  const payload = await getJson<{ steps?: DnsSetupStep[] }>(`${dnsBase()}/setup?${refresh ? "refresh=true&" : ""}${fresh()}`, signal);
-  return { steps: Array.isArray(payload?.steps) ? payload.steps : [] };
+  const payload = await getJson<{ steps?: DnsSetupStep[]; complete?: boolean }>(`${dnsBase()}/setup?${refresh ? "refresh=true&" : ""}${fresh()}`, signal);
+  return {
+    steps: Array.isArray(payload?.steps) ? payload.steps : [],
+    complete: typeof payload?.complete === "boolean" ? payload.complete : undefined
+  };
 }
 
 /** Settings come either as the object itself or wrapped in `{settings, config_version}`. */

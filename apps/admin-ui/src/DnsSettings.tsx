@@ -62,6 +62,10 @@ const COPY = {
     fa: "خطرناک: «همه نشانی‌ها» اجازه گرفته‌اند. هر کسی در اینترنت می‌تواند از سرور شما برای حمله استفاده کند. فقط شبکه‌های خودتان را بگذارید.",
     en: "Dangerous: every address is allowed. Anyone on the internet could use your server for attacks. List only your own networks."
   },
+  publicQueries: {
+    fa: "پرسش عمومی روشن است؛ همه می‌توانند رکوردهای دامنه‌های شما را بپرسند، اما پرسیدن نام‌های ناشناخته همچنان فقط برای شبکه‌های مجاز است.",
+    en: "Public queries are on: everyone may ask for your domain records, while recursion for unknown names remains limited to the allowed networks."
+  },
   // upstreams
   upstreamTitle: { fa: "DNS‌های بیرونی", en: "Outside DNS servers" },
   upstreamHint: { fa: "نام‌هایی که DevAssist خودش نمی‌داند از این‌ها پرسیده می‌شود. رمزدارها جلوی شنود و دست‌کاری را می‌گیرند.", en: "Names DevAssist doesn't know are asked here. Encrypted ones stop snooping and tampering." },
@@ -628,9 +632,16 @@ export default function DnsSettingsTab({ permissions }: { permissions: readonly 
           <ListInput label={pick(language, COPY.queryAllow)} value={draft.query_allow ?? []} onChange={(value) => update((next) => { next.query_allow = value; })} validate={rangeProblem} helperText={pick(language, COPY.rangeHint)} />
           <SwitchRow label={pick(language, COPY.recursion)} hint={pick(language, COPY.recursionHint)} checked={Boolean(draft.recursion?.enabled)} onChange={(value) => update((next) => { next.recursion.enabled = value; })} />
           {draft.recursion?.enabled ? (
-            <ListInput label={pick(language, COPY.recursionAllow)} value={draft.recursion.allow ?? []} onChange={(value) => update((next) => { next.recursion.allow = value; })} validate={rangeProblem} helperText={pick(language, COPY.rangeHint)} />
+            <ListInput
+              label={pick(language, COPY.recursionAllow)}
+              value={draft.recursion.allow ?? []}
+              onChange={(value) => update((next) => { next.recursion.allow = value; })}
+              validate={(item) => OPEN_RANGES.has(item.trim()) ? pick(language, COPY.openResolver) : rangeProblem(item)}
+              helperText={pick(language, COPY.rangeHint)}
+            />
           ) : null}
-          {openResolver || openQuery ? <Notice tone="error">{pick(language, COPY.openResolver)}</Notice> : null}
+          {openResolver ? <Notice tone="error">{pick(language, COPY.openResolver)}</Notice> : null}
+          {!openResolver && openQuery ? <Notice tone="info">{pick(language, COPY.publicQueries)}</Notice> : null}
         </Stack>
       </SectionCard>
 

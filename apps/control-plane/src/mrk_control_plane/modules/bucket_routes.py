@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -34,9 +35,23 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 ROUTES_KEY = "services.bucket_routes"
+ADMIN_DOMAINS_KEY = "s3.admin_bucket_domains"
 S3_SERVICE = "s3"
 # States that keep a route in place (the host is served or being served).
 LIVE_STATES = frozenset({"ok", "pending", "manual"})
+# Serialises the read-modify-write of the admin host map inside this process.
+_ADMIN_DOMAINS_LOCK = threading.Lock()
+
+
+def read_admin_domains(db: Any) -> dict[str, str]:
+    """Admin host -> bucket map from ``system_settings`` (read in ``db``)."""
+    row = db.get(SystemSetting, ADMIN_DOMAINS_KEY)
+    value = row.value if row is not None and isinstance(row.value, dict) else {}
+    return {
+        str(host): str(bucket)
+        for host, bucket in value.items()
+        if isinstance(host, str) and isinstance(bucket, str)
+    }
 
 
 def _now() -> int:
@@ -76,6 +91,39 @@ class BucketRoutes:
             records[host] = record
         self._save(records)
 
+    def admin_domains(self) -> dict[str, str]:
+        """Custom host -> bucket mappings created by an S3 administrator."""
+        with self.database.session() as db:
+            return read_admin_domains(db)
+
+    def set_admin_domain(self, host: str, bucket: str | None, *,
+                         only_if_free: bool = False) -> bool:
+        """Map ``host`` to ``bucket`` (None removes it) in one read-modify-write.
+
+        With ``only_if_free`` nothing changes and False is returned when the host is
+        already mapped, so two concurrent adds cannot both win.
+        """
+        with _ADMIN_DOMAINS_LOCK, self.database.session() as db, db.begin():
+            row = db.get(SystemSetting, ADMIN_DOMAINS_KEY)
+            domains = read_admin_domains(db)
+            if only_if_free and bucket is not None and host in domains:
+                return False
+            if bucket is None:
+                domains.pop(host, None)
+            else:
+                domains[host] = bucket
+            now = _now()
+            if row is None:
+                db.add(SystemSetting(key=ADMIN_DOMAINS_KEY, value=domains, updated_at=now,
+                                     updated_by_user_id=None))
+            else:
+                row.value = domains
+                row.updated_at = now
+            return True
+
+    def admin_domains_for(self, bucket: str) -> list[str]:
+        return sorted(host for host, target in self.admin_domains().items() if target == bucket)
+
     def traefik_rows(self) -> list[dict[str, Any]]:
         """Rows for the shared Traefik file (only routes that are in place)."""
         return [
@@ -89,17 +137,24 @@ class BucketRoutes:
         """Verified bucket domains: host -> {bucket, workspace_id}."""
         with self.database.session() as db:
             rows = db.scalars(select(ResourceOwner).where(ResourceOwner.kind == "bucket_domain"))
-            return {
+            workspace = {
                 row.resource_id: {"bucket": str(row.meta["bucket"]),
                                   "workspace_id": row.workspace_id}
                 for row in rows
                 if (row.meta or {}).get("verified") and (row.meta or {}).get("bucket")
             }
+        admin = {
+            host: {"bucket": bucket, "workspace_id": None}
+            for host, bucket in self.admin_domains().items()
+        }
+        # A workspace claim predates this feature and wins defensively if old data clashes.
+        return {**admin, **workspace}
 
     def bucket_hosts(self) -> set[str]:
         with self.database.session() as db:
-            return set(db.scalars(select(ResourceOwner.resource_id).where(
+            workspace = set(db.scalars(select(ResourceOwner.resource_id).where(
                 ResourceOwner.kind == "bucket_domain")))
+        return workspace | set(self.admin_domains())
 
     def _service_host(self, host: str) -> bool:
         with self.database.session() as db:
@@ -141,10 +196,15 @@ class BucketRoutes:
             rows = db.execute(select(ResourceOwner, Workspace.slug).join(
                 Workspace, Workspace.id == ResourceOwner.workspace_id, isouter=True).where(
                 ResourceOwner.kind == "bucket_domain").order_by(ResourceOwner.resource_id))
-            return [{"host": row.resource_id, "bucket": (row.meta or {}).get("bucket"),
-                     "verified": bool((row.meta or {}).get("verified")),
-                     "workspace_id": row.workspace_id, "workspace_slug": slug}
-                    for row, slug in rows]
+            workspace = [{"host": row.resource_id, "bucket": (row.meta or {}).get("bucket"),
+                          "verified": bool((row.meta or {}).get("verified")),
+                          "workspace_id": row.workspace_id, "workspace_slug": slug,
+                          "source": "workspace"}
+                         for row, slug in rows]
+        admin = [{"host": host, "bucket": bucket, "verified": True,
+                  "workspace_id": None, "workspace_slug": None, "source": "admin"}
+                 for host, bucket in sorted(self.admin_domains().items())]
+        return [*admin, *workspace]
 
     async def admin_list(self) -> dict[str, Any]:
         """Every bucket domain with its route, plus routes still to remove."""
@@ -160,7 +220,7 @@ class BucketRoutes:
             items.append({**owner, "route": route})
         for host, record in sorted(records.items()):
             items.append({"host": host, "bucket": record.get("bucket"), "verified": False,
-                          "workspace_id": None, "workspace_slug": None,
+                          "workspace_id": None, "workspace_slug": None, "source": None,
                           "route": {**self.admin_view(host, record, detected),
                                     "state": "stale"}})
         settings = self.service.get_settings()

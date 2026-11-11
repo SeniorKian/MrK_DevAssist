@@ -367,6 +367,8 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
         names = [dns_module.INTERNAL_ZONE]
         with ctx.database.session() as db:
             names.extend(db.scalars(select(ServiceDomain.host)))
+            # Custom domains of admin-managed buckets are never available to a workspace.
+            names.extend(bucket_routes.read_admin_domains(db))
         suffix = s3().get_settings().get("virtual_host_suffix")
         if suffix:
             names.append(str(suffix))

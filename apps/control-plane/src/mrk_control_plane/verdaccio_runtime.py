@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .config import apply_startup_overrides
@@ -186,9 +187,16 @@ def _quota_plugin_lines(data_dir: Path, container: bool = False) -> list[str]:
 
 
 def build_runtime_config(
-    data_dir: Path, *, container: bool = False
+    data_dir: Path,
+    *,
+    container: bool = False,
+    before_replace: Callable[[dict[str, str], bool], None] | None = None,
 ) -> tuple[Path, dict[str, str]]:
-    """Render generated.yaml. ``container``: written by the panel for mrk-npm (docs/44)."""
+    """Render generated.yaml. ``container``: written by the panel for mrk-npm (docs/44).
+
+    ``before_replace(environment, config_changed)`` runs before the YAML is replaced,
+    so a companion file (the mrk-npm environment) is current when a watcher sees it.
+    """
     store = UpstreamStore(data_dir)
     now = int(time.time())
     upstreams = [
@@ -323,6 +331,8 @@ def build_runtime_config(
         unchanged = target.read_bytes() == payload
     except OSError:
         unchanged = False
+    if before_replace is not None:
+        before_replace(environment, not unchanged)
     if unchanged:
         target.chmod(0o600)
     else:

@@ -12,17 +12,23 @@ import contextlib
 import json
 import logging
 import math
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import select
 from starlette.requests import ClientDisconnect
 
 from ..auth import Principal
+from ..models import SystemSetting
 from ..module_context import ModuleContext
+from . import bucket_routes as bucket_routes_module
+from .dokploy_client import DokployError
+from .domains_hosts import HostError, canonical_host
 from .s3_client import (
     UNSIGNED_PAYLOAD,
     EngineAdmin,
@@ -45,6 +51,10 @@ MAX_DELETE_KEYS = 1000
 MAX_MOVE_OBJECTS = 10000
 FALLBACK_ENDPOINT = "http://127.0.0.1:9000"
 _STATS_CONCURRENCY = 8
+S3_DOKPLOY_TARGET_KEY = "s3.dokploy_target"
+# Sources that identify the S3 Compose for certain; anything else is a suggestion.
+DEPLOYABLE_TARGET_SOURCES = frozenset({"saved", "installer", "container"})
+_S3_NAME = re.compile(r"(?<![a-z0-9])s3(?![a-z0-9])")
 
 ACTIVE_STORE: S3Store | None = None
 
@@ -175,6 +185,129 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
             raise S3Error("bucket_read_only", 409, "bucket is a read-only linked folder")
         return bucket
 
+    def bucket_routes() -> bucket_routes_module.BucketRoutes:
+        routes = bucket_routes_module.active()
+        if routes is None:
+            raise S3Error("routing_unavailable", 503, "domain routing is not available")
+        return routes
+
+    async def admin_domain_items(name: str) -> list[dict[str, Any]]:
+        listed = await bucket_routes().admin_list()
+        return [
+            item for item in listed["items"]
+            if item.get("source") == "admin" and item.get("bucket") == name
+        ]
+
+    def stored_dokploy_target() -> str | None:
+        with ctx.database.session() as db:
+            row = db.get(SystemSetting, S3_DOKPLOY_TARGET_KEY)
+            value = row.value if row is not None and isinstance(row.value, dict) else {}
+            compose_id = value.get("compose_id")
+            return compose_id if isinstance(compose_id, str) else None
+
+    def save_dokploy_target(compose_id: str) -> None:
+        now = int(time.time())
+        with ctx.database.session() as db, db.begin():
+            row = db.get(SystemSetting, S3_DOKPLOY_TARGET_KEY)
+            value = {"compose_id": compose_id}
+            if row is None:
+                db.add(SystemSetting(key=S3_DOKPLOY_TARGET_KEY, value=value, updated_at=now))
+            else:
+                row.value = value
+                row.updated_at = now
+
+    def active_dokploy() -> Any:
+        from . import dokploy as dokploy_module
+
+        if dokploy_module.ACTIVE_SERVICE is None:
+            raise S3Error("dokploy_not_configured", 409, "Dokploy is not connected")
+        return dokploy_module.ACTIVE_SERVICE
+
+    async def s3_dokploy_state() -> dict[str, Any]:
+        service = active_dokploy()
+        projects = await service.projects()
+        candidates = [
+            {
+                "compose_id": item["id"],
+                "name": item.get("name") or item["id"],
+                "project": project.get("name") or project["id"],
+                "environment": item.get("environment"),
+                "status": item.get("status"),
+                "domains": item.get("domains") or [],
+            }
+            for project in projects.get("items", [])
+            for item in project.get("services", [])
+            if item.get("type") == "compose" and isinstance(item.get("id"), str)
+        ]
+        by_id = {item["compose_id"]: item for item in candidates}
+
+        selected_id = await asyncio.to_thread(stored_dokploy_target)
+        source = "saved"
+        if selected_id not in by_id:
+            selected_id = None
+
+        if selected_id is None:
+            from .install_auto import deployment_for
+
+            deployment = await asyncio.to_thread(deployment_for, ctx.data_dir, "s3")
+            candidate = (deployment or {}).get("compose_id")
+            if isinstance(candidate, str) and candidate in by_id:
+                selected_id, source = candidate, "installer"
+
+        # A manually-created Dokploy Compose can still be found safely: the Host Agent
+        # sees mrk-s3's compose project label, which Dokploy maps back to a compose id.
+        if selected_id is None:
+            routes = bucket_routes_module.active()
+            agent = routes.service.routing.agent() if routes is not None else None
+            if agent is not None:
+                try:
+                    payload, index = await asyncio.gather(
+                        agent.call("/v1/docker/containers"), service.app_index()
+                    )
+                    for item in payload.get("items", []):
+                        labels = item.get("labels_subset") or {}
+                        container_name = str(item.get("name") or "").lower()
+                        compose_service = str(labels.get("com.docker.compose.service") or "")
+                        if compose_service != "mrk-s3" and "mrk-s3" not in container_name:
+                            continue
+                        app_name = labels.get("com.docker.compose.project") or labels.get(
+                            "com.docker.swarm.service.name"
+                        )
+                        ref = index.get(app_name) if isinstance(app_name, str) else None
+                        if ref and ref.get("type") == "compose" and ref.get("id") in by_id:
+                            selected_id, source = str(ref["id"]), "container"
+                            break
+                except Exception:  # noqa: BLE001 - candidates below remain usable
+                    LOGGER.info("S3 Dokploy container detection skipped", exc_info=True)
+
+        # Weaker hints, never used to deploy on their own: the Compose owns the configured
+        # public S3 hostname, or exactly one Compose is named like S3. The admin saves
+        # such a suggestion first; only then is it a redeploy target.
+        suggestion: dict[str, Any] | None = None
+        if selected_id is None:
+            settings = await asyncio.to_thread(store.get_settings)
+            public = str(settings.get("public_endpoint") or "")
+            public_host = urlsplit(public).hostname if public else None
+            domain_matches = [
+                item for item in candidates
+                if public_host and any(
+                    str(domain).split("/", 1)[0].lower().rstrip(".") == public_host
+                    for domain in item["domains"])
+            ]
+            name_matches = [
+                item for item in candidates if _S3_NAME.search(str(item["name"]).lower())
+            ]
+            matches = domain_matches or name_matches
+            if len(matches) == 1:
+                suggestion = {**matches[0], "source": "domain" if domain_matches else "name"}
+
+        return {
+            "target": ({**by_id[selected_id], "source": source} if selected_id else None),
+            "suggestion": suggestion,
+            "candidates": candidates,
+            "partial": bool(projects.get("partial")),
+        }
+
     def public_endpoint(settings: dict[str, Any]) -> tuple[str, bool]:
         configured = settings.get("public_endpoint")
         if configured:
@@ -240,6 +373,79 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
             "endpoint_is_fallback": fallback,
         }
 
+    # ------------------------------------------------------------ Dokploy deployment
+
+    @router.get("/dokploy", response_model=None)
+    async def get_s3_dokploy(request: Request) -> Any:
+        reader_sync(request, "s3:admin")
+        reader_sync(request, "dokploy:read")
+        try:
+            return await s3_dokploy_state()
+        except (S3Error, DokployError) as exc:
+            return ctx.error_payload(exc.code, exc.message, exc.status_code)
+
+    def dokploy_object(compose_id: str | None) -> str:
+        # Same object convention as the Dokploy module's own service actions.
+        return f"compose:{compose_id}"[:255] if compose_id else "compose"
+
+    @router.put("/dokploy", response_model=None)
+    async def put_s3_dokploy(request: Request) -> Any:
+        principal = writer_sync(request, "s3:admin")
+        ctx.require_principal(request, "dokploy:deploy")
+        compose_id: str | None = None
+        try:
+            body = await _body(request)
+            if not isinstance(body, dict) or set(body) != {"compose_id"}:
+                raise S3Error("invalid_request", 422, "body must contain only compose_id")
+            raw_id = body.get("compose_id")
+            if not isinstance(raw_id, str):
+                raise S3Error("invalid_request", 422, "compose_id must be text")
+            compose_id = raw_id
+            detail = await active_dokploy().service("compose", compose_id)
+            await asyncio.to_thread(save_dokploy_target, compose_id)
+        except (S3Error, DokployError) as exc:
+            if exc.status_code != 422:
+                await audit(principal, "s3.dokploy_target.update", "dokploy",
+                            dokploy_object(compose_id), "failure")
+            return ctx.error_payload(exc.code, exc.message, exc.status_code)
+        await audit(principal, "s3.dokploy_target.update", "dokploy", dokploy_object(compose_id))
+        return {
+            "target": {
+                "compose_id": compose_id,
+                "name": detail.get("name") or compose_id,
+                "project": (detail.get("project") or {}).get("name"),
+                "environment": (detail.get("environment") or {}).get("name"),
+                "status": detail.get("status"),
+                "domains": detail.get("domains") or [],
+                "source": "saved",
+            }
+        }
+
+    @router.post("/dokploy/redeploy", response_model=None)
+    async def redeploy_s3(request: Request) -> Any:
+        principal = writer_sync(request, "s3:admin")
+        ctx.require_principal(request, "dokploy:deploy")
+        compose_id: str | None = None
+        try:
+            state = await s3_dokploy_state()
+            target = state.get("target")
+            # Only a saved, installer-recorded or container-detected Compose is redeployed;
+            # a name/domain suggestion must be saved by the admin first.
+            if (not isinstance(target, dict) or not isinstance(target.get("compose_id"), str)
+                    or target.get("source") not in DEPLOYABLE_TARGET_SOURCES):
+                raise S3Error(
+                    "s3_dokploy_target_required", 409,
+                    "Choose and save the Dokploy Compose that runs S3 first",
+                )
+            compose_id = str(target["compose_id"])
+            await active_dokploy().action("compose", compose_id, "redeploy")
+        except (S3Error, DokployError) as exc:
+            await audit(principal, "dokploy.service.redeploy", "dokploy",
+                        dokploy_object(compose_id), "failure")
+            return ctx.error_payload(exc.code, exc.message, exc.status_code)
+        await audit(principal, "dokploy.service.redeploy", "dokploy", dokploy_object(compose_id))
+        return {"ok": True, "target": target, "started_at": int(time.time())}
+
     # ------------------------------------------------------------ buckets
 
     @router.get("/buckets")
@@ -290,6 +496,144 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
             return fail(exc)
         await audit(principal, "s3.bucket.update", "s3_bucket", name)
         return item
+
+    # ------------------------------------------------------------ custom bucket domains
+
+    def domain_conflict(host: str) -> str | None:
+        """Why ``host`` cannot become an admin bucket domain; None when it is free."""
+        from ..models import ResourceOwner, ServiceDomain
+        from ..tenancy import names_overlap
+
+        with ctx.database.session() as db:
+            if db.scalar(select(ServiceDomain.id).where(ServiceDomain.host == host)) is not None:
+                return "this domain is already used by a service"
+            if host in bucket_routes_module.read_admin_domains(db):
+                return "this domain is already used by a bucket"
+            # Workspace zones and bucket domains (verified or not) keep their whole
+            # subtree, exactly as a workspace claim is checked against them.
+            claimed = db.scalars(select(ResourceOwner.resource_id).where(
+                ResourceOwner.kind.in_(["dns_zone", "bucket_domain"])))
+            if any(names_overlap(host, other) for other in claimed):
+                return "this domain belongs to a workspace"
+        return None
+
+    def path_host(raw: str) -> str:
+        try:
+            return canonical_host(raw)
+        except HostError:
+            raise S3Error("domain_not_found", 404, "bucket domain does not exist") from None
+
+    def route_failed() -> S3Error:
+        return S3Error("bucket_domain_route_failed", 502,
+                       "the route of this bucket domain could not be updated")
+
+    async def admin_domain_item(name: str, host: str) -> dict[str, Any]:
+        for item in await admin_domain_items(name):
+            if item["host"] == host:
+                return item
+        return {"host": host, "bucket": name, "verified": True, "source": "admin",
+                "workspace_id": None, "workspace_slug": None,
+                "route": {"state": "none", "error_code": None}}
+
+    @router.get("/buckets/{name}/domains", response_model=None)
+    async def list_bucket_domains(name: str, request: Request) -> Any:
+        reader_sync(request, "s3:admin")
+        try:
+            await existing_bucket(name)
+            return {"items": await admin_domain_items(name)}
+        except S3Error as exc:
+            return fail(exc)
+
+    @router.post("/buckets/{name}/domains", status_code=201, response_model=None)
+    async def add_bucket_domain(name: str, request: Request) -> Any:
+        principal = writer_sync(request, "s3:admin")
+        host: str | None = None
+        try:
+            await existing_bucket(name)
+            body = await _body(request)
+            if not isinstance(body, dict) or set(body) != {"host"}:
+                raise S3Error("invalid_request", 422, "request body must contain only host")
+            try:
+                host = canonical_host(body.get("host"))
+            except HostError as exc:
+                raise S3Error("invalid_host", 422, exc.message) from None
+            routes = bucket_routes()
+            settings = await asyncio.to_thread(store.get_settings)
+            suffix = str(settings.get("virtual_host_suffix") or "")
+            if suffix and (host == suffix or host.endswith("." + suffix)):
+                raise S3Error("domain_exists", 409, "this host is already an S3 virtual host")
+            problem = await asyncio.to_thread(domain_conflict, host)
+            if problem:
+                raise S3Error("domain_exists", 409, problem)
+            if not await asyncio.to_thread(routes.set_admin_domain, host, name,
+                                           only_if_free=True):
+                raise S3Error("domain_exists", 409, "this domain is already used by a bucket")
+            try:
+                await asyncio.to_thread(store.write_snapshot)
+                await routes.ensure(host)
+            except Exception:  # noqa: BLE001 - rolled back below, reported as a route error
+                LOGGER.exception("routing the bucket domain %s failed", host)
+                try:
+                    await asyncio.to_thread(routes.set_admin_domain, host, None)
+                    await asyncio.to_thread(store.write_snapshot)
+                    await routes.remove(host)
+                except Exception:  # noqa: BLE001 - reconcile removes leftovers later
+                    LOGGER.exception("rolling back the bucket domain %s failed", host)
+                    routes.reconcile_soon()
+                raise route_failed() from None
+            item = await admin_domain_item(name, host)
+        except S3Error as exc:
+            await audit(principal, "s3.bucket_domain.create", "bucket_domain", host, "failure")
+            return fail(exc)
+        await audit(principal, "s3.bucket_domain.create", "bucket_domain", f"{host}->{name}")
+        return JSONResponse(status_code=201, content=item)
+
+    @router.post("/buckets/{name}/domains/{host}/retry", response_model=None)
+    async def retry_bucket_domain(name: str, host: str, request: Request) -> Any:
+        principal = writer_sync(request, "s3:admin")
+        canonical: str | None = None
+        try:
+            canonical = path_host(host)
+            routes = bucket_routes()
+            if (await asyncio.to_thread(routes.admin_domains)).get(canonical) != name:
+                raise S3Error("domain_not_found", 404, "bucket domain does not exist")
+            try:
+                await routes.ensure(canonical, retry=True)
+            except Exception:  # noqa: BLE001 - the route record keeps the last state
+                LOGGER.exception("retrying the bucket domain %s failed", canonical)
+                raise route_failed() from None
+            item = await admin_domain_item(name, canonical)
+        except S3Error as exc:
+            await audit(principal, "s3.bucket_domain.retry", "bucket_domain", canonical, "failure")
+            return fail(exc)
+        await audit(principal, "s3.bucket_domain.retry", "bucket_domain", canonical)
+        return item
+
+    @router.delete("/buckets/{name}/domains/{host}", response_model=None)
+    async def delete_bucket_domain(name: str, host: str, request: Request) -> Any:
+        principal = writer_sync(request, "s3:admin")
+        canonical: str | None = None
+        try:
+            canonical = path_host(host)
+            routes = bucket_routes()
+            if (await asyncio.to_thread(routes.admin_domains)).get(canonical) != name:
+                raise S3Error("domain_not_found", 404, "bucket domain does not exist")
+            try:
+                # The engine stops serving the bucket on this host first; the public
+                # route is removed after (a leftover shows as "stale" and is reconciled).
+                await asyncio.to_thread(routes.set_admin_domain, canonical, None)
+                await asyncio.to_thread(store.write_snapshot)
+                await routes.remove(canonical)
+            except Exception:  # noqa: BLE001 - reconcile finishes the removal
+                LOGGER.exception("removing the bucket domain %s failed", canonical)
+                routes.reconcile_soon()
+                raise route_failed() from None
+        except S3Error as exc:
+            await audit(principal, "s3.bucket_domain.delete", "bucket_domain", canonical,
+                        "failure")
+            return fail(exc)
+        await audit(principal, "s3.bucket_domain.delete", "bucket_domain", canonical)
+        return {"deleted": canonical}
 
     @router.get("/buckets/{name}/lifecycle", response_model=None)
     async def bucket_lifecycle(name: str, request: Request) -> dict[str, Any] | JSONResponse:
@@ -353,6 +697,15 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
                 except EngineError:
                     pass
             await asyncio.to_thread(store.delete_bucket_record, name)
+            routes = bucket_routes_module.active()
+            if routes is not None:
+                hosts = await asyncio.to_thread(routes.admin_domains_for, name)
+                for host in hosts:
+                    await asyncio.to_thread(routes.set_admin_domain, host, None)
+                if hosts:
+                    await asyncio.to_thread(store.write_snapshot)
+                for host in hosts:
+                    await routes.remove(host)
         except (S3Error, EngineError) as exc:
             await audit(principal, "s3.bucket.delete", "s3_bucket", name, "failure")
             return fail(exc)
@@ -517,6 +870,24 @@ def add_file_routes(
         if configured:
             return str(configured), False
         return FALLBACK_ENDPOINT, True
+
+    async def share_endpoint(
+        bucket: str, settings: dict[str, Any]
+    ) -> tuple[str, bool, bool]:
+        """Prefer a ready custom bucket host; otherwise keep the safe path-style URL."""
+        routes = bucket_routes_module.active()
+        if routes is not None:
+            desired, records = await asyncio.gather(
+                asyncio.to_thread(routes.desired),
+                asyncio.to_thread(routes.records),
+            )
+            for host, owner in sorted(desired.items()):
+                record = records.get(host) or {}
+                if owner.get("bucket") == bucket and record.get("state") == "ok":
+                    scheme = "https" if record.get("https", True) else "http"
+                    return f"{scheme}://{host}", False, False
+        endpoint, fallback = public_endpoint(settings)
+        return endpoint, fallback, True
 
     @router.get("/buckets/{name}/objects", response_model=None)
     async def list_objects(
@@ -845,8 +1216,8 @@ def add_file_routes(
             client, settings = await engine()
             async with client:
                 await client.head(name, key)
-            endpoint, fallback = public_endpoint(settings)
-            url = client.presign_get(endpoint, name, key, expires)
+            endpoint, fallback, path_style = await share_endpoint(name, settings)
+            url = client.presign_get(endpoint, name, key, expires, path_style=path_style)
         except (S3Error, EngineError) as exc:
             return fail(exc)
         await audit(principal, "s3.object.share", "s3_object", f"{name}/{key}")

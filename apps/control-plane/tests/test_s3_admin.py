@@ -446,6 +446,20 @@ def test_signer_matches_botocore() -> None:
     expected = query_signer.signature(query_signer.string_to_sign(qrequest, canonical), qrequest)
     assert parts.query.endswith(f"X-Amz-Signature={expected}")
 
+    virtual = s3_client.presign_url(
+        method="GET",
+        endpoint="https://s3.sedamod.example",
+        bucket="sedamod",
+        key=key,
+        access_key=creds.access_key,
+        secret=creds.secret_key,
+        region="us-east-1",
+        expires_seconds=600,
+        path_style=False,
+        now=moment,
+    )
+    assert urlsplit(virtual).path == "/dir%20with%20space/%C3%BCn%C3%AF%2Bcode~.txt"
+
 
 def test_migration_on_fresh_sqlite(tmp_path: Path) -> None:
     database = Database(tmp_path)

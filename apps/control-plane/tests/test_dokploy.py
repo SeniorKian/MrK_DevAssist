@@ -218,6 +218,8 @@ class FakeDokploy:
             "domain.byApplicationId": lambda: APPLICATION_ONE["domains"],
             "domain.byComposeId": lambda: [{"host": "workers.example.com", "path": "/"}],
             "application.one": lambda: APPLICATION_ONE,
+            "compose.one": lambda: {"composeId": "cmp1", "name": "devassist-s3",
+                                    "composeStatus": "done", "domains": []},
             "postgres.one": lambda: POSTGRES_ONE,
             "deployment.readLogs": lambda: "step 1\nAuthorization: Bearer abc.def\nstep 3\n",
         }
@@ -557,6 +559,50 @@ def test_projects_detail_cache_and_actions(tmp_path: Path, fake: FakeDokploy) ->
                          "dokploy.service.start", "dokploy.service.stop"):
             assert expected in actions
         assert ("dokploy.service.stop", "failure") in records
+
+
+def test_s3_dashboard_discovers_and_redeploys_compose(
+    tmp_path: Path, fake: FakeDokploy
+) -> None:
+    fake.projects[0]["environments"][0]["compose"][0]["name"] = "devassist-s3"
+    app = create_app(Settings.for_test(tmp_path / "cp"))
+    with TestClient(app) as client:
+        headers = owner_headers(client)
+        assert configure(client, headers).status_code == 200
+
+        state = client.get("/api/v1/s3/dokploy", headers=headers)
+        assert state.status_code == 200, state.text
+        # A name match is only a suggestion: it is never redeployed before it is saved.
+        assert state.json()["target"] is None
+        suggestion = state.json()["suggestion"]
+        assert suggestion["compose_id"] == "cmp1" and suggestion["source"] == "name"
+        assert "x-api-key" not in state.text.lower() and API_KEY not in state.text
+
+        refused = client.post("/api/v1/s3/dokploy/redeploy", headers=headers, json={})
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"]["code"] == "s3_dokploy_target_required"
+        assert not fake.calls("compose.redeploy")
+
+        saved = client.put("/api/v1/s3/dokploy", headers=headers, json={"compose_id": "cmp1"})
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["target"]["source"] == "saved"
+        assert client.get("/api/v1/s3/dokploy", headers=headers).json()["target"][
+            "source"] == "saved"
+
+        deployed = client.post("/api/v1/s3/dokploy/redeploy", headers=headers, json={})
+        assert deployed.status_code == 200, deployed.text
+        assert deployed.json()["target"]["compose_id"] == "cmp1"
+        sent = fake.calls("compose.redeploy")[-1]
+        assert json.loads(sent.content) == {
+            "composeId": "cmp1",
+            "title": "Redeploy from DevAssist",
+        }
+        audit = client.get("/api/v1/audit-events?limit=200").json()["items"]
+        records = {(i["action"], i.get("result"), i.get("object_type"), i.get("object_id"))
+                   for i in audit}
+        assert ("dokploy.service.redeploy", "failure", "dokploy", "compose") in records
+        assert ("dokploy.service.redeploy", "success", "dokploy", "compose:cmp1") in records
+        assert ("s3.dokploy_target.update", "success", "dokploy", "compose:cmp1") in records
 
 
 def test_deployment_log_and_feature_detection(tmp_path: Path, fake: FakeDokploy) -> None:

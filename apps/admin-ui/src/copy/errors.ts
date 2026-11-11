@@ -256,6 +256,8 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   dokploy_rejected: { fa: "Dokploy این درخواست را قبول نکرد. وضعیت برنامه را در خود Dokploy ببینید.", en: "Dokploy refused this request. Check the app in Dokploy itself." },
   dokploy_not_found: { fa: "این مورد در Dokploy پیدا نشد. فهرست را تازه کنید.", en: "This wasn't found in Dokploy. Refresh the list.", action: "refreshList" },
   dokploy_service_not_found: { fa: "این برنامه در Dokploy پیدا نشد. شاید پاک شده باشد؛ فهرست را تازه کنید.", en: "This app wasn't found in Dokploy. It may have been removed; refresh the list.", action: "refreshList" },
+  bucket_domain_route_failed: { fa: "مسیر این دامنه ساخته یا برداشته نشد. چند لحظه بعد دوباره امتحان کنید؛ وضعیت آن در «دامنه‌های اختصاصی باکت‌ها» دیده می‌شود.", en: "The route of this domain couldn't be updated. Try again in a moment; its state is shown under Custom bucket domains." },
+  s3_dokploy_target_required: { fa: "اول سرویس Compose مربوط به فضای فایل را از فهرست انتخاب و ذخیره کنید.", en: "Choose and save the Compose service that runs S3 first." },
   dokploy_deployment_not_found: { fa: "این انتشار در Dokploy پیدا نشد. فهرست را تازه کنید.", en: "This deployment wasn't found in Dokploy. Refresh the list.", action: "refreshList" },
   dokploy_managed_by_environment: { fa: "اتصال Dokploy در فایل Compose تنظیم شده و از این‌جا عوض نمی‌شود.", en: "The Dokploy connection is set in the Compose file and can't be changed here." },
   invalid_service_type: { fa: "نوع برنامه در Dokploy شناخته نشد. فهرست را تازه کنید.", en: "Unknown Dokploy app type. Refresh the list.", action: "refreshList" },

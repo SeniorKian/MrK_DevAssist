@@ -90,6 +90,7 @@ export const AUDIT_ACTIONS: Record<string, Bi> = {
   "dokploy.deployment.log.view": { fa: "{actor} گزارش یک انتشار را در Dokploy دید", en: "{actor} viewed a deployment log" },
   "dokploy.service.deploy": { fa: "{actor} برنامه[ «{target}»] را منتشر کرد", en: "{actor} deployed[ “{target}”]" },
   "dokploy.service.redeploy": { fa: "{actor} برنامه[ «{target}»] را دوباره منتشر کرد", en: "{actor} redeployed[ “{target}”]" },
+  "s3.dokploy_target.update": { fa: "{actor} سرویس Dokploy مربوط به S3 را انتخاب کرد", en: "{actor} selected the Dokploy service for S3" },
   "dokploy.service.start": { fa: "{actor} برنامه[ «{target}»] را روشن کرد", en: "{actor} started[ “{target}”]" },
   "dokploy.service.stop": { fa: "{actor} برنامه[ «{target}»] را متوقف کرد", en: "{actor} stopped[ “{target}”]" },
 
@@ -170,6 +171,9 @@ export const AUDIT_ACTIONS: Record<string, Bi> = {
   "s3.object.upload": { fa: "{actor} فایل[ «{target}»] را آپلود کرد", en: "{actor} uploaded[ “{target}”]" },
   "s3.object.delete": { fa: "{actor} فایل[ «{target}»] را پاک کرد", en: "{actor} deleted[ “{target}”]" },
   "s3.object.move": { fa: "{actor} فایل[ «{target}»] را جابه‌جا کرد", en: "{actor} moved[ “{target}”]" },
+  "s3.bucket_domain.create": { fa: "{actor} دامنه[ «{target}»] را به یک پوشه اصلی وصل کرد", en: "{actor} attached the domain[ “{target}”] to a bucket" },
+  "s3.bucket_domain.retry": { fa: "{actor} اتصال دامنه[ «{target}»] را دوباره امتحان کرد", en: "{actor} retried routing the domain[ “{target}”]" },
+  "s3.bucket_domain.delete": { fa: "{actor} دامنه[ «{target}»] را از پوشه اصلی جدا کرد", en: "{actor} detached the domain[ “{target}”] from its bucket" },
   "s3.object.share": { fa: "{actor} برای فایل[ «{target}»] لینک اشتراک ساخت", en: "{actor} created a share link for[ “{target}”]" },
 
   // App backups
