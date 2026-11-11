@@ -215,9 +215,10 @@ services:
     pids_limit: 64
     stop_grace_period: 15s
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.Client(transport=httpx.HTTPTransport(uds='/run/mrk-firewall/firewall.sock'), timeout=3).get('http://mrk-firewall/v1/health').raise_for_status()"]
+      # Standard library only: importing httpx alone takes ~4 s at 0.25 CPU.
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('/run/mrk-firewall/firewall.sock'); n = bytes((13, 10)); s.sendall(b'GET /v1/health HTTP/1.0' + n + b'Host: mrk-firewall' + n + n); assert s.recv(32).split()[1] == b'200'"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 20s
 """
