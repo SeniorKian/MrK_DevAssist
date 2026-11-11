@@ -36,6 +36,8 @@ export const CONFIRM_WORDS = {
   deleteLogs: { word: { fa: "پاک کن", en: "DELETE LOGS" }, token: "DELETE LOGS" },
   /** DNS: replace every DNS setting with a backup file (docs/41 §4). */
   restoreDns: { word: { fa: "بازگردانی کن", en: "RESTORE" }, token: "RESTORE" },
+  /** Replace the panel itself with a newer release (it restarts). */
+  updatePanel: { word: { fa: "به‌روز کن", en: "UPDATE" }, token: "UPDATE" },
   /** Generic "I understand" confirmation for client-side-only checks. */
   confirm: { word: { fa: "تأیید", en: "CONFIRM" }, token: "CONFIRM" }
 } satisfies Record<string, ConfirmWord>;

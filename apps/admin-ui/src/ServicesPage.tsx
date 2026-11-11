@@ -13,6 +13,7 @@ import type { SvgIconComponent } from "@mui/icons-material";
 import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import NewReleasesRoundedIcon from "@mui/icons-material/NewReleasesRounded";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import LayersRoundedIcon from "@mui/icons-material/LayersRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
@@ -37,6 +38,7 @@ import {
 } from "./kit";
 import { findGroup, hashQuery, visibleTabs } from "./nav";
 import { AddServicePanel } from "./AddServicePanel";
+import { NewReleaseChip, VersionsPanel } from "./VersionsPanel";
 import { TabBody, useHashTab } from "./ServerPage";
 import { useVisibleInterval } from "./polling";
 import type { GroupPageProps } from "./ServerPage";
@@ -89,6 +91,11 @@ const COPY = {
   operateNeeded: { fa: "روشن و خاموش کردن", en: "Start and stop" },
   addService: { fa: "افزودن سرویس", en: "Add a service" },
   addTitle: { fa: "افزودن سرویس", en: "Add a service" },
+  versionsTitle: { fa: "نسخه‌ها و به‌روزرسانی", en: "Versions & updates" },
+  versionsSubtitle: {
+    fa: "پنل و سرویس‌ها کدام نسخه‌اند و چطور به نسخه تازه بروند؛ اول پنل، بعد سرویس‌ها.",
+    en: "Which version the panel and services run, and how to move them to a new one: the panel first, then the services."
+  },
   addSubtitle: {
     fa: "هر بخش DevAssist برنامه جدای خودش است؛ هر کدام را که لازم دارید با Dokploy، Coolify یا Docker Compose اضافه کنید.",
     en: "Each part of DevAssist is its own program; add the ones you need with Dokploy, Coolify or Docker Compose."
@@ -481,7 +488,7 @@ function ServicesList({ user, permissions: permissionsProp, tabs }: GroupPagePro
 
   return (
     <>
-      <PageHeader title={pick(language, COPY.title)} subtitle={pick(language, COPY.subtitle)} icon={AppsRoundedIcon} secondaryActions={refreshButton} tabs={tabs} />
+      <PageHeader title={pick(language, COPY.title)} subtitle={pick(language, COPY.subtitle)} icon={AppsRoundedIcon} secondaryActions={<>{hasPermission(permissions, "services:read") ? <NewReleaseChip /> : null}{refreshButton}</>} tabs={tabs} />
       <Stack spacing={2.5}>
         {nothingAdded ? (
           <Notice
@@ -547,6 +554,16 @@ export default function ServicesPage(props: GroupPageProps) {
         <PageHeader title={pick(language, COPY.addTitle)} subtitle={pick(language, COPY.addSubtitle)} icon={AddRoundedIcon} tabs={tabBar} />
         <TabBody>
           <AddServicePanel permissions={permissions} onChanged={resetServices} />
+        </TabBody>
+      </>
+    );
+  }
+  if (tab === "versions") {
+    return (
+      <>
+        <PageHeader title={pick(language, COPY.versionsTitle)} subtitle={pick(language, COPY.versionsSubtitle)} icon={NewReleasesRoundedIcon} tabs={tabBar} />
+        <TabBody>
+          <VersionsPanel permissions={permissions} />
         </TabBody>
       </>
     );

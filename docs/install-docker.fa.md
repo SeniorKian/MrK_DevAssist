@@ -61,6 +61,8 @@ image‌ها `ghcr.io/seniorkian/mrk-<name>` با همان نسخه پنل هس�
 
 ## ۳. ارتقا
 
+ساده‌ترین راه: «سرویس‌های من ← نسخه‌ها و به‌روزرسانی» در پنل ([سند 47](47-versions-and-updates.md)). دستی:
+
 <div dir="ltr">
 
 ```bash

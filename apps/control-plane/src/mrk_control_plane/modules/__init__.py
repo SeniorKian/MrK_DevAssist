@@ -31,6 +31,7 @@ def _load() -> None:
         "registry_service",  # Docker image registry (Zot), docs/46
         "install",  # add-service wizard (docs/44): reads agent/firewall/dns
         "install_auto",  # docs/44 phase 6: installs through the Dokploy/Coolify API
+        "releases",  # panel/service versions and updates: reads install + services
         "tenancy",  # «my space» (docs/43): after dns/s3, it reuses their services
         "home",  # last: it reads the services the modules above registered
     ):

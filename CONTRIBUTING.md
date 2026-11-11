@@ -170,6 +170,13 @@ Larger features follow the workflow used for every gate so far:
 
 Small fixes do not need a design doc.
 
+## Releasing
+
+`VERSION` is the single version. `python scripts/release.py X.Y.Z --push` writes it into every file,
+turns `[Unreleased]` in CHANGELOG.md into the release section, commits, tags `vX.Y.Z` and pushes;
+the tag publishes every image as `X.Y.Z`, `X.Y` and `latest` and creates the GitHub release.
+`python scripts/release.py --check` verifies the files agree (CI runs it). Details: docs/47.
+
 ## Commits and pull requests
 
 - Commit subjects follow the style already in the history (Conventional Commits):

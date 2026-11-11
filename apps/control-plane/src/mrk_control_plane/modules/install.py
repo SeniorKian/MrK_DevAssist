@@ -252,6 +252,8 @@ class InstallService:
             state[service_id] = {"created_at": int(time.time())}
         # Non-secret values the panel reads later (public addresses, ports).
         state[service_id]["env"] = values
+        # The image these files run; the versions page compares it with the panel's own.
+        state[service_id]["image"] = public_item(item)["image"]
         if isinstance(previous_entry.get("deployment"), dict):
             # Where the panel deployed it (Dokploy/Coolify): domains are routed there.
             state[service_id]["deployment"] = previous_entry["deployment"]

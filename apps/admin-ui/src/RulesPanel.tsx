@@ -28,6 +28,7 @@ const EVENT_PHRASES: Record<string, Bi> = {
   "agent.offline": { fa: "دستیار سرور قطع شود", en: "the server helper goes offline" },
   "agent.online": { fa: "دستیار سرور دوباره وصل شود", en: "the server helper comes back" },
   "update.available": { fa: "برای برنامه‌ای نسخه تازه بیاید", en: "an app has a new version" },
+  "release.available": { fa: "نسخه تازه‌ای از DevAssist بیاید", en: "a new DevAssist version is out" },
   "dokploy.deploy_failed": { fa: "انتشار برنامه‌ای در Dokploy انجام نشود", en: "a Dokploy deploy fails" },
   "dokploy.unreachable": { fa: "Dokploy جواب ندهد", en: "Dokploy stops answering" },
   "service.crashed": { fa: "یکی از سرویس‌ها (npm، PyPI یا S3) از کار بیفتد", en: "a service (npm, PyPI or S3) crashes" },

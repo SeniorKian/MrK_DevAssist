@@ -8,6 +8,12 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Versioned releases (docs/47): `VERSION` is the single version; `scripts/release.py X.Y.Z`
+  writes it everywhere (including the pinned panel image in compose.yaml), cuts the changelog
+  section and tags `vX.Y.Z`. The tag publishes every image as X.Y.Z / X.Y / latest and creates
+  a GitHub release; CI refuses a tag that does not match VERSION. The panel's "Versions &
+  updates" page finds new releases and updates the panel and its services (one click when they
+  were installed through Dokploy/Coolify; exact steps otherwise), keeping pairing keys.
 - Git service (Gitea) and Docker image registry (Zot), both added from the wizard (docs/46).
   Gitea keeps its own SQLite database; the panel creates its admin, keeps only an API token and
   manages repositories, mirrors of GitHub/GitLab, users and organizations. Zot is a private

@@ -43,6 +43,7 @@ export type PanelKey =
   | "HomePage"
   | "ServicesPage"
   | "AddServicePanel"
+  | "VersionsPanel"
   | "DnsPage"
   | "DnsSetup"
   | "DnsNames"
@@ -144,6 +145,15 @@ export const NAV_GROUPS: NavGroup[] = [
         anyOf: ["services:read"],
         panel: "AddServicePanel",
         keywords: ["install", "نصب", "wizard", "dokploy", "coolify", "compose", "agent", "دستیار", "فایروال", "firewall", "dns"]
+      },
+      {
+        // Release model: the panel and every service move to a new release together (panel first).
+        key: "versions",
+        label: { fa: "نسخه‌ها و به‌روزرسانی", en: "Versions & updates" },
+        hint: { fa: "نسخه پنل و سرویس‌ها، و به‌روز کردن آن‌ها به نسخه تازه.", en: "The panel's and services' versions, and moving them to a new release." },
+        anyOf: ["services:read"],
+        panel: "VersionsPanel",
+        keywords: ["version", "نسخه", "update", "upgrade", "به‌روزرسانی", "ارتقا", "release", "انتشار", "changelog"]
       }
     ]
   },

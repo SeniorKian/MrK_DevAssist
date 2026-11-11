@@ -54,6 +54,8 @@ their data folders with it).
 
 ## 3. Upgrade
 
+The easiest way: **My services → Versions & updates** in the panel (docs/47). By hand:
+
 ```bash
 git pull && docker compose pull && docker compose up -d
 ```

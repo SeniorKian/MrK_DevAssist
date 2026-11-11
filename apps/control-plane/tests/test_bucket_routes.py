@@ -178,6 +178,10 @@ def test_admin_and_workspace_bucket_domains_never_overlap(space: Space) -> None:
     for host in ("files.shared.example", "a.files.shared.example", "shared.example"):
         refused = alice.post("/s3/buckets/alice-files/domains", {"host": host})
         assert refused.status_code == 409 and code(refused) == "domain_unavailable", host
+    # Nor a DNS zone that would cover it.
+    for zone_name in ("shared.example", "files.shared.example"):
+        refused = alice.post("/dns/zones", {"name": zone_name, "template_id": None})
+        assert refused.status_code == 409 and code(refused) == "zone_unavailable", zone_name
     snapshot = json.loads(
         (space.env["cp"] / "modules" / "s3" / "config.json").read_text(encoding="utf-8")
     )

@@ -25,8 +25,8 @@ type DomainItem = {
 const T = {
   title: { fa: "دامنه اختصاصی این باکت", en: "Custom domain for this bucket" },
   hint: {
-    fa: "مثلاً s3.sedamod.ir؛ مسیر /file.jpg مستقیماً فایل file.jpg همین باکت است. خصوصی بودن باکت عوض نمی‌شود.",
-    en: "For example s3.sedamod.ir; /file.jpg maps directly to file.jpg in this bucket. The bucket stays private."
+    fa: "مثلاً files.example.com؛ مسیر /file.jpg مستقیماً فایل file.jpg همین باکت است. خصوصی بودن باکت عوض نمی‌شود.",
+    en: "For example files.example.com; /file.jpg maps directly to file.jpg in this bucket. The bucket stays private."
   },
   dns: {
     fa: "ابتدا رکورد A/AAAA دامنه را به همین سرور بدهید. پنل مسیر HTTPS را در Dokploy یا Traefik می‌سازد.",
@@ -145,7 +145,7 @@ export function S3AdminBucketDomains({ bucket, canAdmin }: { bucket: string; can
             fullWidth
             size="small"
             label={pick(language, T.label)}
-            placeholder="s3.sedamod.ir"
+            placeholder="files.example.com"
             value={host}
             onChange={(event) => setHost(event.target.value)}
             slotProps={{ htmlInput: { dir: "ltr", autoCapitalize: "none", spellCheck: false } }}

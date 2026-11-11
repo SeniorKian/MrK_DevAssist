@@ -35,6 +35,8 @@ jobs:
         with:
           inputs: ./apps/control-plane
       - run: python -m ruff check apps/control-plane scripts
+      - name: Every file carries the version in VERSION
+        run: python scripts/release.py --check
       - run: python -m pytest
       - run: python scripts/rehearse_migrations.py
       - run: python scripts/validate_release.py
@@ -259,5 +261,5 @@ jobs:
               aquasec/trivy:0.76.1 image --exit-code 1 --ignore-unfixed \
               --severity HIGH,CRITICAL --no-progress "mrk-$target:ci"
           done
-      - name: Whole stack end to end (panel, then npm, PyPI and S3 from the wizard)
-        run: python3 scripts/smoke_split_stack.py --tag ci --services npm,pypi,s3
+      - name: Whole stack end to end (panel, then npm, PyPI, S3, Git and registry from the wizard)
+        run: python3 scripts/smoke_split_stack.py --tag ci --services npm,pypi,s3,git,registry

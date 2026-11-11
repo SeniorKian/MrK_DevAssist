@@ -335,7 +335,7 @@ function text(language: Language, fa: string, en: string) {
   return language === "fa" ? fa || en : en || fa;
 }
 
-function serviceName(language: Language, id: string) {
+export function serviceName(language: Language, id: string) {
   const entry = NAMES[id];
   return entry ? pick(language, entry.name) : id;
 }
@@ -351,7 +351,7 @@ function downloadText(fileName: string, content: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function CodeBlock({ title, value, fileName }: { title: string; value: string; fileName: string }) {
+export function CodeBlock({ title, value, fileName }: { title: string; value: string; fileName: string }) {
   const { language } = useKit();
   return (
     <Box>
