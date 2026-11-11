@@ -7,6 +7,8 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
 ### Added
 - Unified firewall management (docs/45): the panel is the one place for port policy and dynamic
   defense. The firewall helper owns only its own nftables table (`inet mrk`), with an input chain
