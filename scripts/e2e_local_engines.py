@@ -321,6 +321,20 @@ def _devpi_command(name: str) -> str:
     raise RuntimeError(f"{name} is not installed")
 
 
+def _devpi_init_command(
+    executable: str, server_dir: Path, root_password: str
+) -> list[str]:
+    # Bind the generated password with ``=`` so a value beginning with ``-``
+    # cannot be parsed as another devpi-init option.
+    return [
+        executable,
+        "--serverdir",
+        str(server_dir),
+        "--no-root-pypi",
+        f"--root-passwd={root_password}",
+    ]
+
+
 def _exercise_devpi(run_dir: Path) -> dict[str, object]:
     devpi_init = _devpi_command("devpi-init")
     devpi_server = _devpi_command("devpi-server")
@@ -331,14 +345,7 @@ def _exercise_devpi(run_dir: Path) -> dict[str, object]:
     client_dir = run_dir / "devpi-client"
     root_password = secrets.token_urlsafe(24)
     _run(
-        [
-            devpi_init,
-            "--serverdir",
-            str(server_dir),
-            "--no-root-pypi",
-            "--root-passwd",
-            root_password,
-        ],
+        _devpi_init_command(devpi_init, server_dir, root_password),
         secrets_to_redact=(root_password,),
     )
     log_path = run_dir / "devpi.log"

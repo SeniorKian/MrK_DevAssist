@@ -65,7 +65,23 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 # ----------------------------------------------------------------------------- bases
 
-# Plain Debian runtime with the unprivileged user and current security updates.
+# The DNS engine is a static Go binary. Keep Python and its package metadata out
+# of this runtime so unused Python dependencies cannot introduce vulnerabilities.
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS dns-base
+ARG APT_MIRROR
+ARG DEBIAN_FRONTEND=noninteractive
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|http://deb.debian.org|${APT_MIRROR%/}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
+    && apt-get upgrade --yes \
+    && apt-get install --yes --no-install-recommends ca-certificates \
+    && groupadd --gid 10001 mrk \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mrk \
+    && rm -rf /var/lib/apt/lists/*
+COPY LICENSE /opt/mrk/LICENSE
+
+# Python runtime with the unprivileged user and current security updates.
 FROM python:3.13-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90 AS os-base
 ARG APT_MIRROR
 ENV PYTHONUNBUFFERED=1 \
@@ -200,7 +216,7 @@ ENTRYPOINT ["/bin/sh", "/opt/mrk/entrypoint.sh"]
 
 # ----------------------------------------------------------------------------- dns
 
-FROM os-base AS dns
+FROM dns-base AS dns
 ARG VCS_REF
 ARG BUILD_DATE
 LABEL org.opencontainers.image.title="MrK DevAssist DNS" \

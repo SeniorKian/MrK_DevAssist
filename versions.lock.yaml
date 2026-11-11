@@ -1,5 +1,5 @@
 schema_version: 1
-reviewed_at: 2026-11-08
+reviewed_at: 2026-11-11
 policy:
   allow_latest_tags: false
   allow_prereleases: false
@@ -19,6 +19,11 @@ components:
     image: "golang:1.27.3-trixie"
     digest: "sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80"
     note: "Build stage dns-builder only; the runtime image carries static mrk-dns/mrk-dnsbench binaries."
+  debian:
+    version: "13.7"
+    image: "debian:trixie-slim"
+    digest: "sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2"
+    note: "Minimal runtime for the static DNS binaries; ca-certificates is installed for encrypted upstream DNS."
   miekg_dns:
     version: "1.1.73"
     source: "https://github.com/miekg/dns"
