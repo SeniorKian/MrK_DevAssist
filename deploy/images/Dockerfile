@@ -46,7 +46,7 @@ RUN --mount=type=cache,target=/root/.npm if [ -n "$NPM_REGISTRY" ]; then npm con
 # Pre-publish size quota for «My space» scopes (no dependencies).
 COPY deploy/verdaccio/plugins ./plugins
 
-FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS dns-builder
+FROM golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 AS dns-builder
 ARG GOPROXY
 ENV CGO_ENABLED=0 \
     GOFLAGS=-trimpath \

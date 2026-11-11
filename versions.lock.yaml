@@ -15,9 +15,9 @@ components:
     image: "node:24.18.0-trixie-slim"
     digest: "sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573"
   golang:
-    version: "1.27.3"
-    image: "golang:1.27.3-trixie"
-    digest: "sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80"
+    version: "1.27.4"
+    image: "golang:1.27.4-trixie"
+    digest: "sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9"
     note: "Build stage dns-builder only; the runtime image carries static mrk-dns/mrk-dnsbench binaries."
   debian:
     version: "13.7"

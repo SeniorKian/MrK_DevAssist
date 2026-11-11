@@ -67,7 +67,8 @@ Use the same pinned toolchain as CI and the Dockerfile; no local Go is needed:
 ```bash
 docker run --rm -v "$PWD/apps/dns-engine:/src" -w /src \
   -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local \
-  golang:1.27.3-trixie sh -c 'go mod verify && test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./...'
+  golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 \
+  sh -c 'go mod verify && test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./...'
 ```
 
 ### The whole appliance
