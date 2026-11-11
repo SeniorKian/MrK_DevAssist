@@ -55,3 +55,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: deps
+    ignore:
+      # Python minor upgrades are a runtime change (CI, venvs and pinned wheels
+      # such as devpi/awscrt all target 3.13); do them by hand, not by bot.
+      # Digest updates of the 3.13 image still come through.
+      - dependency-name: python
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
