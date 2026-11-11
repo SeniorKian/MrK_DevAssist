@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -96,6 +97,21 @@ def test_reload_rewrites_the_npm_config_for_a_separate_verdaccio(tmp_path: Path)
     assert not target.exists()
     assert process_control.restart_verdaccio_if_managed() is True
     assert target.is_file()
+
+
+def test_repeated_npm_config_write_does_not_restart_verdaccio(tmp_path: Path) -> None:
+    settings = Settings.for_test(tmp_path / "cp")
+    target = remote_services.write_npm_config(settings.data_dir)
+    env_path = target.with_name(remote_services.ENV_FILE)
+    fixed = 1_700_000_000_123_456_789
+    os.utime(target, ns=(fixed, fixed))
+    os.utime(env_path, ns=(fixed, fixed))
+    config_mtime = target.stat().st_mtime_ns
+    env_mtime = env_path.stat().st_mtime_ns
+
+    assert remote_services.write_npm_config(settings.data_dir) == target
+    assert target.stat().st_mtime_ns == config_mtime
+    assert env_path.stat().st_mtime_ns == env_mtime
 
 
 def test_npm_pypi_targets_are_validated(tmp_path: Path) -> None:

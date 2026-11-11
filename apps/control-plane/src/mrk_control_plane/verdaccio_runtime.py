@@ -318,10 +318,18 @@ def build_runtime_config(
     )
     target = data_dir / "npm" / "config" / "generated.yaml"
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
-    temporary.write_text("\n".join(lines), encoding="utf-8")
-    temporary.chmod(0o600)
-    os.replace(temporary, target)
+    payload = "\n".join(lines).encode("utf-8")
+    try:
+        unchanged = target.read_bytes() == payload
+    except OSError:
+        unchanged = False
+    if unchanged:
+        target.chmod(0o600)
+    else:
+        temporary = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
+        temporary.write_bytes(payload)
+        temporary.chmod(0o600)
+        os.replace(temporary, target)
     return target, environment
 
 

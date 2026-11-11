@@ -122,17 +122,33 @@ def write_npm_config(data_dir: Path) -> Path:
     from .verdaccio_runtime import build_runtime_config
 
     base = dict(os.environ)
+    expected_target = data_dir / "npm" / "config" / "generated.yaml"
+    try:
+        previous_config = expected_target.read_bytes()
+    except OSError:
+        previous_config = None
     target, environment = build_runtime_config(data_dir, container=True)
+    config_changed = previous_config != target.read_bytes()
     extra = {key: value for key, value in environment.items() if base.get(key) != value}
     env_path = target.with_name(ENV_FILE)
-    temporary = env_path.with_name(f".{ENV_FILE}.{secrets.token_hex(4)}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(extra, handle, sort_keys=True)
-    os.replace(temporary, env_path)
-    # Written last: the runner restarts Verdaccio when the YAML changes, so the
-    # environment file must already be current by then.
-    os.utime(target)
+    env_payload = json.dumps(extra, sort_keys=True).encode("utf-8")
+    try:
+        env_changed = env_path.read_bytes() != env_payload
+    except OSError:
+        env_changed = True
+    if env_changed:
+        temporary = env_path.with_name(f".{ENV_FILE}.{secrets.token_hex(4)}.tmp")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(env_payload)
+        os.replace(temporary, env_path)
+    else:
+        env_path.chmod(0o600)
+    # The runner watches only the YAML mtime. Touch it when token-only changes
+    # alter the companion environment file, but leave it alone when both files
+    # are identical so repeated connection probes do not restart Verdaccio.
+    if env_changed and not config_changed:
+        os.utime(target)
     return target
 
 
