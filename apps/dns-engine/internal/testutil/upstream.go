@@ -2,9 +2,11 @@
 package testutil
 
 import (
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -26,13 +28,27 @@ type Upstream struct {
 // (Id/question are filled in); nil means "do not answer" (timeout).
 func StartUpstream(t testing.TB, handler func(q dns.Question) *dns.Msg) *Upstream {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	const attempts = 20
+	var pc net.PacketConn
+	var ln net.Listener
+	for range attempts {
+		var err error
+		pc, err = net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln, err = net.Listen("tcp", pc.LocalAddr().String())
+		if err == nil {
+			break
+		}
+		_ = pc.Close()
+		pc = nil
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatal(err)
+		}
 	}
-	ln, err := net.Listen("tcp", pc.LocalAddr().String())
-	if err != nil {
-		t.Fatal(err)
+	if pc == nil || ln == nil {
+		t.Fatalf("could not reserve one port for UDP and TCP after %d attempts", attempts)
 	}
 	u := &Upstream{Addr: pc.LocalAddr().String(), handler: handler}
 	h := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
