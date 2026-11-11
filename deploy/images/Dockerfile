@@ -177,6 +177,14 @@ LABEL org.opencontainers.image.title="MrK DevAssist npm" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.revision="$VCS_REF" \
       org.opencontainers.image.created="$BUILD_DATE"
+ARG APT_MIRROR
+# Node 26 links against libatomic, which the slim Python base does not ship.
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|http://deb.debian.org|${APT_MIRROR%/}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
+    && apt-get install --yes --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=verdaccio-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=verdaccio-builder /opt/verdaccio /opt/verdaccio
 # /data/npm is the volume shared with the panel (config, storage, auth). A fresh
