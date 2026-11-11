@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> None:
             )
         database.initialize()
         auth = AuthStore(data_dir, database=database)
-        password = f"migration-rehearsal-{secrets.token_urlsafe(18)}"
+        password = f"migration-rehearsal-7{secrets.token_urlsafe(18)}"
         auth.create_user("rehearsal-owner", password, "owner", None)
         config = _config(database)
         with database.engine.begin() as connection:
