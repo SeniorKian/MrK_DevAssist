@@ -26,6 +26,11 @@ updates:
       interval: weekly
     commit-message:
       prefix: deps
+    ignore:
+      # setuptools 82+ drops pkg_resources, which devpi (via pyramid) still imports;
+      # devpi does not even start with it. Lift once devpi no longer needs it.
+      - dependency-name: setuptools
+        versions: [">=82"]
 
   - package-ecosystem: npm
     directory: /apps/admin-ui

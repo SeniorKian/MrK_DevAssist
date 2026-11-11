@@ -348,7 +348,7 @@ def main() -> int:
         _require(marker in publish, f"release workflow is missing: {marker}", failures)
     # Actions must be pinned by full commit SHA, with the release tag as a comment.
     for action, version in (
-        ("actions/attest-build-provenance", "v3"),
+        ("actions/attest-build-provenance", "v4"),
         ("aquasecurity/trivy-action", "v0.36.0"),
     ):
         pinned = re.search(rf"{re.escape(action)}@[0-9a-f]{{40}} # {re.escape(version)}", publish)
