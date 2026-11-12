@@ -113,7 +113,12 @@ export default function InvitePage({ language, token, onLanguageChange, onAccept
         body: JSON.stringify({ password: values.password, password_confirmation: values.repeat })
       });
       if (response.ok) {
-        const payload = (await response.json()) as { user: AuthUser; csrf_token: string };
+        const payload = (await response.json()) as { user?: AuthUser; csrf_token?: string; status?: string };
+        // Two-step sign-in is on for this account: the password is saved; sign in with it and the code.
+        if (payload.status === "mfa_required" || !payload.user || !payload.csrf_token) {
+          onGoToSignIn();
+          return;
+        }
         onAccepted(payload.user, payload.csrf_token);
         return;
       }

@@ -146,7 +146,8 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
     admin_api = EngineAdmin(store.admin_token_path)
 
     def fail(exc: S3Error | EngineError) -> JSONResponse:
-        return ctx.error_payload(exc.code, exc.message, exc.status_code)
+        extra = exc.payload_extra() if isinstance(exc, S3Error) else {}
+        return ctx.error_payload(exc.code, exc.message, exc.status_code, **extra)  # type: ignore[call-arg]
 
     async def audit(
         principal: Principal,
@@ -788,7 +789,13 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
     async def create_key(identity_id: str, request: Request) -> dict[str, Any] | JSONResponse:
         principal = writer_sync(request, "s3:admin")
         try:
-            item = await asyncio.to_thread(store.create_key, identity_id)
+            body = await _body(request)
+            if not isinstance(body, dict) or set(body) - {"secret_access_key"}:
+                raise S3Error("invalid_request", 422,
+                              'body must be {} or {"secret_access_key": "..."}')
+            item = await asyncio.to_thread(
+                store.create_key, identity_id, body.get("secret_access_key")
+            )
         except S3Error as exc:
             await audit(principal, "s3.key.create", "s3_identity", identity_id, "failure")
             return fail(exc)
@@ -808,6 +815,26 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
             await audit(principal, "s3.key.update", "s3_access_key", akid, "failure")
             return fail(exc)
         await audit(principal, "s3.key.update", "s3_access_key", akid)
+        return item
+
+    @router.post("/identities/{identity_id}/keys/{akid}/secret", response_model=None)
+    async def reset_key_secret(
+        identity_id: str, akid: str, request: Request
+    ) -> dict[str, Any] | JSONResponse:
+        principal = writer_sync(request, "s3:admin")
+        try:
+            body = await _body(request)
+            if not isinstance(body, dict) or set(body) - {"secret_access_key"}:
+                raise S3Error("invalid_request", 422,
+                              'body must be {} or {"secret_access_key": "..."}')
+            item = await asyncio.to_thread(
+                store.set_key_secret, identity_id, akid, body.get("secret_access_key")
+            )
+        except S3Error as exc:
+            await audit(principal, "s3.key.secret", "s3_access_key", akid, "failure")
+            return fail(exc)
+        # The secret is in this response only; the audit names the key, never the value.
+        await audit(principal, "s3.key.secret", "s3_access_key", akid)
         return item
 
     @router.delete("/identities/{identity_id}/keys/{akid}", response_model=None)
@@ -868,7 +895,8 @@ def add_file_routes(
     """
 
     def fail(exc: S3Error | EngineError) -> JSONResponse:
-        return ctx.error_payload(exc.code, exc.message, exc.status_code)
+        extra = exc.payload_extra() if isinstance(exc, S3Error) else {}
+        return ctx.error_payload(exc.code, exc.message, exc.status_code, **extra)  # type: ignore[call-arg]
 
     async def engine() -> tuple[EngineS3, dict[str, Any]]:
         def load() -> tuple[tuple[str, str], dict[str, Any]]:

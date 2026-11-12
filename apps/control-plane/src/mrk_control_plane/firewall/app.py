@@ -41,7 +41,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from ..agent.signing import RequestVerifier, SignatureError
-from . import FIREWALL_VERSION, importers, netinfo
+from . import FIREWALL_VERSION, importers, netinfo, sshdetect
 from .nft import (
     DEFAULT_NFT,
     DesiredState,
@@ -87,6 +87,8 @@ class FirewallConfig:
     # Read-only host config mounts (ufw/, ssh/) used by /v1/import and the SSH check.
     host_etc: Path = field(default_factory=lambda: Path(DEFAULT_HOST_ETC))
     clock: Callable[[], float] = time.time
+    # SSH banner probe of the host's listeners (tests inject a fake; None = real sockets).
+    banner_reader: sshdetect.BannerReader | None = None
 
     @classmethod
     def from_env(cls, key: bytes, state_dir: Path) -> FirewallConfig:
@@ -189,6 +191,24 @@ class HelperState:
         self.lkg: PortPolicy | None = None
         self.pending: dict[str, Any] | None = None  # {token, key, deadline, started_at}
         self.last_rollback: dict[str, Any] | None = None
+        # When the loaded ruleset was rendered: temporary port rules expiring after this
+        # moment need a re-render (see expire_rules).
+        self.rendered_at: float = 0.0
+
+    def expire_rules(self, now: float | None = None) -> bool:
+        """Re-load our table once a temporary port rule has expired. The policy itself
+        (and its risk key) is unchanged, so this never needs a rollback timer."""
+        current = self.config.clock() if now is None else now
+        ports = self.desired.ports
+        if ports is None or not ports.enabled:
+            return False
+        due = ports.next_expiry(self.rendered_at)
+        if due is None or current < due:
+            return False
+        self.manager.apply(self.effective(self.desired), now=current)
+        self.rendered_at = current
+        LOGGER.info("temporary port rules expired; ruleset reloaded")
+        return True
 
     @property
     def state_path(self) -> Path:
@@ -286,6 +306,7 @@ class HelperState:
         else:
             plan = "risky"
         result = self.manager.apply(self.effective(state), now=current)
+        self.rendered_at = current
         self.desired = state
         self.applied_at = time.time()
         self.last_error = None
@@ -332,6 +353,7 @@ class HelperState:
                               blocks=self.desired.blocks, ports=ports)
         try:
             self.manager.apply(self.effective(target), now=current)
+            self.rendered_at = current
             outcome = "restored"
         except NftError as exc:
             LOGGER.error("restoring the last-known-good ruleset failed; removing our table",
@@ -365,9 +387,26 @@ def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None,
     iptables = iptables or importers.IptablesRunner()
     helper = HelperState(config, runner or NftRunner(config.nft_binary, config.state_dir))
 
+    def expiry_due() -> bool:
+        ports = helper.desired.ports
+        due = None if ports is None else ports.next_expiry(helper.rendered_at)
+        return due is not None and config.clock() >= due
+
     async def rollback_loop() -> None:
         while True:
             await asyncio.sleep(1.0)
+            if expiry_due():
+                try:
+                    async with helper.lock:
+                        await asyncio.to_thread(helper.expire_rules)
+                except NftError as exc:  # pragma: no cover - retried a little later
+                    helper.last_error = exc.message
+                    LOGGER.error("reloading after a rule expiry failed",
+                                 extra={"code": exc.code})
+                    await asyncio.sleep(10.0)
+                except Exception:  # pragma: no cover - keep the loop alive
+                    LOGGER.exception("reloading after a rule expiry failed")
+                    await asyncio.sleep(10.0)
             pending = helper.pending
             if pending is None or config.clock() < float(pending.get("deadline", 0)):
                 continue
@@ -436,16 +475,22 @@ def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None,
         return {"status": "ok"}
 
     host_facts: dict[str, Any] = {"at": None, "value": None}
+    listener_probe = sshdetect.ListenerProbe(config.banner_reader)
+
+    def read_ssh() -> dict[str, Any]:
+        listener = listener_probe.detect(netinfo.tcp_listeners(config.proc_net))
+        return sshdetect.ssh_facts(config.host_etc, listener)
 
     def read_host_facts() -> dict[str, Any]:
         # Addresses, the sshd port and listening sockets change rarely; at 0.25 CPU
-        # parsing /proc/net on every probe is what made /v1/info slow.
+        # parsing /proc/net on every probe is what made /v1/info slow. The SSH banner
+        # probe has its own, longer cache (it re-probes only when listeners change).
         now = time.monotonic()
         at = host_facts["at"]
         if at is None or now - at >= _HOST_FACTS_CACHE_SECONDS:
             host_facts["value"] = {
                 "local_addresses": netinfo.local_addresses(config.proc_net),
-                "ssh": importers.read_sshd_ports(config.host_etc),
+                "ssh": read_ssh(),
                 "listening": netinfo.listening_ports(config.proc_net),
             }
             host_facts["at"] = now
@@ -552,7 +597,7 @@ def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None,
             return {
                 "ufw": importers.read_ufw(config.host_etc),
                 "legacy": importers.read_legacy_chain(iptables),
-                "ssh": importers.read_sshd_ports(config.host_etc),
+                "ssh": read_ssh(),
                 "listening": netinfo.listening_ports(config.proc_net),
             }
 

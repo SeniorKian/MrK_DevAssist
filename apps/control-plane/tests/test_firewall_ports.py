@@ -389,7 +389,8 @@ def test_helper_rollback_timer_confirm_restart_and_recover(tmp_path: Path) -> No
         info = signed(client, "GET", "/v1/info").json()
         assert info["ports"]["pending"] is None and info["ports"]["key"] == "off"
         assert info["ports"]["last_rollback"]["reason"] == "timeout"
-        assert info["ssh"] == {"detected": False, "ports": [22]}
+        assert info["ssh"]["detected"] is False and info["ssh"]["ports"] == [22]
+        assert info["ssh"]["source"] == "assumed"
         # Confirming in time makes it the LKG.
         armed = signed(client, "POST", "/v1/apply", {**state, "rollback_seconds": 60}).json()
         token = armed["ports"]["pending"]["token"]

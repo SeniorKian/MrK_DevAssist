@@ -11,6 +11,11 @@ Flow per service:
 3. operator deploys it (Dokploy, Coolify or ``docker compose``);
 4. ``POST /api/v1/install/{id}/connect``     pair with the stored key and probe.
 
+Storage: ``GET /api/v1/install/{id}/storage`` lists where the service keeps its data
+(a Docker volume or a folder on the server, see install_storage); the bundle and the
+automatic install take the admin's ``storage`` choices, and
+``POST /api/v1/install/{id}/storage/check`` checks the folders through the Host Agent.
+
 Pairing keys are generated here, kept only in the encrypted SecretStore and
 shown once in the generated ``.env``. A new bundle replaces the pending key.
 """
@@ -19,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 import time
@@ -32,18 +38,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from .. import remote_services
 from ..agent.signing import encode_key, generate_key
 from ..module_context import ModuleContext
+from . import install_storage
 from .install_catalog import (
     INSTALL_INDEX,
     INSTALLABLE,
     InstallDef,
     compose_for,
     default_url,
+    panel_is_native,
     public_item,
     render_env,
     resolve_env,
 )
 
 STATE_FILE = "install.json"
+LOGGER = logging.getLogger(__name__)
 # Extra permission per service on top of services:operate (same as its own pair route).
 WRITE_PERMISSION = {
     "agent": "agent:write", "firewall": "firewall:write", "dns": "dns:write", "s3": "s3:admin",
@@ -61,10 +70,22 @@ class InstallError(Exception):
         self.extra = extra
 
 
+class StorageChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str = Field(pattern=r"^(volume|path)$")
+    value: str = Field(default="", max_length=400)
+
+
 class BundleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     env: dict[str, str] = Field(default_factory=dict, max_length=32)
     method: str = Field(default="compose", pattern=r"^(dokploy|coolify|compose)$")
+    storage: dict[str, StorageChoice] = Field(default_factory=dict, max_length=8)
+
+
+class StorageCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    storage: dict[str, StorageChoice] = Field(default_factory=dict, max_length=8)
 
 
 class ConnectRequest(BaseModel):
@@ -220,7 +241,145 @@ class InstallService:
                                "This service is not available as its own install yet")
         return item
 
-    def bundle(self, service_id: str, overrides: dict[str, str]) -> dict[str, Any]:
+    # ------------------------------------------------------------------ storage
+    def _agent(self) -> Any | None:
+        from . import services as services_module
+
+        service = services_module.ACTIVE_SERVICE
+        if service is None or getattr(service, "ctx", None) is not self.ctx:
+            return None
+        try:
+            return service.routing.agent()
+        except Exception:  # noqa: BLE001 - the agent is optional
+            return None
+
+    async def panel_mounts(self) -> tuple[list[dict[str, Any]] | None, str]:
+        """The panel container's mounts and where they came from (agent|dokploy|none)."""
+        from . import services as services_module
+
+        service = services_module.ACTIVE_SERVICE
+        detected: dict[str, Any] = {}
+        if service is not None and getattr(service, "ctx", None) is self.ctx:
+            try:
+                detected = await service.routing.detect_quick() or {}
+            except Exception:  # noqa: BLE001 - detection is best effort
+                detected = {}
+        agent = self._agent()
+        name = detected.get("container_name")
+        if agent is not None and isinstance(name, str) and name:
+            try:
+                payload = await agent.call(f"/v1/docker/containers/{name}/mounts")
+                items = payload.get("items") if isinstance(payload, dict) else None
+                if isinstance(items, list):
+                    return [item for item in items if isinstance(item, dict)], "agent"
+            except Exception:  # noqa: BLE001 - older agent, or not reachable
+                LOGGER.info("panel mounts not available from the agent", exc_info=True)
+        compose_id = detected.get("dokploy_service_id")
+        if detected.get("dokploy_service_type") == "compose" and isinstance(compose_id, str):
+            from . import dokploy as dokploy_module
+            from .dokploy_locate import compose_detail
+
+            dokploy = dokploy_module.ACTIVE_SERVICE
+            if dokploy is not None:
+                try:
+                    one = await compose_detail(dokploy, compose_id)
+                except Exception:  # noqa: BLE001
+                    one = None
+                text = one.get("composeFile") if one else None
+                del one
+                if isinstance(text, str):
+                    return install_storage.parse_compose_mounts(text), "dokploy"
+        return None, "none"
+
+    async def storage_view(self, service_id: str) -> dict[str, Any]:
+        item = self._ready(service_id)
+        recorded = (self.pending(service_id) or {}).get("storage") or {}
+        mounts, source = (None, "none")
+        if any(slot.panel_path for slot in install_storage.slots_for(item.id)):
+            mounts, source = await self.panel_mounts()
+        slots = []
+        for slot in install_storage.slots_for(item.id):
+            entry: dict[str, Any] = {
+                "key": slot.key, "target": slot.target, "volume": slot.volume,
+                "label_fa": slot.label_fa, "label_en": slot.label_en, "owner": slot.owner,
+                "shared": slot.panel_path is not None, "panel_path": slot.panel_path,
+                # Which earlier service's mount this one must match (the panel today).
+                "shared_with": ({"service": install_storage.SHARED_WITH,
+                                 "container": install_storage.SHARED_SERVICE_NAME,
+                                 "path": slot.panel_path}
+                                if slot.panel_path is not None else None),
+                "suggested_path": install_storage.suggested_path(item.id, slot),
+                "choice": recorded.get(slot.key) or {"kind": "volume", "value": slot.volume},
+            }
+            if slot.panel_path is not None:
+                if panel_is_native():
+                    entry["panel"] = {"kind": "native", "value": None}
+                elif mounts is None:
+                    entry["panel"] = {"kind": "unknown", "value": None}
+                else:
+                    entry["panel"] = install_storage.shared_source(mounts, slot.panel_path)
+                found = entry["panel"]
+                if found.get("kind") in {"path", "volume"}:
+                    entry["choice"] = {"kind": found["kind"], "value": found["value"]}
+            slots.append(entry)
+        return {"id": item.id, "slots": slots, "panel_mounts_source": source,
+                "checks_available": self._agent() is not None}
+
+    async def resolve_storage(self, service_id: str,
+                              choices: dict[str, Any]) -> dict[str, dict[str, str]]:
+        """The admin's choices for own slots plus what shared slots must be (the panel's)."""
+        view = await self.storage_view(service_id)
+        resolved: dict[str, dict[str, str]] = {}
+        for slot in view["slots"]:
+            if slot["shared"]:
+                resolved[slot["key"]] = dict(slot["choice"])
+                continue
+            raw = choices.get(slot["key"])
+            choice = raw.model_dump() if hasattr(raw, "model_dump") else raw
+            if not choice:
+                continue
+            kind, value = choice.get("kind"), str(choice.get("value") or "").strip()
+            if kind == "path":
+                if not install_storage.valid_path(value):
+                    raise InstallError(
+                        "validation_error", 422, "Give an absolute folder such as /opt/data",
+                        fields=[{"field": f"storage.{slot['key']}", "reason_code": "invalid"}])
+                resolved[slot["key"]] = {"kind": "path", "value": value}
+            else:
+                resolved[slot["key"]] = {"kind": "volume", "value": slot["volume"]}
+        return resolved
+
+    async def check_storage(self, service_id: str, choices: dict[str, Any]) -> dict[str, Any]:
+        resolved = await self.resolve_storage(service_id, choices)
+        slots = {slot.key: slot for slot in install_storage.slots_for(service_id)}
+        paths = [choice["value"] for choice in resolved.values() if choice["kind"] == "path"]
+        facts: dict[str, dict[str, Any]] = {}
+        agent = self._agent()
+        if paths and agent is not None:
+            from urllib.parse import urlencode
+
+            try:
+                query = urlencode([("path", path) for path in paths])
+                payload = await agent.call(f"/v1/host/paths?{query}")
+                for fact in payload.get("items", []) if isinstance(payload, dict) else []:
+                    if isinstance(fact, dict) and isinstance(fact.get("path"), str):
+                        facts[fact["path"]] = fact
+            except Exception:  # noqa: BLE001 - older agent: the folders stay unchecked
+                facts = {}
+        results = []
+        for key, choice in resolved.items():
+            slot = slots[key]
+            if choice["kind"] != "path":
+                results.append({"key": key, "kind": "volume", "status": "ok", "code": None})
+                continue
+            verdict = install_storage.evaluate(slot, choice["value"], facts.get(choice["value"]))
+            results.append({"key": key, "kind": "path", "path": choice["value"], **verdict})
+        blocking = [item for item in results if item["status"] == "error"]
+        return {"id": service_id, "items": results, "ok": not blocking,
+                "checked": bool(facts) or not paths}
+
+    def bundle(self, service_id: str, overrides: dict[str, str],
+               storage: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         item = self._ready(service_id)
         if self.env_managed(service_id):
             raise InstallError("managed_by_environment", 409,
@@ -254,6 +413,11 @@ class InstallService:
         state[service_id]["env"] = values
         # The image these files run; the versions page compares it with the panel's own.
         state[service_id]["image"] = public_item(item)["image"]
+        if storage is None and isinstance(previous_entry.get("storage"), dict):
+            storage = previous_entry["storage"]
+        if storage:
+            # Kept so updates write the same folders again (releases.py).
+            state[service_id]["storage"] = storage
         if isinstance(previous_entry.get("deployment"), dict):
             # Where the panel deployed it (Dokploy/Coolify): domains are routed there.
             state[service_id]["deployment"] = previous_entry["deployment"]
@@ -270,8 +434,10 @@ class InstallService:
         return {
             "id": item.id,
             "image": public_item(item)["image"],
-            "compose": compose_for(item, self.ctx.data_dir),
+            "compose": install_storage.apply(compose_for(item, self.ctx.data_dir),
+                                             item.id, storage or {}),
             "env": render_env(item, values, key_text),
+            "storage": storage or {},
             "file_names": {"compose": "compose.yaml", "env": ".env"},
             "pairing": key_text is not None,
         }
@@ -395,11 +561,29 @@ def register(ctx: ModuleContext) -> None:
         ctx.require_principal(request, "services:read")
         return await service.catalog()
 
+    @router.get("/{service_id}/storage")
+    async def install_storage_view(service_id: str, request: Request):
+        ctx.require_principal(request, "services:read")
+        try:
+            return await service.storage_view(service_id)
+        except InstallError as exc:
+            return failure(exc)
+
+    @router.post("/{service_id}/storage/check")
+    async def install_storage_check(service_id: str, request: Request,
+                                    body: StorageCheckRequest):
+        operator(request, service_id)
+        try:
+            return await service.check_storage(service_id, body.storage)
+        except InstallError as exc:
+            return failure(exc)
+
     @router.post("/{service_id}/bundle")
     async def install_bundle(service_id: str, request: Request, body: BundleRequest):
         principal = operator(request, service_id)
         try:
-            result = await asyncio.to_thread(service.bundle, service_id, body.env)
+            storage = await service.resolve_storage(service_id, body.storage)
+            result = await asyncio.to_thread(service.bundle, service_id, body.env, storage)
         except InstallError as exc:
             return failure(exc)
         await asyncio.to_thread(

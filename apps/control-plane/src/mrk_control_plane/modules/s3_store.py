@@ -22,6 +22,8 @@ from urllib.parse import urlsplit
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from ..auth import FieldError
+from ..credential_policy import check_secret_key
 from ..database import Database
 from ..models import (
     ResourceOwner,
@@ -71,11 +73,19 @@ _AKID = re.compile(r"^MRK[A-Z0-9]{17}$")
 
 
 class S3Error(Exception):
-    def __init__(self, code: str, status_code: int, message: str) -> None:
+    def __init__(
+        self, code: str, status_code: int, message: str,
+        fields: list[dict[str, object]] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.message = message
+        self.fields = fields or []
+
+    def payload_extra(self) -> dict[str, Any]:
+        """Extra keyword arguments for ``error_payload`` (only when fields are known)."""
+        return {"fields": self.fields} if self.fields else {}
 
 
 def _now() -> int:
@@ -88,6 +98,16 @@ def generate_access_key_id() -> str:
 
 def generate_secret_key() -> str:
     return "".join(secrets.choice(_SECRET_ALPHABET) for _ in range(40))
+
+
+def chosen_secret_key(value: object) -> str:
+    """The operator's own secret key (checked), or a generated one when omitted."""
+    if value is None or value == "":
+        return generate_secret_key()
+    try:
+        return check_secret_key(value)
+    except FieldError as exc:
+        raise S3Error(exc.code, 422, exc.message, fields=exc.fields) from None
 
 
 def links_root() -> Path:
@@ -889,8 +909,9 @@ class S3Store:
 
     # ------------------------------------------------------------ keys
 
-    def create_key(self, identity_id: str) -> dict[str, Any]:
-        secret = generate_secret_key()
+    def create_key(self, identity_id: str, secret_key: object = None) -> dict[str, Any]:
+        """A new access key; ``secret_key`` is the operator's own (checked) or generated."""
+        secret = chosen_secret_key(secret_key)
         with self.db.session() as db, db.begin():
             row = self._identity(db, identity_id)
             if sum(1 for key in row.keys if key.enabled) >= MAX_ACTIVE_KEYS:
@@ -963,6 +984,28 @@ class S3Store:
             row.enabled = payload["enabled"]
             item = _key_item(row)
         self.write_snapshot()
+        return item
+
+    def set_key_secret(
+        self, identity_id: str, akid: str, secret_key: object = None
+    ) -> dict[str, Any]:
+        """Replace a key's secret (the operator's own or generated); the key id stays.
+
+        The secret moves to a new SecretStore entry so the snapshot changes and the
+        engine drops its cached copy of the old secret at once.
+        """
+        secret = chosen_secret_key(secret_key)
+        with self.db.session() as db, db.begin():
+            row = self._key(db, identity_id, akid)
+            old_reference = row.secret_ref
+            reference, _updated = self.secrets.replace(
+                None, {"access_key_id": akid, "secret_access_key": secret}
+            )
+            row.secret_ref = reference
+            item = {**_key_item(row), "identity_id": identity_id,
+                    "secret_access_key": secret}
+        self.write_snapshot()
+        self.secrets.delete(old_reference)
         return item
 
     def delete_key(self, identity_id: str, akid: str) -> None:

@@ -571,6 +571,14 @@ class ReleasesService:
 
             await asyncio.to_thread(write)
 
+    def _compose(self, item: InstallDef) -> str:
+        """The current template with the folders chosen at install time (never lost)."""
+        from .install_storage import apply as apply_storage
+
+        entry = (self.install.pending(item.id) or {})
+        storage = entry.get("storage") if isinstance(entry.get("storage"), dict) else {}
+        return apply_storage(compose_for(item, self.ctx.data_dir), item.id, storage)
+
     def _ready_item(self, service_id: str) -> InstallDef:
         item = INSTALL_INDEX.get(service_id)
         if item is None or item.availability != "ready":
@@ -584,7 +592,7 @@ class ReleasesService:
         return {
             "id": item.id,
             "image": image,
-            "compose": compose_for(item, self.ctx.data_dir),
+            "compose": self._compose(item),
             "env_change": env_change,
             "file_names": {"compose": "compose.yaml"},
             "steps": manual_steps(env_change is not None),
@@ -655,7 +663,7 @@ class ReleasesService:
     async def _run(self, job: Job, item: InstallDef, deployment: dict[str, Any]) -> None:
         image = str(public_item(item)["image"])
         try:
-            compose = compose_for(item, self.ctx.data_dir)
+            compose = self._compose(item)
             await asyncio.to_thread(self._side_files, item.id)
             if job.target == "dokploy":
                 await self._upgrade_dokploy(job, item, deployment, compose, image)

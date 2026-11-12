@@ -31,6 +31,8 @@ import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..auth import FieldError
+from ..credential_policy import check_password
 from ..module_context import ModuleContext
 
 STATE_FILE = "registry.json"
@@ -45,6 +47,7 @@ _REPO = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+
 MAX_UPSTREAMS = 12
 MAX_URLS = 6
 MAX_USERS = 200
+BCRYPT_MAX_BYTES = 72  # bcrypt reads only the first 72 bytes of a password
 
 # Docker Hub is last: its destination is the registry root, which is what
 # Docker's "registry-mirrors" setting expects, and every other mirror has a
@@ -90,6 +93,10 @@ def _atomic_write(path: Path, text: str, mode: int) -> None:
     os.replace(temporary, path)
 
 
+MAX_PUBLIC_REPOSITORIES = 16
+_PUBLIC_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*(/\*\*)?$")
+
+
 def validate_settings(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RegistryError("validation_error", 422, "settings must be an object")
@@ -97,6 +104,20 @@ def validate_settings(payload: Any) -> dict[str, Any]:
     if not isinstance(anonymous, bool):
         raise RegistryError("validation_error", 422, "anonymous_pull must be true or false",
                             fields=[{"field": "anonymous_pull", "reason_code": "invalid"}])
+    public = payload.get("public_repositories", [])
+    if not isinstance(public, list) or len(public) > MAX_PUBLIC_REPOSITORIES:
+        raise RegistryError("validation_error", 422, "public_repositories must be a short list",
+                            fields=[{"field": "public_repositories", "reason_code": "invalid"}])
+    public_clean: list[str] = []
+    for index, item in enumerate(public):
+        pattern = str(item).strip().lower()
+        if not _PUBLIC_PATTERN.match(pattern) or pattern in {"**", "*"}:
+            # "**" is anonymous_pull (everything); a pattern names part of the registry.
+            raise RegistryError(
+                "validation_error", 422, "use a repository or a prefix such as team/**",
+                fields=[{"field": f"public_repositories.{index}", "reason_code": "invalid"}])
+        if pattern not in public_clean:
+            public_clean.append(pattern)
     raw = payload.get("upstreams", [])
     if not isinstance(raw, list) or len(raw) > MAX_UPSTREAMS:
         raise RegistryError("validation_error", 422, "upstreams must be a short list",
@@ -139,7 +160,8 @@ def validate_settings(payload: Any) -> dict[str, Any]:
                           "urls": clean_urls, "enabled": item.get("enabled", True) is True})
     # The root mirror goes last so the specific prefixes are matched first.
     upstreams.sort(key=lambda entry: entry["destination"] == "/")
-    return {"anonymous_pull": anonymous, "upstreams": upstreams}
+    return {"anonymous_pull": anonymous, "public_repositories": public_clean,
+            "upstreams": upstreams}
 
 
 def render_config(settings: dict[str, Any], users: list[dict[str, Any]]) -> dict[str, Any]:
@@ -154,6 +176,12 @@ def render_config(settings: dict[str, Any], users: list[dict[str, Any]]) -> dict
     repository: dict[str, Any] = {"policies": policies, "defaultPolicy": []}
     if settings.get("anonymous_pull"):
         repository["anonymousPolicy"] = ["read"]
+    repositories: dict[str, Any] = {"**": repository}
+    for pattern in settings.get("public_repositories") or []:
+        # Anonymous pull of these only (e.g. the project's own images), never the mirrors.
+        # The users keep the same rights there, whichever matching pattern Zot applies.
+        repositories[pattern] = {"policies": policies, "defaultPolicy": [],
+                                 "anonymousPolicy": ["read"]}
     registries = [
         {
             "urls": upstream["urls"],
@@ -185,7 +213,7 @@ def render_config(settings: dict[str, Any], users: list[dict[str, Any]]) -> dict
                 "failDelay": 1,
             },
             "accessControl": {
-                "repositories": {"**": repository},
+                "repositories": repositories,
                 "adminPolicy": {
                     "users": [PANEL_USER],
                     "actions": ["read", "create", "update", "delete"],
@@ -218,7 +246,7 @@ class RegistryService:
             payload = {}
         if not isinstance(payload, dict):
             payload = {}
-        payload.setdefault("settings", {"anonymous_pull": False,
+        payload.setdefault("settings", {"anonymous_pull": False, "public_repositories": [],
                                         "upstreams": [dict(item) for item in DEFAULT_UPSTREAMS]})
         payload.setdefault("users", [])
         return payload
@@ -282,7 +310,17 @@ class RegistryService:
         return [{"name": user["name"], "access": user["access"],
                  "created_at": user.get("created_at")} for user in self._read()["users"]]
 
-    def create_user(self, name: str, access: str) -> dict[str, Any]:
+    @staticmethod
+    def _password(password: str | None) -> str:
+        """The operator's own password (checked) or a generated one."""
+        if password is None or password == "":
+            return secrets.token_urlsafe(24)
+        try:
+            return check_password(password, max_bytes=BCRYPT_MAX_BYTES)
+        except FieldError as exc:
+            raise RegistryError(exc.code, 422, exc.message, fields=exc.fields) from None
+
+    def create_user(self, name: str, access: str, password: str | None = None) -> dict[str, Any]:
         name = name.strip().lower()
         if not _USER.match(name) or name == PANEL_USER:
             raise RegistryError("validation_error", 422, "invalid user name",
@@ -290,7 +328,7 @@ class RegistryService:
         if access not in {"pull", "push"}:
             raise RegistryError("validation_error", 422, "access must be pull or push",
                                 fields=[{"field": "access", "reason_code": "invalid"}])
-        password = secrets.token_urlsafe(24)
+        password = self._password(password)
         with self.lock:
             state = self._read()
             if any(user["name"] == name for user in state["users"]):
@@ -303,6 +341,20 @@ class RegistryService:
             self._write(state)
         self.write_files()
         return {"name": name, "access": access, "password": password}
+
+    def set_password(self, name: str, password: str | None = None) -> dict[str, Any]:
+        """Replace a user's password (the operator's own or a generated one)."""
+        password = self._password(password)
+        with self.lock:
+            state = self._read()
+            user = next((item for item in state["users"] if item["name"] == name), None)
+            if user is None:
+                raise RegistryError("user_not_found", 404, "No such registry user")
+            user["hash"] = _hash(password)
+            user["password_changed_at"] = int(time.time())
+            self._write(state)
+        self.write_files()
+        return {"name": name, "access": user["access"], "password": password}
 
     def delete_user(self, name: str) -> None:
         with self.lock:
@@ -382,6 +434,13 @@ class UserBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=2, max_length=32)
     access: str = Field(pattern=r"^(pull|push)$")
+    # Optional: the operator's own password; omitted or empty = generated.
+    password: str | None = Field(default=None, max_length=256)
+
+
+class PasswordBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str | None = Field(default=None, max_length=256)
 
 
 def register(ctx: ModuleContext) -> None:
@@ -451,11 +510,26 @@ def register(ctx: ModuleContext) -> None:
     async def registry_create_user(request: Request, body: UserBody):
         principal = writer(request)
         try:
-            result = await asyncio.to_thread(service.create_user, body.name, body.access)
+            result = await asyncio.to_thread(service.create_user, body.name, body.access,
+                                             body.password)
         except RegistryError as exc:
             return failure(exc)
         await asyncio.to_thread(ctx.audit, principal.user_id, "registry.user.create",
                                 "registry_user", result["name"])
+        return result
+
+    @router.post("/users/{name}/password")
+    async def registry_user_password(name: str, request: Request,
+                                     body: PasswordBody | None = None):
+        principal = writer(request)
+        try:
+            result = await asyncio.to_thread(service.set_password, name,
+                                             body.password if body else None)
+        except RegistryError as exc:
+            return failure(exc)
+        # The password is in this response only; the audit names the user, never the value.
+        await asyncio.to_thread(ctx.audit, principal.user_id, "registry.user.password",
+                                "registry_user", name)
         return result
 
     @router.delete("/users/{name}")

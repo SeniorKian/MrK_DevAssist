@@ -114,6 +114,30 @@ class Response:
         return self
 
 
+def website_page(bucket: str, head: bool) -> Response:
+    """The page shown for a public bucket's root when it has no index.html."""
+    safe = "".join(char for char in bucket if char.isalnum() or char in "-._")
+    body = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        f"<title>{safe}</title><style>body{{font:16px/1.6 system-ui,sans-serif;"
+        "max-width:36rem;margin:12vh auto;padding:0 1rem;color:#222}"
+        "@media(prefers-color-scheme:dark){body{background:#111;color:#ddd}}"
+        "code{background:rgba(127,127,127,.15);padding:.1em .35em;border-radius:4px}"
+        "</style></head><body>"
+        f"<h1>{safe}</h1><p>This is a public file space. Files open with their full address, "
+        "for example <code>/path/to/file.png</code>; the list of files is not public.</p>"
+        "<p dir=\"rtl\" lang=\"fa\">این یک فضای فایل عمومی است. هر فایل با نشانی کامل خودش "
+        "باز می‌شود؛ فهرست فایل‌ها عمومی نیست.</p></body></html>"
+    ).encode()
+    response = Response(200, [("Content-Type", "text/html; charset=utf-8"),
+                              ("Cache-Control", "public, max-age=300")],
+                        b"" if head else body)
+    if head:
+        response.header("Content-Length", len(body))
+    return response
+
+
 def xml_response(body: bytes, status: int = 200) -> Response:
     return Response(status, [("Content-Type", "application/xml")], body)
 
@@ -141,6 +165,8 @@ class Request:
             self.query.setdefault(name, value)
         self.bucket: str | None = None
         self.key: str | None = None
+        # True when the Host is a custom domain of one bucket (path = key).
+        self.bucket_host = False
         self.body_started = False
         self.disconnected = False
 
@@ -456,6 +482,7 @@ class S3Api:
         if not suffix and host in snapshot.bucket_hosts:
             # docs/43: a verified custom domain of one bucket (path = key).
             request.bucket = snapshot.bucket_hosts[host]
+            request.bucket_host = True
             remainder = path[1:] if path.startswith("/") else path
             request.key = (
                 unquote_to_bytes(remainder).decode("utf-8", "replace") if remainder else None
@@ -595,8 +622,65 @@ class S3Api:
         ):
             raise S3Error("KeyTooLongError", MaxSizeAllowed=str(self.settings.max_key_bytes))
         if request.key is None:
+            site = await self.website_root(request, principal, snapshot)
+            if site is not None:
+                return site
             return await self.bucket_operation(request, principal)
-        return await self.object_operation(request, principal)
+        try:
+            return await self.object_operation(request, principal)
+        except S3Error as exc:
+            stripped = self.bucket_prefixed_key(request, exc)
+            if stripped is None:
+                raise
+            # A link made for path-style addressing (/<bucket>/<key>) opened on the
+            # bucket's own domain: the key without the repeated bucket name.
+            request.key = stripped
+            return await self.object_operation(request, principal)
+
+    # Public buckets in a browser ----------------------------------------------------
+    @staticmethod
+    def bucket_prefixed_key(request: Request, exc: S3Error) -> str | None:
+        """The key without a leading ``<bucket>/`` on a bucket domain, for a read that
+        found nothing under the full key; None when it does not apply."""
+        if not request.bucket_host or request.method not in {"GET", "HEAD"}:
+            return None
+        if exc.code not in {"NoSuchKey", "AccessDenied"} or request.bucket is None:
+            return None
+        if any(name in request.query for name in ("versionId", "uploadId", "tagging", "acl",
+                                                  "attributes", "retention", "legal-hold")):
+            return None
+        key = request.key or ""
+        prefix = request.bucket + "/"
+        if not key.startswith(prefix) or len(key) == len(prefix):
+            return None
+        return key[len(prefix):]
+
+    async def website_root(
+        self, request: Request, principal: Principal, snapshot: Snapshot
+    ) -> Response | None:
+        """A browser opening a public bucket's root: its index.html, or a short page.
+
+        Only for anonymous GET/HEAD without query parameters from a client that asks for
+        HTML, on a bucket that is public to read but not to list. S3 clients (which list
+        with XML) and everything else keep the S3 behaviour.
+        """
+        if not principal.anonymous or request.method not in {"GET", "HEAD"} or request.query:
+            return None
+        if "text/html" not in (request.header("accept") or "").lower():
+            return None
+        name = request.bucket or ""
+        config = snapshot.buckets.get(name)
+        if config is None or not config.public_read or config.public_list:
+            return None
+        request.key = "index.html"
+        try:
+            return await self.object_operation(request, principal)
+        except S3Error as exc:
+            if exc.code not in {"NoSuchKey", "AccessDenied"}:
+                raise
+        finally:
+            request.key = None
+        return website_page(name, request.method == "HEAD")
 
     # Service -----------------------------------------------------------------------
     def list_buckets(self, request: Request, principal: Principal, snapshot: Snapshot) -> Response:

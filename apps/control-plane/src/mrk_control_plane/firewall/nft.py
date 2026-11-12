@@ -188,7 +188,7 @@ def render_ruleset(state: DesiredState, *, now: float | None = None,
         parts.append(_render_dynamic(state, current))
     if state.ports is not None and state.ports.enabled:
         parts.extend(render_sets(state.ports, current))
-        parts.extend(render_chains(state.ports))
+        parts.extend(render_chains(state.ports, current))
     body = "\n".join(parts)
     return (
         HEADER

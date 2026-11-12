@@ -6,9 +6,10 @@ import re
 import secrets
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Any, Final
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
@@ -16,6 +17,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as OrmSession
 
+from . import totp
 from .database import Database
 from .models import (
     ApiToken,
@@ -23,10 +25,15 @@ from .models import (
     CustomRole,
     SystemSetting,
     User,
+    UserIdentity,
     UserInvite,
+    UserMfa,
     UserPasswordState,
 )
 from .models import Session as LoginSession
+
+if TYPE_CHECKING:
+    from .secret_store import SecretStore
 
 
 def password_policy() -> dict[str, object]:
@@ -129,6 +136,13 @@ BUILTIN_ROLES: Final[tuple[str, ...]] = tuple(ROLE_PERMISSIONS)
 CUSTOM_ROLE_PREFIX: Final = "custom:"
 DANGER_LEVELS: Final[tuple[str, ...]] = ("none", "low", "medium", "high", "critical")
 INVITE_TTL_SECONDS: Final = 7 * 86400
+# Sliding sessions: activity is written at most this often per session.
+SESSION_TOUCH_INTERVAL_SECONDS: Final = 300
+MFA_CHALLENGE_TTL_SECONDS: Final = 300
+MFA_POLICY_KEY: Final = "auth.mfa_policy"
+OIDC_SETTINGS_KEY: Final = "auth.oidc"
+SIGNING_KEY_REFERENCE: Final = "auth-signing-key"
+MFA_POLICY_MODES: Final = ("off", "all", "roles")
 
 
 @dataclass(frozen=True, slots=True)
@@ -623,6 +637,13 @@ def generate_one_time_password(min_length: int = 16) -> str:
             return "-".join(value[index:index + 4] for index in range(0, length, 4))
 
 
+def _clip_user_agent(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = "".join(char for char in value if 32 <= ord(char) < 127)
+    return cleaned[:200] or None
+
+
 @dataclass(frozen=True, slots=True)
 class Principal:
     user_id: int
@@ -638,24 +659,76 @@ class Principal:
     # docs/43: set for a «my space» API token (its permissions are my.* scopes only).
     workspace_id: str | None = None
     token_ip_allow: tuple[str, ...] = ()
+    # Browser sessions only.
+    session_remember: bool = False
+    session_absolute_expires_at: int | None = None
+    session_created_at: int | None = None
+    session_renewed: bool = False
+    auth_method: str | None = None
+    mfa_enabled: bool = False
+    # The two-step sign-in policy covers this account and it has not set it up yet.
+    must_enroll_mfa: bool = False
 
     def allows(self, permission: str) -> bool:
         return "*" in self.permissions or permission in self.permissions
+
+
+@dataclass(frozen=True, slots=True)
+class MfaChallenge:
+    """The password was right; a second step is needed before a session exists."""
+
+    token: str
+    expires_at: int
+    user_id: int
+
+
+def mfa_policy_value(raw: object) -> dict[str, object]:
+    """Normalize the stored two-step policy: ``{"mode": off|all|roles, "roles": [...]}``."""
+    value = raw if isinstance(raw, dict) else {}
+    mode = value.get("mode") if value.get("mode") in MFA_POLICY_MODES else "off"
+    roles = value.get("roles") if isinstance(value.get("roles"), list) else []
+    return {
+        "mode": mode,
+        "roles": sorted({str(item) for item in roles if isinstance(item, str)})[:64],
+    }
+
+
+def mfa_required_for(policy: dict[str, object], role: str) -> bool:
+    if policy.get("mode") == "all":
+        return True
+    roles = policy.get("roles")
+    return policy.get("mode") == "roles" and isinstance(roles, list) and role in roles
 
 
 class AuthStore:
     def __init__(
         self,
         data_dir: Path,
-        session_ttl_seconds: int = 28800,
+        session_ttl_seconds: int = 43200,
         database: Database | None = None,
         rate_limit_attempts: int = 5,
         rate_limit_window_seconds: int = 300,
         session_prune_age_seconds: int = 7 * 86400,
+        *,
+        session_max_age_seconds: int = 30 * 86400,
+        session_remember_ttl_seconds: int = 7 * 86400,
+        secret_store: SecretStore | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.root = data_dir / "control-plane"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Idle window: a session ends after this long without activity...
         self.session_ttl_seconds = session_ttl_seconds
+        # ...and always this long after sign-in, however active it is.
+        self.session_max_age_seconds = max(session_max_age_seconds, session_ttl_seconds)
+        # "Keep me signed in": a longer idle window (never shorter than the normal one).
+        self.session_remember_ttl_seconds = min(
+            max(session_remember_ttl_seconds, session_ttl_seconds), self.session_max_age_seconds
+        )
+        self.secret_store = secret_store
+        self.clock = clock
+        self._signing_key_value: bytes | None = None
+        self._used_challenges: dict[str, int] = {}
         self.rate_limit_attempts = rate_limit_attempts
         self.rate_limit_window_seconds = rate_limit_window_seconds
         self.session_prune_age_seconds = session_prune_age_seconds
@@ -732,6 +805,19 @@ class AuthStore:
                 "weak_password", "password must contain at least one digit", field,
                 "missing_digit",
             )
+
+    @classmethod
+    def _chosen_password(cls, password: str | None) -> str:
+        """The operator's own temporary password (checked) or a generated one."""
+        if password is None or password == "":
+            return generate_one_time_password(
+                int(password_policy()["min_length"])  # type: ignore[call-overload]
+            )
+        cls.validate_password(password)
+        if any(ord(char) < 32 or ord(char) == 127 for char in password):
+            raise FieldError("weak_password", "password must not contain control characters",
+                             "password", "invalid_characters")
+        return password
 
     @staticmethod
     def validate_display_name(display_name: str, field: str = "display_name") -> str:
@@ -1310,20 +1396,21 @@ class AuthStore:
         create_link: bool = True,
         source_ip: str | None = None,
         request_id: str | None = None,
+        password: str | None = None,
     ) -> dict[str, object]:
         """Create an account with a one-time password and an optional invite link.
 
-        The password and link token are returned exactly once; only hashes are
-        stored. The user must choose a new password at first sign-in.
+        ``password`` is the operator's own choice (checked against the policy);
+        omitted, one is generated. The password and link token are returned
+        exactly once; only hashes are stored. The user must choose a new
+        password at first sign-in.
         """
         normalized_name = self.validate_display_name(display_name)
         normalized_email = self.validate_email(email) if email else None
         normalized_username = self.validate_username(username) if username else None
         if role not in ROLE_PERMISSIONS and not role.startswith(CUSTOM_ROLE_PREFIX):
             raise FieldError("unknown_role", "unknown role", "role", "unknown_role")
-        one_time_password = generate_one_time_password(
-            int(password_policy()["min_length"])  # type: ignore[call-overload]
-        )
+        one_time_password = self._chosen_password(password)
         password_hash = self._hash_password(one_time_password)
         token = secrets.token_urlsafe(32) if create_link else None
         now = int(time.time())
@@ -1441,7 +1528,7 @@ class AuthStore:
         password: str,
         source_ip: str | None,
         request_id: str | None,
-    ) -> tuple[str, str, Principal]:
+    ) -> tuple[str, str, Principal] | MfaChallenge:
         key = f"invite:{source_ip or '-'}"
         if self._rate_limited(key):
             raise FieldError("rate_limited", "Too many attempts; try again later",
@@ -1452,6 +1539,11 @@ class AuthStore:
         try:
             with self.db.session() as db, db.begin():
                 invite, user = self._invite_row(db, token, now)
+                if user.role != "owner" and self._sso_only(db):
+                    raise FieldError(
+                        "sso_required", "this account signs in with single sign-on only",
+                        status_code=403,
+                    )
                 user.password_hash = password_hash
                 user.updated_at = now
                 invite.used_at = now
@@ -1463,6 +1555,9 @@ class AuthStore:
                     db, user.id, "auth.invite.accept", "user", str(user.id), "success",
                     source_ip, request_id,
                 )
+                if user.mfa_enabled:
+                    # A reset link replaces the password, never the second step.
+                    return self.issue_mfa_challenge(user, remember=False, method="password")
                 return self._open_session(db, user, source_ip, request_id)
         except FieldError as exc:
             if exc.status_code == 404:
@@ -1599,24 +1694,70 @@ class AuthStore:
             must_change,
         )
 
+    def _now(self) -> int:
+        return int(self.clock())
+
+    # ----- sessions ------------------------------------------------------------
+    def _session_windows(self, row: LoginSession) -> tuple[int, int]:
+        """(idle seconds, absolute end) of a session; older rows use the defaults."""
+        idle = int(row.idle_seconds or self.session_ttl_seconds)
+        absolute = int(row.absolute_expires_at or (row.created_at + self.session_max_age_seconds))
+        return idle, absolute
+
+    def _session_principal(
+        self, db: OrmSession, user: User, row: LoginSession, *, renewed: bool = False
+    ) -> Principal | None:
+        role_permissions = self._role_permissions_db(db, user.role)
+        if role_permissions is None:
+            return None
+        principal = self._principal(
+            user, int(row.id), row.csrf_hash,
+            role_permissions=role_permissions,
+            must_change=self._must_change(db, int(user.id)),
+        )
+        _idle, absolute = self._session_windows(row)
+        return replace(
+            principal,
+            session_remember=bool(row.remember),
+            session_absolute_expires_at=absolute,
+            session_created_at=int(row.created_at),
+            session_renewed=renewed,
+            auth_method=row.auth_method,
+            mfa_enabled=bool(user.mfa_enabled),
+            must_enroll_mfa=self._must_enroll_mfa(db, user, row.auth_method),
+        )
+
     def _open_session(
         self,
         db: OrmSession,
         user: User,
         source_ip: str | None,
         request_id: str | None,
+        *,
+        remember: bool = False,
+        method: str = "password",
+        user_agent: str | None = None,
     ) -> tuple[str, str, Principal]:
-        now = int(time.time())
+        now = self._now()
         user.last_login_at = now
         user.updated_at = now
         token = secrets.token_urlsafe(32)
         csrf = self.csrf_for_session(token)
+        idle = self.session_remember_ttl_seconds if remember else self.session_ttl_seconds
+        absolute = now + self.session_max_age_seconds
         login_session = LoginSession(
             user_id=user.id,
             token_hash=self._digest(token),
             csrf_hash=self._digest(csrf),
             created_at=now,
-            expires_at=now + self.session_ttl_seconds,
+            expires_at=min(now + idle, absolute),
+            last_seen_at=now,
+            idle_seconds=idle,
+            absolute_expires_at=absolute,
+            remember=remember,
+            auth_method=method[:16],
+            source_ip=source_ip[:64] if source_ip else None,
+            user_agent=_clip_user_agent(user_agent),
         )
         db.add(login_session)
         db.flush()
@@ -1624,15 +1765,29 @@ class AuthStore:
             db, user.id, "auth.login", "session", str(login_session.id), "success",
             source_ip, request_id,
         )
-        return token, csrf, self._principal(
-            user, int(login_session.id), login_session.csrf_hash,
-            role_permissions=self._role_permissions_db(db, user.role) or frozenset(),
-            must_change=self._must_change(db, int(user.id)),
-        )
+        principal = self._session_principal(db, user, login_session)
+        if principal is None:
+            raise FieldError("invalid_credentials", "the account's role no longer exists",
+                             status_code=401)
+        return token, csrf, principal
 
     def authenticate(
-        self, username: str, password: str, source_ip: str | None, request_id: str | None
-    ) -> tuple[str, str, Principal] | None:
+        self,
+        username: str,
+        password: str,
+        source_ip: str | None,
+        request_id: str | None,
+        *,
+        remember: bool = False,
+        user_agent: str | None = None,
+    ) -> tuple[str, str, Principal] | MfaChallenge | None:
+        """Check a password; open a session, or ask for the second step.
+
+        Returns ``None`` for any failure (wrong password, unknown or disabled
+        account, rate limited), an :class:`MfaChallenge` when the account uses
+        two-step sign-in, and raises ``FieldError("sso_required")`` when only
+        single sign-on is allowed for this account.
+        """
         normalized = username.strip().lower()
         key = f"{source_ip or '-'}:{normalized}"
         if self._rate_limited(key):
@@ -1682,12 +1837,43 @@ class AuthStore:
                 )
                 return None
             self._clear_attempts(key)
-            return self._open_session(db, user, source_ip, request_id)
+            if user.role != "owner" and self._sso_only(db):
+                self._audit_db(
+                    db, user.id, "auth.login", "session", None, "sso_required", source_ip,
+                    request_id,
+                )
+                sso_required = True
+            else:
+                sso_required = False
+                if user.mfa_enabled:
+                    self._audit_db(
+                        db, user.id, "auth.login.password", "user", str(user.id),
+                        "mfa_required", source_ip, request_id,
+                    )
+                    return self.issue_mfa_challenge(user, remember=remember, method="password")
+                return self._open_session(
+                    db, user, source_ip, request_id, remember=remember, method="password",
+                    user_agent=user_agent,
+                )
+        if sso_required:
+            # Raised outside the transaction so the audit row above is kept.
+            raise FieldError(
+                "sso_required", "this account signs in with single sign-on only",
+                status_code=403,
+            )
+        return None
 
     def principal_for_token(self, token: str | None) -> Principal | None:
+        """The signed-in person for a session cookie, extending an active session.
+
+        The session slides: when less than half of its idle window is left, it is
+        extended (never past the absolute maximum) and ``session_renewed`` is set
+        so the caller can re-send the cookie. Activity is written at most once per
+        SESSION_TOUCH_INTERVAL_SECONDS per session.
+        """
         if not token:
             return None
-        now = int(time.time())
+        now = self._now()
         with self.db.session() as db:
             row = db.execute(
                 select(LoginSession, User)
@@ -1702,15 +1888,220 @@ class AuthStore:
             login_session, user = row
             if not user.enabled:
                 return None
-            # Resolved per request, so a custom-role edit applies immediately.
-            role_permissions = self._role_permissions_db(db, user.role)
-            if role_permissions is None:
+            idle, absolute = self._session_windows(login_session)
+            if absolute <= now:
                 return None
-            return self._principal(
-                user, int(login_session.id), login_session.csrf_hash,
-                role_permissions=role_permissions,
-                must_change=self._must_change(db, int(user.id)),
+            extend = (
+                login_session.expires_at - now < idle // 2
+                and login_session.expires_at < absolute
             )
+            touch = now - int(login_session.last_seen_at or login_session.created_at) >= (
+                SESSION_TOUCH_INTERVAL_SECONDS
+            )
+            session_id = int(login_session.id)
+            new_expires = min(now + idle, absolute) if extend else int(login_session.expires_at)
+            # Resolved per request, so a custom-role edit applies immediately.
+            principal = self._session_principal(db, user, login_session, renewed=extend)
+        if principal is None:
+            return None
+        if extend or touch:
+            with self.db.session() as db, db.begin():
+                values: dict[str, Any] = {"last_seen_at": now}
+                if extend:
+                    values["expires_at"] = new_expires
+                db.execute(
+                    update(LoginSession)
+                    .where(LoginSession.id == session_id, LoginSession.revoked_at.is_(None))
+                    .values(**values)
+                )
+        return principal
+
+    def list_sessions(
+        self, user_id: int, current_session_id: int | None
+    ) -> list[dict[str, object]]:
+        """The person's own open browser sessions, newest first."""
+        now = self._now()
+        with self.db.session() as db:
+            rows = db.scalars(
+                select(LoginSession)
+                .where(
+                    LoginSession.user_id == user_id, LoginSession.revoked_at.is_(None),
+                    LoginSession.expires_at > now,
+                )
+                .order_by(LoginSession.id.desc())
+                .limit(100)
+            ).all()
+            items: list[dict[str, object]] = []
+            for row in rows:
+                _idle, absolute = self._session_windows(row)
+                if absolute <= now:
+                    continue
+                items.append({
+                    "id": row.id,
+                    "current": row.id == current_session_id,
+                    "created_at": row.created_at,
+                    "last_seen_at": row.last_seen_at or row.created_at,
+                    "expires_at": min(int(row.expires_at), absolute),
+                    "absolute_expires_at": absolute,
+                    "remember": bool(row.remember),
+                    "method": row.auth_method or "password",
+                    "source_ip": row.source_ip,
+                    "user_agent": row.user_agent,
+                })
+            return items
+
+    def revoke_own_session(
+        self,
+        principal: Principal,
+        session_id: int,
+        source_ip: str | None = None,
+        request_id: str | None = None,
+    ) -> bool:
+        now = self._now()
+        with self.db.session() as db, db.begin():
+            result = db.execute(
+                update(LoginSession)
+                .where(
+                    LoginSession.id == session_id, LoginSession.user_id == principal.user_id,
+                    LoginSession.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+            )
+            changed = bool(result.rowcount)
+            if changed:
+                self._audit_db(db, principal.user_id, "auth.session.revoke", "session",
+                               str(session_id), "success", source_ip, request_id)
+            return changed
+
+    # ----- two-step sign-in policy and challenge ----------------------------------
+    @staticmethod
+    def _setting(db: OrmSession, key: str) -> dict[str, Any]:
+        row = db.get(SystemSetting, key)
+        return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+
+    def _sso_only(self, db: OrmSession) -> bool:
+        value = self._setting(db, OIDC_SETTINGS_KEY)
+        return value.get("enabled") is True and value.get("sso_only") is True
+
+    def _must_enroll_mfa(self, db: OrmSession, user: User, auth_method: str | None) -> bool:
+        if user.mfa_enabled:
+            return False
+        if not mfa_required_for(mfa_policy_value(self._setting(db, MFA_POLICY_KEY)), user.role):
+            return False
+        if auth_method == "oidc":
+            # The identity provider's own two-step check counts when the owner trusts it.
+            return self._setting(db, OIDC_SETTINGS_KEY).get("trust_idp_mfa") is not True
+        return True
+
+    def mfa_policy(self) -> dict[str, object]:
+        with self.db.session() as db:
+            return mfa_policy_value(self._setting(db, MFA_POLICY_KEY))
+
+    def set_mfa_policy(
+        self,
+        mode: str,
+        roles: list[str],
+        actor: Principal,
+        source_ip: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, object]:
+        if mode not in MFA_POLICY_MODES:
+            raise FieldError("invalid_mfa_policy", "unknown policy mode", "mode", "invalid")
+        with self.db.session() as db, db.begin():
+            unknown = sorted(
+                role for role in set(roles)
+                if role not in ROLE_PERMISSIONS and self._custom_role_row(db, role) is None
+            )
+            if unknown:
+                raise FieldError("unknown_role", "unknown role", "roles", "unknown_role",
+                                 params={"roles": unknown})
+            if mode == "roles" and not roles:
+                raise FieldError("invalid_mfa_policy", "choose at least one role", "roles",
+                                 "required")
+            value = mfa_policy_value({"mode": mode, "roles": roles if mode == "roles" else []})
+            now = self._now()
+            row = db.get(SystemSetting, MFA_POLICY_KEY)
+            if row is None:
+                db.add(SystemSetting(key=MFA_POLICY_KEY, value=value, updated_at=now,
+                                     updated_by_user_id=actor.user_id))
+            else:
+                row.value = value
+                row.updated_at = now
+                row.updated_by_user_id = actor.user_id
+            self._audit_db(db, actor.user_id, "auth.mfa.policy.update", "system_setting",
+                           f"{MFA_POLICY_KEY}:{value['mode']}", "success", source_ip, request_id)
+            return value
+
+    def _signing_key(self) -> bytes:
+        """HMAC key for short-lived sign-in tokens, kept in the encrypted secret store."""
+        if self._signing_key_value is not None:
+            return self._signing_key_value
+        with self._lock:
+            if self._signing_key_value is not None:
+                return self._signing_key_value
+            key: bytes | None = None
+            if self.secret_store is not None:
+                try:
+                    key = bytes.fromhex(self.secret_store.get(SIGNING_KEY_REFERENCE)["key"])
+                except (KeyError, ValueError):
+                    key = None
+                if key is None or len(key) != 32:
+                    key = secrets.token_bytes(32)
+                    self.secret_store.replace(SIGNING_KEY_REFERENCE, {"key": key.hex()})
+            else:
+                # No secret store (unit tests): valid for this process only.
+                key = secrets.token_bytes(32)
+            self._signing_key_value = key
+            return key
+
+    def signing_key(self, purpose: str) -> bytes:
+        """A key derived for one purpose, so a token made for one use never fits another."""
+        return hashlib.sha256(self._signing_key() + b"|" + purpose.encode("ascii")).digest()
+
+    @staticmethod
+    def password_fingerprint(password_hash: str) -> str:
+        return hashlib.sha256(f"mrk-pw:{password_hash}".encode()).hexdigest()[:24]
+
+    def issue_mfa_challenge(self, user: User, *, remember: bool, method: str) -> MfaChallenge:
+        expires_at = self._now() + MFA_CHALLENGE_TTL_SECONDS
+        token = totp.sign(self.signing_key("mfa-challenge"), "mfa-challenge", {
+            "u": int(user.id),
+            "e": expires_at,
+            "n": secrets.token_urlsafe(12),
+            "p": self.password_fingerprint(user.password_hash),
+            "r": bool(remember),
+            "m": method,
+        })
+        return MfaChallenge(token=token, expires_at=expires_at, user_id=int(user.id))
+
+    def read_mfa_challenge(self, token: str) -> dict[str, Any] | None:
+        """The payload of a valid, unexpired and unused challenge, or None."""
+        payload = totp.unsign(self.signing_key("mfa-challenge"), "mfa-challenge", token)
+        if payload is None:
+            return None
+        expires = payload.get("e")
+        nonce = payload.get("n")
+        if (
+            not isinstance(expires, int) or expires <= self._now()
+            or not isinstance(nonce, str) or not isinstance(payload.get("u"), int)
+        ):
+            return None
+        with self._lock:
+            if nonce in self._used_challenges:
+                return None
+        return payload
+
+    def consume_mfa_challenge(self, payload: dict[str, Any]) -> bool:
+        """Mark a challenge used; False if it was used meanwhile."""
+        now = self._now()
+        nonce = str(payload["n"])
+        with self._lock:
+            for stale in [key for key, until in self._used_challenges.items() if until <= now]:
+                del self._used_challenges[stale]
+            if nonce in self._used_challenges:
+                return False
+            self._used_challenges[nonce] = int(payload["e"])
+            return True
 
     def verify_csrf(self, principal: Principal, token: str | None) -> bool:
         return bool(token) and secrets.compare_digest(principal.csrf_hash, self._digest(token))
@@ -1926,6 +2317,10 @@ class AuthStore:
             db.execute(delete(ApiToken).where(ApiToken.user_id == user_id))
             db.execute(delete(UserInvite).where(UserInvite.user_id == user_id))
             db.execute(delete(UserPasswordState).where(UserPasswordState.user_id == user_id))
+            mfa = db.get(UserMfa, user_id)
+            secret_refs = [ref for ref in (mfa.secret_ref, mfa.pending_ref) if ref] if mfa else []
+            db.execute(delete(UserMfa).where(UserMfa.user_id == user_id))
+            db.execute(delete(UserIdentity).where(UserIdentity.user_id == user_id))
             # History stays; the deleted person's own events lose the link.
             db.execute(
                 update(AuditEvent)
@@ -1935,6 +2330,17 @@ class AuthStore:
             db.execute(delete(User).where(User.id == user_id))
             self._audit_db(db, actor.user_id, "user.delete", "user",
                            f"{user_id}:{username}", "success", source_ip, request_id)
+        self.forget_secrets(secret_refs)
+
+    def forget_secrets(self, references: list[str]) -> None:
+        """Best effort: drop secrets nobody references any more."""
+        if self.secret_store is None:
+            return
+        for reference in references:
+            try:
+                self.secret_store.delete(reference)
+            except (OSError, ValueError):
+                continue
 
     def reset_user_password(
         self,
@@ -1943,8 +2349,11 @@ class AuthStore:
         create_link: bool = True,
         source_ip: str | None = None,
         request_id: str | None = None,
+        password: str | None = None,
     ) -> dict[str, object]:
         """Give a person a one-time password (and optional link) they must replace.
+
+        ``password`` is the operator's own choice (checked); omitted, one is generated.
 
         Reuses the invite mechanism: every open session and earlier link ends,
         and the account is flagged to choose a new password at next sign-in.
@@ -1952,9 +2361,7 @@ class AuthStore:
         if user_id == actor.user_id:
             raise FieldError("cannot_reset_self", "change your own password instead",
                              "user_id", "self", status_code=409)
-        one_time_password = generate_one_time_password(
-            int(password_policy()["min_length"])  # type: ignore[call-overload]
-        )
+        one_time_password = self._chosen_password(password)
         password_hash = self._hash_password(one_time_password)
         token = secrets.token_urlsafe(32) if create_link else None
         now = int(time.time())
@@ -2127,18 +2534,19 @@ class AuthStore:
             )
 
     def rotate_session(self, principal: Principal) -> tuple[str, str]:
+        """New token for the same session; the idle window restarts, the maximum stays."""
         token = secrets.token_urlsafe(32)
         csrf = self.csrf_for_session(token)
-        now = int(time.time())
+        now = self._now()
         with self.db.session() as db, db.begin():
-            db.execute(
-                update(LoginSession)
-                .where(LoginSession.id == principal.session_id, LoginSession.revoked_at.is_(None))
-                .values(
-                    token_hash=self._digest(token), csrf_hash=self._digest(csrf),
-                    expires_at=now + self.session_ttl_seconds,
-                )
-            )
+            row = db.get(LoginSession, principal.session_id)
+            if row is None or row.revoked_at is not None:
+                raise FieldError("session_ended", "the session has ended", status_code=401)
+            idle, absolute = self._session_windows(row)
+            row.token_hash = self._digest(token)
+            row.csrf_hash = self._digest(csrf)
+            row.expires_at = min(now + idle, absolute)
+            row.last_seen_at = now
             self._audit_db(
                 db, principal.user_id, "auth.refresh", "session",
                 str(principal.session_id), "success",

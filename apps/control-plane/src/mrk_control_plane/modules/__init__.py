@@ -18,6 +18,7 @@ def _load() -> None:
         "notifications",
         "host_agent",
         "monitoring",
+        "server_live",  # server overview: machine facts + live in-memory history
         "dokploy",
         "s3",
         "server_backups",

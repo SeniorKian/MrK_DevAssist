@@ -14,6 +14,7 @@ import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import PublicRoundedIcon from "@mui/icons-material/PublicRounded";
 import LockRoundedIcon from "@mui/icons-material/LockRounded";
 import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
+import LockResetRoundedIcon from "@mui/icons-material/LockResetRounded";
 import LinkRoundedIcon from "@mui/icons-material/LinkRounded";
 import LinkOffRoundedIcon from "@mui/icons-material/LinkOffRounded";
 import FactCheckRoundedIcon from "@mui/icons-material/FactCheckRounded";
@@ -23,16 +24,16 @@ import EditNoteRoundedIcon from "@mui/icons-material/EditNoteRounded";
 import AdminPanelSettingsRoundedIcon from "@mui/icons-material/AdminPanelSettingsRounded";
 import { MY, MY_DNS, MY_FILES, nameConfirmation, pick, say } from "../copy";
 import {
-  ChoiceCards, CopyField, EmptyState, Ltr, NameDialog, RelativeTime, ResponsiveList, SectionCard, StatusPill, useConfirmAction, useKit,
-  useUndoSnackbar, type ListColumn, type RowAction
+  ChoiceCards, CopyField, EmptyState, Ltr, NameDialog, PasswordDialog, RelativeTime, ResponsiveList, SectionCard, StatusPill,
+  useConfirmAction, useKit, useUndoSnackbar, type ListColumn, type RowAction
 } from "../kit";
 import { FormDialog, Loading, useList, useLoader } from "../dnsUi";
 import { S3FileManager } from "../S3FileManager";
-import { KeySecretDialog } from "../S3Access";
+import { KeySecretDialog, S3_SECRET_LENGTH, S3_SECRET_RULES, SecretKeyInput, secretKeyProblem, suggestSecretKey } from "../S3Access";
 import { formatBytes, formatNumber } from "../format";
 import {
   addBucketDomain, createMyBucket, createMyKey, deleteMyBucket, deleteMyIdentity, fetchBucketDomains, fetchMyBuckets, fetchMyIdentities,
-  MY_BUCKETS_BASE, numericLimit, removeBucketDomain, retryBucketRoute, setBucketPublic, verifyBucketDomain, type BucketDomain, type BucketRoute,
+  MY_BUCKETS_BASE, numericLimit, removeBucketDomain, resetMyKeySecret, retryBucketRoute, setBucketPublic, verifyBucketDomain, type BucketDomain, type BucketRoute,
   type KeyTemplate, type MyBucket,
   type MyIdentity, type NewS3Key
 } from "./myApi";
@@ -345,10 +346,11 @@ function NewKeyDialog({ buckets, onClose, onCreated }: { buckets: string[]; onCl
   const [name, setName] = useState("");
   const [level, setLevel] = useState<KeyTemplate>("read_write");
   const [chosen, setChosen] = useState<string[]>([]);
+  const [secretKey, setSecretKey] = useState(suggestSecretKey);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const problem = name.trim() ? null : pick(language, MY_FILES.keyNameRequired);
+  const problem = name.trim() ? secretKeyProblem(language, secretKey) : pick(language, MY_FILES.keyNameRequired);
 
   const submit = async () => {
     setTouched(true);
@@ -356,7 +358,7 @@ function NewKeyDialog({ buckets, onClose, onCreated }: { buckets: string[]; onCl
     setBusy(true);
     setError(null);
     try {
-      onCreated(await createMyKey(name.trim(), level, chosen), name.trim());
+      onCreated(await createMyKey(name.trim(), level, chosen, secretKey), name.trim());
     } catch (caught) {
       setError(caught);
     } finally {
@@ -372,10 +374,11 @@ function NewKeyDialog({ buckets, onClose, onCreated }: { buckets: string[]; onCl
         placeholder={pick(language, MY_FILES.keyNamePlaceholder)}
         value={name}
         onChange={(event) => setName(event.target.value)}
-        error={touched && Boolean(problem)}
-        helperText={touched && problem ? problem : " "}
+        error={touched && !name.trim()}
+        helperText={touched && !name.trim() ? problem : " "}
         fullWidth
       />
+      <SecretKeyInput value={secretKey} onChange={setSecretKey} />
       <Typography variant="subtitle2">{pick(language, MY_FILES.keyLevel)}</Typography>
       <ChoiceCards<KeyTemplate>
         label={pick(language, MY_FILES.keyLevel)}
@@ -417,6 +420,7 @@ function KeysTab() {
   const buckets = useLoader(bucketsLoader);
   const [creating, setCreating] = useState(false);
   const [secret, setSecret] = useState<NewS3Key | null>(null);
+  const [changing, setChanging] = useState<MyIdentity | null>(null);
   const { ask, dialog } = useConfirmAction();
   const { notify, snackbar } = useUndoSnackbar();
   const limit = numericLimit(space.workspace, "s3_keys");
@@ -460,7 +464,10 @@ function KeysTab() {
           rowKey={(identity) => identity.id}
           columns={columns}
           card={{ title: (identity) => identity.name, meta: (identity) => `${levelTitle(language, identity.template)} · ${bucketText(identity)}` }}
-          actions={space.canWrite ? [{ key: "delete", label: pick(language, MY.remove), icon: DeleteOutlineRoundedIcon, danger: true, onClick: (identity) => void remove(identity) }] : undefined}
+          actions={space.canWrite ? [
+            { key: "secret", label: pick(language, MY_FILES.changeSecret), icon: LockResetRoundedIcon, onClick: (identity) => setChanging(identity) },
+            { key: "delete", label: pick(language, MY.remove), icon: DeleteOutlineRoundedIcon, danger: true, onClick: (identity) => void remove(identity) }
+          ] : undefined}
           empty={
             <EmptyState
               icon={KeyRoundedIcon}
@@ -484,6 +491,21 @@ function KeysTab() {
           }}
         />
       )}
+      <PasswordDialog
+        open={changing !== null}
+        title={say(language, MY_FILES.changeSecretTitle, { name: changing?.name ?? "" })}
+        hint={pick(language, MY_FILES.changeSecretHint)}
+        saveLabel={pick(language, MY_FILES.saveSecret)}
+        rules={S3_SECRET_RULES}
+        suggestLength={S3_SECRET_LENGTH}
+        onClose={() => setChanging(null)}
+        onSubmit={async (value) => {
+          if (!changing) return;
+          const result = await resetMyKeySecret(changing.id, value);
+          setChanging(null);
+          setSecret(result ?? { access_key_id: changing.access_key_id, secret_access_key: value, changed: true });
+        }}
+      />
       <KeySecretDialog secret={secret} onClose={() => setSecret(null)} />
       {dialog}
       {snackbar}

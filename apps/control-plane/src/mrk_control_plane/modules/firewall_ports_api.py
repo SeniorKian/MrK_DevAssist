@@ -97,6 +97,8 @@ class PortPolicyState:
         base = service.ctx.data_dir / "control-plane"
         self.settings_path = base / SETTINGS_FILE
         self.state_path = base / STATE_FILE
+        # Quick actions (firewall_quick_api.QuickJournal) register themselves here.
+        self.quick: Any = None
 
     # ----- files -------------------------------------------------------------------
     def settings(self) -> dict[str, Any]:
@@ -157,6 +159,10 @@ class PortPolicyState:
             state["last_rollback"] = last if isinstance(last, dict) else {
                 "at": int(time.time()), "reason": "helper", "outcome": "restored"}
         self.save_state(state)
+        if outcome != "confirmed" and pending and pending.get("change_id") \
+                and self.quick is not None:
+            # A quick change that was not kept: take its rules out of the draft too.
+            self.quick.revert_draft(str(pending["change_id"]), "rolled_back")
         if outcome != "confirmed":
             reason = str((state["last_rollback"] or {}).get("reason", "helper"))
             self.service.store.record("ports_rollback", mode=self.service.settings()["mode"],
@@ -168,17 +174,27 @@ class PortPolicyState:
                 module="firewall", dedupe_key="firewall.ports.rollback"))
         return outcome
 
+    def cleanup_expired(self, now: int | None = None) -> list[dict[str, Any]]:
+        """Take temporary rules out of the draft once their time is over. The helper
+        already stopped enforcing them; the applied snapshot drops them on the next apply
+        (expired rules never count as a difference)."""
+        removed = self.store.delete_expired(int(time.time()) if now is None else now)
+        for item in removed:
+            self.service.store.record(
+                "ports_expire", mode=self.service.settings()["mode"],
+                reason=item["name"][:200],
+                details={"rule_id": item["id"], "expires_at": item["expires_at"]})
+        return removed
+
     # ----- planning ------------------------------------------------------------------
     def context(self, request: Request) -> dict[str, Any]:
         info = self.service.info or {}
         settings = self.settings()
-        ssh = info.get("ssh") if isinstance(info.get("ssh"), dict) else None
+        detected = detected_ssh(info.get("ssh"))
         if settings["ssh_ports"]:
-            ssh_ports, ssh_source = list(settings["ssh_ports"]), "settings"
-        elif ssh and ssh.get("detected") and isinstance(ssh.get("ports"), list) and ssh["ports"]:
-            ssh_ports, ssh_source = [int(p) for p in ssh["ports"]], "server"
+            ssh_ports, ssh_source = list(settings["ssh_ports"]), "admin"
         else:
-            ssh_ports, ssh_source = [22], "default"
+            ssh_ports, ssh_source = detected["ports"], detected["source"]
         listening = info.get("listening") if isinstance(info.get("listening"), list) else None
         try:
             dns_installed = dns_client.installed()
@@ -189,6 +205,7 @@ class PortPolicyState:
             "settings": settings,
             "ssh_ports": ssh_ports,
             "ssh_source": ssh_source,
+            "ssh_detected": detected,
             "panel_ports": sorted(set(panel_ports(request)) | set(settings["panel_ports"])),
             "protected": relevant_protected(listening, dns_installed),
             "listening": listening,
@@ -196,7 +213,9 @@ class PortPolicyState:
         }
 
     def plan(self, request: Request, *, temp_allow: bool | None = None,
-             now: int | None = None) -> dict[str, Any]:
+             now: int | None = None, rules: list[dict[str, Any]] | None = None
+             ) -> dict[str, Any]:
+        """Compile the draft (or ``rules`` instead of it) and run the lockout check."""
         stamp = int(time.time()) if now is None else now
         context = self.context(request)
         settings = context["settings"]
@@ -205,13 +224,14 @@ class PortPolicyState:
         requester = context["requester"]
         temp = [] if not use_temp or requester is None else [
             TempAllow(_host_network(requester), stamp + settings["temp_allow_seconds"])]
-        policy, warnings = compile_policy(self.store.list_rules(),
+        policy, warnings = compile_policy(self.store.list_rules() if rules is None else rules,
                                           {item["id"]: item for item in lists}, settings,
-                                          temp_allow=temp)
+                                          temp_allow=temp, now=stamp)
         problems = lockout_problems(
             policy, probes=management_probes(requester, lists), ssh_ports=context["ssh_ports"],
             panel_ports=context["panel_ports"], protected=context["protected"],
-            allowed_closed=settings["allow_closed_protected"])
+            allowed_closed=settings["allow_closed_protected"],
+            ssh_require_all=context["ssh_source"] == "admin", now=stamp)
         return {**context, "policy": policy, "warnings": warnings, "problems": problems,
                 "lists": lists}
 
@@ -246,8 +266,10 @@ class PortPolicyState:
             "last_rollback": state["last_rollback"],
             "applied_at": state["applied_at"],
             "draft": {"rules": len(rules), "enabled": sum(1 for r in rules if r["enabled"]),
-                      "differs": risk_key(plan["policy"]) != risk_key(sent)},
-            "ssh": {"ports": plan["ssh_ports"], "source": plan["ssh_source"]},
+                      "differs": not draft_matches_applied(plan["policy"], sent, now)},
+            "ssh": {"ports": plan["ssh_ports"], "source": plan["ssh_source"],
+                    "admin_ports": plan["settings"]["ssh_ports"],
+                    "detected": plan["ssh_detected"]},
             "panel_ports": plan["panel_ports"],
             "requester": None if plan["requester"] is None else str(plan["requester"]),
             "problems": plan["problems"],
@@ -255,6 +277,65 @@ class PortPolicyState:
             "protected": sorted(plan["protected"]),
             "helper": info.get("ports"),
         }
+
+
+SSH_SOURCES = ("listener", "ssh_socket", "sshd_config", "assumed")
+
+
+def detected_ssh(raw: object) -> dict[str, Any]:
+    """The helper's SSH facts -> {ports, source, listener, sshd_config, ssh_socket, mounts}.
+
+    Understands the older helper shape ``{detected, ports}`` (sshd_config only) too; a
+    missing or unreadable answer means 22 is assumed.
+    """
+    facts = raw if isinstance(raw, dict) else {}
+    ports = [int(p) for p in facts.get("ports") or []
+             if isinstance(p, int) and not isinstance(p, bool) and 1 <= p <= 65535][:16]
+    source = facts.get("source")
+    if source not in SSH_SOURCES:
+        source = "sshd_config" if facts.get("detected") and ports else "assumed"
+    if source == "assumed" or not ports:
+        ports, source = [22], "assumed"
+    sources = facts.get("sources") if isinstance(facts.get("sources"), dict) else {}
+    listener = sources.get("listener") if isinstance(sources.get("listener"), dict) else {}
+    config = sources.get("sshd_config") if isinstance(sources.get("sshd_config"), dict) else {}
+    unit = sources.get("ssh_socket") if isinstance(sources.get("ssh_socket"), dict) else {}
+    mounts = facts.get("mounts") if isinstance(facts.get("mounts"), dict) else {}
+
+    def port_list(value: object) -> list[int]:
+        return [p for p in value if isinstance(p, int) and not isinstance(p, bool)][:16] \
+            if isinstance(value, list) else []
+
+    return {
+        "ports": ports,
+        "source": source,
+        "listener": {"available": bool(listener.get("available")),
+                     "ports": port_list(listener.get("ports")),
+                     "other": [item for item in listener.get("other") or []
+                               if isinstance(item, dict)][:16]},
+        "sshd_config": {"readable": bool(config.get("readable", facts.get("detected"))),
+                        "ports": port_list(config.get("ports"))},
+        "ssh_socket": {"readable": bool(unit.get("readable")),
+                       "enabled": unit.get("enabled") if isinstance(unit.get("enabled"), bool)
+                       else None,
+                       "ports": port_list(unit.get("ports"))},
+        "mounts": {"ssh": bool(mounts.get("ssh", facts.get("detected"))),
+                   "systemd": bool(mounts.get("systemd"))},
+    }
+
+
+def draft_matches_applied(draft: PortPolicy, sent: PortPolicy | None, now: float) -> bool:
+    """True when the draft has no unapplied edits (an empty draft equals "off")."""
+    if sent is None or not sent.enabled:
+        current = draft.without_expired(now)
+        return not current.rules and current.input_policy == "accept" \
+            and current.forward_policy == "accept"
+    return policy_key(draft, now) == policy_key(sent, now)
+
+
+def policy_key(policy: PortPolicy | None, now: float) -> str:
+    """Identity of what is loaded at ``now`` (rules that already expired do not count)."""
+    return "off" if policy is None else policy.effective_key(now)
 
 
 def _host_network(address: Any) -> Any:
@@ -287,6 +368,22 @@ def _proposal_values(item: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+async def push_policy(service: FirewallService, state_ports: Any, *,
+                      rollback_seconds: int | None) -> dict[str, Any]:
+    """Send dynamic defense + this port policy to the helper (caller holds the lock)."""
+    settings = await asyncio.to_thread(service.settings)
+    state = await asyncio.to_thread(service.desired, settings, ports=state_ports)
+    payload = state.to_payload()
+    if rollback_seconds is not None:
+        payload["rollback_seconds"] = rollback_seconds
+    result = await service.client.request("POST", "/v1/apply", payload)
+    service.applied_hash = service.helper_hash = str(result.get("state_hash"))
+    service.last_apply_at = time.time()
+    service.last_apply_error = None
+    service.last_checked_at = None
+    return result
+
+
 def register_port_routes(router: APIRouter, ctx: ModuleContext, service: FirewallService, *,
                          reader: Callable[[Request], Any], writer: Callable[[Request], Any],
                          body: Callable[[Request], Any],
@@ -300,17 +397,7 @@ def register_port_routes(router: APIRouter, ctx: ModuleContext, service: Firewal
         return ctx.error_payload(exc.code, exc.message, exc.status_code)
 
     async def push(state_ports: Any, *, rollback_seconds: int | None) -> dict[str, Any]:
-        settings = await asyncio.to_thread(service.settings)
-        state = await asyncio.to_thread(service.desired, settings, ports=state_ports)
-        payload = state.to_payload()
-        if rollback_seconds is not None:
-            payload["rollback_seconds"] = rollback_seconds
-        result = await service.client.request("POST", "/v1/apply", payload)
-        service.applied_hash = service.helper_hash = str(result.get("state_hash"))
-        service.last_apply_at = time.time()
-        service.last_apply_error = None
-        service.last_checked_at = None
-        return result
+        return await push_policy(service, state_ports, rollback_seconds=rollback_seconds)
 
     # ---- draft: rules ----
 
@@ -552,6 +639,10 @@ def register_port_routes(router: APIRouter, ctx: ModuleContext, service: Firewal
                                                       {"open": False, "reason": "undo"})
                 state = await asyncio.to_thread(ports.state)
                 lkg = (result.get("ports") or {}).get("lkg") if isinstance(result, dict) else None
+                change_id = (state["pending"] or {}).get("change_id")
+                if change_id and ports.quick is not None:
+                    # "Undo now" on a quick change also takes it out of the draft.
+                    await asyncio.to_thread(ports.quick.revert_draft, str(change_id), "undone")
                 state["pending"], state["confirmed"] = None, lkg
                 state["last_rollback"] = result.get("rollback") if isinstance(result, dict) \
                     else None

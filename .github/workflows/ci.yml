@@ -212,6 +212,9 @@ jobs:
   # and the whole stack works end to end: the panel boots alone, the wizard's
   # files deploy npm, PyPI and S3, and real packages install through them.
   split-images:
+    # PAUSED during development: images are built and checked locally
+    # (scripts/publish_images.py). Remove this line to build them in CI again.
+    if: false
     runs-on: ubuntu-latest
     needs: [control-plane, admin-ui, verdaccio, postgres-database, lockfile-hosts, engine-e2e, dns-engine]
     steps:

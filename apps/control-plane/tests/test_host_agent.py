@@ -328,7 +328,7 @@ def test_agent_info_containers_and_summary(tmp_path: Path) -> None:
         assert by_name["dokploy-postgres"]["labels_subset"] == {}
         assert by_name["app-web"]["labels_subset"] == {"com.dokploy.app": "web"}
         assert set(by_name["mrk-mirror-1"]) == {
-            "id", "name", "image", "state", "status", "created", "ports", "labels_subset",
+            "id", "name", "image", "state", "status", "health", "created", "ports", "labels_subset",
             "protected", "image_id", "networks",
         }
 

@@ -170,18 +170,25 @@ class PortRule:
     action: str = "accept"
     log: bool = False
     log_rate: int = 10
+    # Temporary rule: rendered only while ``now < expires_at`` (None = permanent). The
+    # expiry is part of the policy identity, so an expiring rule never needs a rollback.
+    expires_at: int | None = None
 
     @classmethod
     def from_payload(cls, payload: object) -> PortRule:
         if not isinstance(payload, dict):
             raise PortError("each rule must be an object")
         unknown = set(payload) - {"id", "protocol", "ports", "sources", "scope", "action",
-                                  "log", "log_rate"}
+                                  "log", "log_rate", "expires_at"}
         if unknown:
             raise PortError(f"unknown rule field: {sorted(unknown)[0]}")
         rule_id = payload.get("id")
         if not isinstance(rule_id, str) or not RULE_ID.fullmatch(rule_id):
             raise PortError("rule id must be 1..32 of a-z 0-9 -")
+        expires = payload.get("expires_at")
+        if expires is not None and (not isinstance(expires, int) or isinstance(expires, bool)
+                                    or not 0 < expires < 2**40):
+            raise PortError("expires_at must be a unix time or null")
         return cls(
             id=rule_id,
             protocol=_choice(payload, "protocol", PROTOCOLS, "tcp"),
@@ -191,15 +198,22 @@ class PortRule:
             action=_choice(payload, "action", ACTIONS, "accept"),
             log=_flag(payload, "log", False),
             log_rate=_rate(payload.get("log_rate", 10), "log_rate"),
+            expires_at=expires,
         )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "id": self.id, "protocol": self.protocol, "ports": format_ports(self.ports),
             "sources": None if self.sources is None else [str(item) for item in self.sources],
             "scope": self.scope, "action": self.action, "log": self.log,
             "log_rate": self.log_rate,
         }
+        if self.expires_at is not None:  # omitted when permanent: keeps older keys stable
+            payload["expires_at"] = self.expires_at
+        return payload
+
+    def active(self, now: float | None) -> bool:
+        return self.expires_at is None or now is None or now < self.expires_at
 
     def protocols(self) -> tuple[str, ...]:
         return ("tcp", "udp") if self.protocol == "both" else (self.protocol,)
@@ -310,10 +324,36 @@ class PortPolicy:
         canonical = json.dumps(self._policy_payload(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 
+    def without_expired(self, now: float) -> PortPolicy:
+        """The same policy minus rules whose expiry has passed (what is really loaded)."""
+        return PortPolicy(
+            enabled=self.enabled, input_policy=self.input_policy,
+            forward_policy=self.forward_policy, trust_docker_bridges=self.trust_docker_bridges,
+            allow_icmp=self.allow_icmp, log_drops=self.log_drops, log_rate=self.log_rate,
+            rules=[rule for rule in self.rules if rule.active(now)],
+            temp_allow=list(self.temp_allow),
+        )
+
+    def effective_key(self, now: float) -> str:
+        """``risk_key`` of what is loaded at ``now``: equal for two policies that differ
+        only by rules that already expired (the panel's "draft differs" check)."""
+        return self.without_expired(now).risk_key()
+
+    def next_expiry(self, after: float) -> int | None:
+        """The first rule expiry later than ``after`` (the helper re-renders then)."""
+        times = [rule.expires_at for rule in self.rules
+                 if rule.expires_at is not None and rule.expires_at > after]
+        return min(times) if times else None
+
+    def permanent(self) -> PortPolicy:
+        """The policy once every temporary rule has expired."""
+        return self.without_expired(float(2**41))
+
     # ----- simulation (lockout checks) -------------------------------------------
     def verdict(self, chain: str, protocol: str, port: int, address: IPAddress | None, *,
-                include_temp: bool = False) -> str:
-        """What a NEW connection gets from our chain (first match wins, like nft)."""
+                include_temp: bool = False, now: float | None = None) -> str:
+        """What a NEW connection gets from our chain (first match wins, like nft).
+        With ``now``, rules that expired by then are skipped."""
         if not self.enabled:
             return "accept"
         if include_temp and address is not None and any(
@@ -321,17 +361,19 @@ class PortPolicy:
         ):
             return "accept"
         for rule in self.rules:
-            if rule.in_chain(chain) and rule.matches(protocol, port, address):
+            if rule.active(now) and rule.in_chain(chain) and rule.matches(protocol, port,
+                                                                           address):
                 return rule.action
         return self.input_policy if chain == CHAIN_INPUT else self.forward_policy
 
-    def reachable_somewhere(self, chain: str, protocol: str, port: int) -> bool:
+    def reachable_somewhere(self, chain: str, protocol: str, port: int, *,
+                            now: float | None = None) -> bool:
         """True when at least one source can open a new connection to this port."""
         if not self.enabled:
             return True
         for rule in self.rules:
-            if not rule.in_chain(chain) or protocol not in rule.protocols() \
-                    or not port_in(rule.ports, port):
+            if not rule.active(now) or not rule.in_chain(chain) \
+                    or protocol not in rule.protocols() or not port_in(rule.ports, port):
                 continue
             if rule.action == "accept":
                 return True
@@ -401,7 +443,10 @@ def _rule_lines(rule: PortRule, chain: str) -> list[str]:
     return lines
 
 
-def render_chains(policy: PortPolicy) -> list[str]:
+def render_chains(policy: PortPolicy, now: float | None = None) -> list[str]:
+    """Chains of the policy; with ``now``, expired temporary rules are left out."""
+    if now is not None:
+        policy = policy.without_expired(now)
     drop_log = f'limit rate {policy.log_rate}/minute burst 5 packets log prefix'
     lines = [
         f"\tchain {CHAIN_INPUT} {{",

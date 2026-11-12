@@ -39,18 +39,38 @@ import BackupRoundedIcon from "@mui/icons-material/BackupRounded";
 import AdminPanelSettingsRoundedIcon from "@mui/icons-material/AdminPanelSettingsRounded";
 import DataObjectRoundedIcon from "@mui/icons-material/DataObjectRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import LockResetRoundedIcon from "@mui/icons-material/LockResetRounded";
 import { ApiError, getJson, isAbortError, mutateJson } from "./api";
 import type { Language } from "./i18n";
 import {
-  ActionWizard, CopyField, EmptyState, FriendlyError, HelpTip, KeyValueList, Ltr, Notice, RelativeTime, SecretOnce, SectionCard,
-  StatusPill, Term, useConfirmAction, useKit, useUndoSnackbar, ChoiceCards, type WizardStep
+  ActionWizard, CopyField, EmptyState, FriendlyError, HelpTip, KeyValueList, Ltr, Notice, PasswordDialog, PasswordInput, RelativeTime,
+  SecretOnce, SectionCard, StatusPill, Term, passwordProblem, suggestPassword, useConfirmAction, useKit, useUndoSnackbar, ChoiceCards,
+  type PasswordRules, type WizardStep
 } from "./kit";
 import { nameConfirmation, pick, say, type Bi } from "./copy";
 
 export type S3Key = { access_key_id: string; enabled: boolean; created_at: number | string | null; last_used_at: number | string | null };
 export type S3Identity = { id: string; name: string; enabled: boolean; policy_template: Template; buckets: string[]; policy: unknown; keys: S3Key[]; created_at: number | string | null };
 export type Template = "read_only" | "read_write" | "admin" | "backup_client" | "custom";
-export type NewKey = { access_key_id: string; secret_access_key: string };
+export type NewKey = { access_key_id: string; secret_access_key: string; changed?: boolean };
+
+/** The engine accepts 8-128 printable characters without spaces for a secret key. */
+export const S3_SECRET_RULES: PasswordRules = { minLength: 8, maxLength: 128, asciiOnly: true };
+export const S3_SECRET_LENGTH = 40;
+
+export function suggestSecretKey() {
+  return suggestPassword(S3_SECRET_LENGTH);
+}
+
+export function secretKeyProblem(language: Language, value: string) {
+  return passwordProblem(language, value, S3_SECRET_RULES);
+}
+
+/** The secret-key field of a new key: a suggestion the user may keep or replace. */
+export function SecretKeyInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const { language } = useKit();
+  return <PasswordInput value={value} onChange={onChange} label={pick(language, T.secretKey)} helperText={pick(language, T.secretHint)} rules={S3_SECRET_RULES} suggestLength={S3_SECRET_LENGTH} />;
+}
 type Connection = { endpoint: string; endpoint_is_fallback?: boolean; internal_endpoint?: string | null; region: string; path_style: boolean; snippets: Record<string, string> };
 
 const BASE = "/api/v1/s3";
@@ -146,6 +166,15 @@ const T = {
   secretBody: { fa: "این دو مقدار را در تنظیمات برنامه بگذارید. رمز کلید فقط همین یک بار نمایش داده می‌شود؛ همین حالا کپی کنید.", en: "Put both values in your app's settings. The secret is shown only this once; copy it now." },
   accessKey: { fa: "کلید دسترسی (Access Key)", en: "Access Key ID" },
   secretKey: { fa: "رمز کلید (Secret Key)", en: "Secret Access Key" },
+  secretHint: { fa: "یک رمز قوی پیشنهاد شده است. می‌توانید همین را نگه دارید یا رمز خودتان را بنویسید.", en: "A strong secret is suggested. Keep it or type your own." },
+  newKeyTitle: { fa: "کلید تازه برای «{name}»", en: "New key for “{name}”" },
+  newKeyHint: { fa: "شناسه کلید خودکار ساخته می‌شود. رمز کلید را می‌توانید خودتان انتخاب کنید.", en: "The key ID is made automatically. You can choose the secret yourself." },
+  makeKey: { fa: "ساخت کلید", en: "Create key" },
+  changeSecret: { fa: "عوض کردن رمز کلید", en: "Change secret" },
+  changeSecretTitle: { fa: "رمز تازه برای کلید «…{last}»", en: "New secret for key “…{last}”" },
+  changeSecretHint: { fa: "شناسه کلید همان می‌ماند. رمز قبلی بلافاصله از کار می‌افتد؛ رمز تازه را در برنامه‌ها بگذارید.", en: "The key ID stays the same. The old secret stops working at once; put the new one in your apps." },
+  saveSecret: { fa: "ذخیره رمز", en: "Save secret" },
+  secretChangedTitle: { fa: "رمز کلید عوض شد", en: "The secret was changed" },
   connect: { fa: "اتصال ابزارها", en: "Connect a tool" },
   connectHint: { fa: "آدرس و تنظیمات آماده برای ابزارهای رایج. رمز کلید را همان موقع ساختن کلید کپی کرده‌اید.", en: "Address and ready settings for common tools. You copied the secret when you made the key." },
   bucket: { fa: "پوشه اصلی", en: "Bucket" },
@@ -222,6 +251,7 @@ function IdentityWizard({ bucketNames, editing, presetBuckets, onClose, onDone }
   const [buckets, setBuckets] = useState<string[]>(editing?.buckets ?? presetBuckets ?? (bucketNames.length === 1 ? bucketNames : []));
   const [policy, setPolicy] = useState(editing?.policy ? JSON.stringify(editing.policy, null, 2) : POLICY_EXAMPLE);
   const [withKey, setWithKey] = useState(!editing);
+  const [secretKey, setSecretKey] = useState(suggestSecretKey);
   const needsBuckets = template !== "admin" && template !== "custom";
   const shown = templates.includes(template) ? templates : [...templates, template];
 
@@ -282,13 +312,17 @@ function IdentityWizard({ bucketNames, editing, presetBuckets, onClose, onDone }
       key: "buckets",
       title: pick(language, T.stepBuckets),
       hint: needsBuckets ? pick(language, T.stepBucketsHint) : undefined,
-      validate: () => (needsBuckets && buckets.length === 0 ? pick(language, T.bucketsRequired) : null),
+      validate: () => {
+        if (needsBuckets && buckets.length === 0) return pick(language, T.bucketsRequired);
+        return !editing && withKey ? secretKeyProblem(language, secretKey) : null;
+      },
       render: () => (
         <Stack spacing={1.5}>
           {needsBuckets ? <BucketPicker bucketNames={bucketNames} value={buckets} onChange={setBuckets} /> : <Notice>{pick(language, T.everyBucket)}</Notice>}
           {!editing && isAdvanced && (
             <FormControlLabel control={<Checkbox checked={withKey} onChange={(event) => setWithKey(event.target.checked)} />} label={pick(language, T.createKeyNow)} />
           )}
+          {!editing && withKey && <SecretKeyInput value={secretKey} onChange={setSecretKey} />}
         </Stack>
       )
     }
@@ -304,7 +338,9 @@ function IdentityWizard({ bucketNames, editing, presetBuckets, onClose, onDone }
     }
     const created = await mutateJson<S3Identity | null>(`${BASE}/identities`, { method: "POST", body });
     let secret: NewKey | null = null;
-    if (withKey && created?.id) secret = await mutateJson<NewKey>(`${BASE}/identities/${encodeURIComponent(created.id)}/keys`, { method: "POST" });
+    if (withKey && created?.id) {
+      secret = await mutateJson<NewKey>(`${BASE}/identities/${encodeURIComponent(created.id)}/keys`, { method: "POST", body: { secret_access_key: secretKey } });
+    }
     onDone(say(language, T.created, { name: name.trim() }), secret);
   };
 
@@ -326,7 +362,7 @@ export function KeySecretDialog({ secret, onClose }: { secret: NewKey | null; on
   return (
     <SecretOnce
       open={secret !== null}
-      title={pick(language, T.secretTitle)}
+      title={pick(language, secret?.changed ? T.secretChangedTitle : T.secretTitle)}
       body={pick(language, T.secretBody)}
       items={secret ? [
         { label: pick(language, T.accessKey), value: secret.access_key_id },
@@ -338,10 +374,10 @@ export function KeySecretDialog({ secret, onClose }: { secret: NewKey | null; on
 }
 
 /** Create one identity + key in one go (used by the bucket wizard). */
-export async function createKeyFor(name: string, bucket: string, template: Exclude<Template, "custom" | "admin">): Promise<NewKey | null> {
+export async function createKeyFor(name: string, bucket: string, template: Exclude<Template, "custom" | "admin">, secretKey?: string): Promise<NewKey | null> {
   const created = await mutateJson<S3Identity | null>(`${BASE}/identities`, { method: "POST", body: { name, policy_template: template, buckets: [bucket] } });
   if (!created?.id) return null;
-  return mutateJson<NewKey>(`${BASE}/identities/${encodeURIComponent(created.id)}/keys`, { method: "POST" });
+  return mutateJson<NewKey>(`${BASE}/identities/${encodeURIComponent(created.id)}/keys`, { method: "POST", body: secretKey ? { secret_access_key: secretKey } : {} });
 }
 
 export function S3Identities({ language, bucketNames, onChanged }: { language: Language; bucketNames: string[]; onChanged?: () => void }) {
@@ -353,6 +389,8 @@ export function S3Identities({ language, bucketNames, onChanged }: { language: L
   const [wizard, setWizard] = useState<{ editing: S3Identity | null } | null>(null);
   const [secret, setSecret] = useState<NewKey | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [newKeyFor, setNewKeyFor] = useState<S3Identity | null>(null);
+  const [changing, setChanging] = useState<{ identity: S3Identity; key: S3Key } | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -454,6 +492,18 @@ export function S3Identities({ language, bucketNames, onChanged }: { language: L
                           slotProps={{ input: { "aria-label": `${pick(language, T.on)} · ${key.access_key_id}` } }}
                         />
                       )}
+                      <Tooltip title={pick(language, T.changeSecret)}>
+                        <span>
+                          <IconButton
+                            aria-label={`${pick(language, T.changeSecret)} · ${last4(key.access_key_id)}`}
+                            disabled={busy === identity.id}
+                            sx={{ width: 44, height: 44 }}
+                            onClick={() => setChanging({ identity, key })}
+                          >
+                            <LockResetRoundedIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                       <Tooltip title={pick(language, T.deleteKey)}>
                         <span>
                           <IconButton
@@ -479,9 +529,7 @@ export function S3Identities({ language, bucketNames, onChanged }: { language: L
                     startIcon={busy === identity.id ? <CircularProgress size={14} /> : <KeyRoundedIcon />}
                     disabled={busy === identity.id}
                     sx={{ minHeight: 44 }}
-                    onClick={() => void act(identity.id, async () => {
-                      setSecret(await mutateJson<NewKey>(`${identityPath(identity)}/keys`, { method: "POST" }));
-                    })}
+                    onClick={() => setNewKeyFor(identity)}
                   >
                     {pick(language, T.newKey)}
                   </Button>
@@ -526,6 +574,41 @@ export function S3Identities({ language, bucketNames, onChanged }: { language: L
           }}
         />
       )}
+      <PasswordDialog
+        open={newKeyFor !== null}
+        title={say(language, T.newKeyTitle, { name: newKeyFor?.name ?? "" })}
+        hint={pick(language, T.newKeyHint)}
+        label={pick(language, T.secretKey)}
+        saveLabel={pick(language, T.makeKey)}
+        rules={S3_SECRET_RULES}
+        suggestLength={S3_SECRET_LENGTH}
+        onClose={() => setNewKeyFor(null)}
+        onSubmit={async (value) => {
+          if (!newKeyFor) return;
+          const created = await mutateJson<NewKey>(`${identityPath(newKeyFor)}/keys`, { method: "POST", body: { secret_access_key: value } });
+          setNewKeyFor(null);
+          setSecret(created);
+          await load();
+          onChanged?.();
+        }}
+      />
+      <PasswordDialog
+        open={changing !== null}
+        title={say(language, T.changeSecretTitle, { last: changing ? last4(changing.key.access_key_id) : "" })}
+        hint={pick(language, T.changeSecretHint)}
+        label={pick(language, T.secretKey)}
+        saveLabel={pick(language, T.saveSecret)}
+        rules={S3_SECRET_RULES}
+        suggestLength={S3_SECRET_LENGTH}
+        onClose={() => setChanging(null)}
+        onSubmit={async (value) => {
+          if (!changing) return;
+          const path = `${identityPath(changing.identity)}/keys/${encodeURIComponent(changing.key.access_key_id)}/secret`;
+          const result = await mutateJson<NewKey>(path, { method: "POST", body: { secret_access_key: value } });
+          setChanging(null);
+          setSecret({ access_key_id: result?.access_key_id ?? changing.key.access_key_id, secret_access_key: result?.secret_access_key ?? value, changed: true });
+        }}
+      />
       <KeySecretDialog secret={secret} onClose={() => setSecret(null)} />
       {dialog}
       {snackbar}

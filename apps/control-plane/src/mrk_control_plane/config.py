@@ -39,7 +39,7 @@ IMAGE_ENV_DEFAULTS: dict[str, str] = {
     "MRK_PYPI_ROUTER_READ_TIMEOUT": "90",
     "MRK_PYPI_REQUEST_TIMEOUT": "900",
     "MRK_AUTH_COOKIE_SECURE": "true",
-    "MRK_SESSION_TTL_SECONDS": "28800",
+    "MRK_SESSION_TTL_SECONDS": "43200",
     "MRK_HOST": "0.0.0.0",  # noqa: S104 - container listener default
     "MRK_PORT": "8080",
 }
@@ -223,7 +223,11 @@ class Settings:
     pypi_router_health_host: str = "127.0.0.1"
     pypi_router_health_port: int = 3142
     auth_cookie_secure: bool = True
-    session_ttl_seconds: int = 28800
+    # Idle window (sliding); "keep me signed in" uses the longer remember window;
+    # nobody stays signed in past the maximum age.
+    session_ttl_seconds: int = 43200
+    session_remember_ttl_seconds: int = 7 * 86400
+    session_max_age_seconds: int = 30 * 86400
     build_commit: str = "unknown"
     build_date: str = "unknown"
     host: str = "0.0.0.0"  # noqa: S104 - required inside the container network namespace
@@ -264,11 +268,11 @@ class Settings:
         if environment == "production" and "*" in cors_origins:
             raise ValueError("wildcard CORS origins are forbidden in production")
         try:
-            session_ttl_seconds = int(_getenv("MRK_SESSION_TTL_SECONDS", "28800"))
+            session_ttl_seconds = int(_getenv("MRK_SESSION_TTL_SECONDS", "43200"))
         except ValueError as exc:
             raise ValueError("MRK_SESSION_TTL_SECONDS must be an integer") from exc
-        if not 900 <= session_ttl_seconds <= 604800:
-            raise ValueError("MRK_SESSION_TTL_SECONDS must be between 900 and 604800")
+        if not 900 <= session_ttl_seconds <= 2592000:
+            raise ValueError("MRK_SESSION_TTL_SECONDS must be between 900 and 2592000")
         try:
             npm_health_address = ipaddress.ip_address(npm_health_host)
         except ValueError as exc:
@@ -328,6 +332,12 @@ class Settings:
             pypi_router_health_port=_port("MRK_PYPI_ROUTER_PORT", 3142),
             auth_cookie_secure=_boolean("MRK_AUTH_COOKIE_SECURE", environment == "production"),
             session_ttl_seconds=session_ttl_seconds,
+            session_remember_ttl_seconds=_bounded_int(
+                "MRK_SESSION_REMEMBER_TTL_SECONDS", 7 * 86400, 900, 365 * 86400
+            ),
+            session_max_age_seconds=_bounded_int(
+                "MRK_SESSION_MAX_AGE_SECONDS", 30 * 86400, 3600, 365 * 86400
+            ),
             build_commit=_getenv("MRK_BUILD_COMMIT", "unknown").strip() or "unknown",
             build_date=_getenv("MRK_BUILD_DATE", "unknown").strip() or "unknown",
             host=_getenv(

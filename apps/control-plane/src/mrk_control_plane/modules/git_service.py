@@ -24,6 +24,8 @@ import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..auth import FieldError
+from ..credential_policy import check_password
 from ..module_context import ModuleContext
 
 STATE_FILE = "git.json"
@@ -36,6 +38,8 @@ _LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,38}$")
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}$")
 _INTERVAL = re.compile(r"^(?:0|(?:[0-9]{1,3}h)?(?:[0-9]{1,2}m)?)$")  # "0" = manual sync only
 MAX_BODY = 4 * 1024 * 1024
+GITEA_MIN_PASSWORD = 8  # Gitea's default MIN_PASSWORD_LENGTH
+GITEA_MAX_PASSWORD = 255
 
 # Tests replace this with a factory returning e.g. httpx.MockTransport(fake_gitea).
 TRANSPORT_FACTORY: Any = None
@@ -311,18 +315,42 @@ class GitService:
         payload = await self.call("GET", "/admin/users", params={"limit": 100})
         return [_user(item) for item in payload or []]
 
+    @staticmethod
+    def _password(password: str | None) -> str:
+        """The operator's own password (checked) or a generated one."""
+        if password is None or password == "":
+            return secrets.token_urlsafe(18)
+        try:
+            return check_password(password, min_length=GITEA_MIN_PASSWORD,
+                                  max_length=GITEA_MAX_PASSWORD)
+        except FieldError as exc:
+            raise GitError(exc.code, 422, exc.message, fields=exc.fields) from None
+
+    async def set_password(self, login: str, password: str | None,
+                           must_change: bool = True) -> dict[str, Any]:
+        """Give a Gitea user a new password (the operator's own or a generated one)."""
+        if not _LOGIN.match(login) or login == ADMIN_USER:
+            raise GitError("validation_error", 422, "invalid user name",
+                           fields=[{"field": "login", "reason_code": "invalid"}])
+        password = self._password(password)
+        await self.call("PATCH", f"/admin/users/{quote(login, safe='')}", json_body={
+            "login_name": login, "source_id": 0, "password": password,
+            "must_change_password": must_change})
+        return {"login": login, "password": password, "must_change_password": must_change}
+
     async def create_user(self, login: str, email: str, full_name: str,
-                          admin: bool) -> dict[str, Any]:
+                          admin: bool, password: str | None = None,
+                          must_change: bool = True) -> dict[str, Any]:
         if not _LOGIN.match(login) or login == ADMIN_USER:
             raise GitError("validation_error", 422, "invalid user name",
                            fields=[{"field": "login", "reason_code": "invalid"}])
         if not _EMAIL.match(email):
             raise GitError("validation_error", 422, "invalid email",
                            fields=[{"field": "email", "reason_code": "invalid"}])
-        password = secrets.token_urlsafe(18)
+        password = self._password(password)
         payload = await self.call("POST", "/admin/users", ok=(201,), json_body={
             "username": login, "email": email, "full_name": full_name[:100],
-            "password": password, "must_change_password": True, "send_notify": False,
+            "password": password, "must_change_password": must_change, "send_notify": False,
             "visibility": "private"})
         if admin:
             await self.call("PATCH", f"/admin/users/{quote(login, safe='')}",
@@ -375,6 +403,15 @@ class UserBody(BaseModel):
     email: str = Field(min_length=3, max_length=255)
     full_name: str = Field(default="", max_length=100)
     admin: bool = False
+    # Optional: the operator's own password; omitted or empty = generated.
+    password: str | None = Field(default=None, max_length=GITEA_MAX_PASSWORD)
+    must_change_password: bool = True
+
+
+class PasswordBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str | None = Field(default=None, max_length=GITEA_MAX_PASSWORD)
+    must_change_password: bool = True
 
 
 class OrgBody(BaseModel):
@@ -473,11 +510,26 @@ def register(ctx: ModuleContext) -> None:
     async def git_create_user(request: Request, body: UserBody):
         principal = writer(request)
         try:
-            result = await service.create_user(body.login, body.email, body.full_name, body.admin)
+            result = await service.create_user(body.login, body.email, body.full_name, body.admin,
+                                               body.password, body.must_change_password)
         except GitError as exc:
             await audit(principal, "git.user.create", body.login, "failure")
             return failure(exc)
         await audit(principal, "git.user.create", body.login)
+        return result
+
+    @router.post("/users/{login}/password")
+    async def git_user_password(login: str, request: Request, body: PasswordBody | None = None):
+        principal = writer(request)
+        try:
+            result = await service.set_password(
+                login, body.password if body else None,
+                body.must_change_password if body else True)
+        except GitError as exc:
+            await audit(principal, "git.user.password", login, "failure")
+            return failure(exc)
+        # The password is in this response only; the audit names the user, never the value.
+        await audit(principal, "git.user.password", login)
         return result
 
     @router.get("/orgs")

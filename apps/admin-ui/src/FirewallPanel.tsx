@@ -238,6 +238,9 @@ const COPY = {
   ev_ports_confirm: { fa: "قوانین پورت تأیید شد و ماندگار است.", en: "Port rules were confirmed and kept." },
   ev_ports_rollback: { fa: "قوانین پورت به نسخه تأییدشده قبلی برگشت.", en: "Port rules went back to the last confirmed version." },
   ev_ports_disable: { fa: "قوانین پورت خاموش شد.", en: "Port rules were turned off." },
+  ev_ports_quick: { fa: "یک تغییر سریع پورت اعمال شد.", en: "A quick port change was applied." },
+  ev_ports_undo: { fa: "یک تغییر سریع پورت برگردانده شد.", en: "A quick port change was undone." },
+  ev_ports_expire: { fa: "زمان قانون موقت «{why}» تمام شد و برداشته شد.", en: "The temporary rule “{why}” ran out and was removed." },
   allowNoPorts: { fa: "این فهرست فقط جلوی مسدود شدن نشانی را می‌گیرد و هیچ پورتی را باز نمی‌کند؛ باز و بسته کردن پورت‌ها در «پورت‌ها و سرویس‌ها» است.", en: "This list only keeps an address from being blocked; it never opens a port. Opening and closing ports is under “Ports and services”." },
   ev_other: { fa: "یک تغییر در دیوار آتش ثبت شد.", en: "A firewall change was recorded." },
   because: { fa: " (به خاطر «{rule}»)", en: " (because of “{rule}”)" },
@@ -1204,6 +1207,9 @@ function HistoryCard({ rulesById }: { rulesById: Map<string, Rule> }) {
       case "ports_confirm": return pick(language, COPY.ev_ports_confirm);
       case "ports_rollback": return pick(language, COPY.ev_ports_rollback);
       case "ports_disable": return pick(language, COPY.ev_ports_disable);
+      case "ports_quick": return pick(language, COPY.ev_ports_quick);
+      case "ports_undo": return pick(language, COPY.ev_ports_undo);
+      case "ports_expire": return say(language, COPY.ev_ports_expire, { why: event.reason });
       default: return pick(language, COPY.ev_other);
     }
   };

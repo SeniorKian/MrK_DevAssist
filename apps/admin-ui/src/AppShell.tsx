@@ -56,6 +56,8 @@ import { roleName } from "./copy/roles";
 import { pick } from "./copy/text";
 import { attentionText, useHomeSummary, type HomeAttention } from "./homeSummary";
 import { ChangePasswordDialog, passwordChangedText } from "./ChangePasswordPage";
+import { AccountSecurityDialog } from "./AccountSecurity";
+import PhonelinkLockRoundedIcon from "@mui/icons-material/PhonelinkLockRounded";
 
 // ── Pages ────────────────────────────────────────────────────────────────────
 
@@ -248,6 +250,7 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
   const [bellAnchor, setBellAnchor] = useState<HTMLElement | null>(null);
   const [userAnchor, setUserAnchor] = useState<HTMLElement | null>(null);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [securityOpen, setSecurityOpen] = useState(false);
   const { notify, snackbar } = useUndoSnackbar();
   const build = useBuildCheck();
   const home = useHomeSummary(myOnly ? undefined : 60_000);
@@ -690,6 +693,10 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
           <ListItemIcon><KeyRoundedIcon fontSize="small" /></ListItemIcon>
           <ListItemText>{t("changePassword")}</ListItemText>
         </MenuItem>
+        <MenuItem onClick={() => { setUserAnchor(null); setSecurityOpen(true); }} sx={{ minHeight: 48 }}>
+          <ListItemIcon><PhonelinkLockRoundedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>{language === "fa" ? "امنیت ورود من" : "My sign-in security"}</ListItemText>
+        </MenuItem>
         {utilities.filter((item) => item.key === "settings").map((item) => {
           const Icon = item.icon;
           return (
@@ -719,6 +726,7 @@ export function AppShell({ language, colorMode, user, onUnauthorized, onLogout, 
         }}
       />
 
+      <AccountSecurityDialog open={securityOpen} language={language} onClose={() => setSecurityOpen(false)} />
       <ChangePasswordDialog
         open={passwordOpen}
         language={language}

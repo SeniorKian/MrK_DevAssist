@@ -964,3 +964,40 @@ def test_gc_removes_stale_uploads_and_trash(s3: Harness) -> None:
     files = [p for p in (s3.settings.buckets_dir / "backups" / "objects").rglob("*") if p.is_file()]
     assert len(files) == 1
     assert client.get_object(Bucket="backups", Key="k")["Body"].read() == b"new"
+
+
+def test_public_bucket_in_a_browser_and_repeated_bucket_name(s3: Harness) -> None:
+    """A browser at a public bucket's root gets index.html or a short page, and a
+    path-style link opened on the bucket's own domain still finds the file."""
+    s3.config["bucket_hosts"] = {"files.example.test": "public-site"}
+    s3.reload()
+    admin = s3.client()
+    admin.put_object(Bucket="public-site", Key="img/a.png", Body=b"PNG")
+    html = {"Accept": "text/html,application/xhtml+xml"}
+    domain = {"Host": "files.example.test"}
+
+    # No index.html: a short page for browsers, the S3 error for S3 clients.
+    page = httpx.get(f"{s3.endpoint}/public-site/", headers=html)
+    assert page.status_code == 200 and "text/html" in page.headers["content-type"]
+    assert "public-site" in page.text and "<script" not in page.text
+    assert httpx.get(f"{s3.endpoint}/public-site/").status_code == 403
+    assert httpx.get(f"{s3.endpoint}/public-site/?list-type=2", headers=html).status_code == 403
+    head = httpx.head(f"{s3.endpoint}/", headers={**html, **domain})
+    assert head.status_code == 200 and int(head.headers["content-length"]) > 0
+    # A private bucket never gets the page.
+    assert httpx.get(f"{s3.endpoint}/backups/", headers=html).status_code == 403
+
+    admin.put_object(Bucket="public-site", Key="index.html", Body=b"<h1>site</h1>",
+                     ContentType="text/html")
+    site = httpx.get(f"{s3.endpoint}/", headers={**html, **domain})
+    assert site.status_code == 200 and site.text == "<h1>site</h1>"
+
+    # /<bucket>/<key> on the bucket's own domain: the key without the bucket name.
+    plain = httpx.get(f"{s3.endpoint}/img/a.png?v=1", headers=domain)
+    doubled = httpx.get(f"{s3.endpoint}/public-site/img/a.png?v=1", headers=domain)
+    assert plain.status_code == doubled.status_code == 200 and doubled.content == b"PNG"
+    # Only on a bucket domain, and only when nothing has the full key.
+    assert httpx.get(f"{s3.endpoint}/public-site/public-site/img/a.png").status_code == 403
+    admin.put_object(Bucket="public-site", Key="public-site/img/a.png", Body=b"REAL")
+    assert httpx.get(f"{s3.endpoint}/public-site/img/a.png", headers=domain).content == b"REAL"
+    assert httpx.get(f"{s3.endpoint}/public-site/missing.png", headers=domain).status_code == 403

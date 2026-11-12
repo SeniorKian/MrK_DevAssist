@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Boolean, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -46,6 +57,15 @@ class Session(Base):
     created_at: Mapped[int] = mapped_column(Integer)
     expires_at: Mapped[int] = mapped_column(Integer, index=True)
     revoked_at: Mapped[int | None] = mapped_column(Integer)
+    # Sliding sessions: ``expires_at`` moves with activity, never past
+    # ``absolute_expires_at``. NULLs (older rows) mean "the configured defaults".
+    last_seen_at: Mapped[int | None] = mapped_column(Integer)
+    idle_seconds: Mapped[int | None] = mapped_column(Integer)
+    absolute_expires_at: Mapped[int | None] = mapped_column(Integer)
+    remember: Mapped[bool | None] = mapped_column(Boolean)
+    auth_method: Mapped[str | None] = mapped_column(String(16))
+    source_ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(200))
 
     user: Mapped[User] = relationship(back_populates="sessions")
 
@@ -456,6 +476,8 @@ class FirewallPortRule(Base):
     created_by_user_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int] = mapped_column(Integer)
+    # Temporary rule (quick actions): enforced until then, removed from the draft after.
+    expires_at: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
 
 
 class VulnIgnore(Base):
@@ -529,6 +551,47 @@ class UserPasswordState(Base):
     reason: Mapped[str | None] = mapped_column(String(32))
     set_at: Mapped[int | None] = mapped_column(Integer)
     changed_at: Mapped[int | None] = mapped_column(Integer)
+
+
+class UserMfa(Base):
+    """Two-step sign-in (TOTP) state. The secrets live in the encrypted SecretStore.
+
+    ``recovery_hashes`` holds SHA-256 digests of the unused recovery codes only;
+    ``last_step`` is the last accepted TOTP time step (a code is never accepted twice).
+    """
+
+    __tablename__ = "user_mfa"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    secret_ref: Mapped[str | None] = mapped_column(String(64))
+    pending_ref: Mapped[str | None] = mapped_column(String(64))
+    pending_created_at: Mapped[int | None] = mapped_column(Integer)
+    enabled_at: Mapped[int | None] = mapped_column(Integer)
+    last_step: Mapped[int] = mapped_column(BigInteger, default=0)
+    recovery_hashes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    recovery_generated_at: Mapped[int | None] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class UserIdentity(Base):
+    """An external (OpenID Connect) identity linked to a local account."""
+
+    __tablename__ = "user_identities"
+    __table_args__ = (
+        UniqueConstraint("issuer", "subject", name="uq_user_identities_issuer_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    issuer: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(254))
+    created_at: Mapped[int] = mapped_column(Integer)
+    last_login_at: Mapped[int | None] = mapped_column(Integer)
 
 
 class UserInvite(Base):

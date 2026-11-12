@@ -47,7 +47,9 @@ import { ApiError, getJson, hasPermission, isAbortError, mutateJson } from "./ap
 import { formatBytes, formatNumber } from "./format";
 import type { Language } from "./i18n";
 import { useVisibleInterval } from "./polling";
-import { KeySecretDialog, S3Connect, S3Identities, TEMPLATE_CARDS, createKeyFor, type NewKey } from "./S3Access";
+import {
+  KeySecretDialog, S3Connect, S3Identities, SecretKeyInput, TEMPLATE_CARDS, createKeyFor, secretKeyProblem, suggestSecretKey, type NewKey
+} from "./S3Access";
 import { S3AdminBucketDomains } from "./S3AdminBucketDomains";
 import { S3BucketRoutes } from "./S3BucketRoutes";
 import { S3DokployDeploy } from "./S3DokployDeploy";
@@ -316,6 +318,7 @@ function CreateBucketWizard({ isOwner, existing, onClose, onDone }: {
   const [linkMode, setLinkMode] = useState<"ro" | "rw">("ro");
   const [quota, setQuota] = useState<number | null>(null);
   const [keyChoice, setKeyChoice] = useState<KeyChoice>("none");
+  const [secretKey, setSecretKey] = useState(suggestSecretKey);
   const created = useRef<{ name: string; warning: boolean } | null>(null);
   const { links, error: linksError, retry } = useLinks(isAdvanced && mode === "linked");
   const chosenLink = links?.items.find((item) => item.path === linkPath) ?? null;
@@ -390,17 +393,21 @@ function CreateBucketWizard({ isOwner, existing, onClose, onDone }: {
     key: "key",
     title: pick(language, T.stepKey),
     hint: pick(language, T.stepKeyHint),
+    validate: () => (keyChoice !== "none" ? secretKeyProblem(language, secretKey) : null),
     render: () => (
-      <ChoiceCards
-        label={pick(language, T.stepKey)}
-        value={keyChoice}
-        onChange={setKeyChoice}
-        options={[
-          { key: "none" as const, icon: KeyOffRoundedIcon, title: pick(language, T.k_none), body: pick(language, T.kb_none) },
-          { key: "read_write" as const, icon: TEMPLATE_CARDS.read_write.icon, title: pick(language, TEMPLATE_CARDS.read_write.title), body: pick(language, TEMPLATE_CARDS.read_write.body) },
-          { key: "backup_client" as const, icon: TEMPLATE_CARDS.backup_client.icon, title: pick(language, TEMPLATE_CARDS.backup_client.title), body: pick(language, TEMPLATE_CARDS.backup_client.body) }
-        ]}
-      />
+      <Stack spacing={1.5}>
+        <ChoiceCards
+          label={pick(language, T.stepKey)}
+          value={keyChoice}
+          onChange={setKeyChoice}
+          options={[
+            { key: "none" as const, icon: KeyOffRoundedIcon, title: pick(language, T.k_none), body: pick(language, T.kb_none) },
+            { key: "read_write" as const, icon: TEMPLATE_CARDS.read_write.icon, title: pick(language, TEMPLATE_CARDS.read_write.title), body: pick(language, TEMPLATE_CARDS.read_write.body) },
+            { key: "backup_client" as const, icon: TEMPLATE_CARDS.backup_client.icon, title: pick(language, TEMPLATE_CARDS.backup_client.title), body: pick(language, TEMPLATE_CARDS.backup_client.body) }
+          ]}
+        />
+        {keyChoice !== "none" && <SecretKeyInput value={secretKey} onChange={setSecretKey} />}
+      </Stack>
     )
   });
 
@@ -416,7 +423,7 @@ function CreateBucketWizard({ isOwner, existing, onClose, onDone }: {
       created.current = { name, warning: Boolean(result && result.engine_synced === false) };
     }
     let secret: NewKey | null = null;
-    if (keyChoice !== "none") secret = await createKeyFor(`${created.current.name}-${keyChoice === "backup_client" ? "backup" : "app"}`, created.current.name, keyChoice);
+    if (keyChoice !== "none") secret = await createKeyFor(`${created.current.name}-${keyChoice === "backup_client" ? "backup" : "app"}`, created.current.name, keyChoice, secretKey);
     onDone({ ...created.current, secret });
   };
 

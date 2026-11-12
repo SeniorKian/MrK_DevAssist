@@ -9,7 +9,8 @@ import { ConfirmProvider } from "./ConfirmDialog";
 import { AppShell } from "./AppShell";
 import { UiModeProvider } from "./uiMode";
 import { MySpaceProvider } from "./my/MySpaceContext";
-import { Login } from "./Login";
+import { Login, type LoginOutcome, type SsoOption } from "./Login";
+import { ForcedTwoStepPage } from "./AccountSecurity";
 import { Setup, type SetupValues } from "./Setup";
 import { DEFAULT_PASSWORD_POLICY, readAuthFailure, readPasswordPolicy, type AuthFailure, type PasswordPolicy } from "./AuthShell";
 import ChangePasswordPage from "./ChangePasswordPage";
@@ -29,7 +30,44 @@ export type AuthUser = {
   email?: string | null;
   /** Invited accounts must choose their own password before anything else works. */
   must_change_password?: boolean;
+  mfa_enabled?: boolean;
+  /** The two-step sign-in policy covers this account and it is not set up yet. */
+  must_enroll_mfa?: boolean;
 };
+
+const RETURN_KEY = "mrk-return-to";
+
+/** Remember where the person was, so signing in (again) brings them back there. */
+function rememberRoute() {
+  const hash = window.location.hash;
+  if (!hash || hash === "#" || hash === "#/" || hash.startsWith("#/invite/")) return;
+  try {
+    window.sessionStorage.setItem(RETURN_KEY, hash);
+  } catch {
+    // storage may be unavailable
+  }
+}
+
+function takeRememberedRoute(): string | null {
+  try {
+    const value = window.sessionStorage.getItem(RETURN_KEY);
+    window.sessionStorage.removeItem(RETURN_KEY);
+    return value && value.startsWith("#/") ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `?sso=ok|mfa` or `?sso_error=<code>` after the single sign-on round trip; the address is cleaned. */
+function readSsoResult(): { error?: string | null; mfa?: boolean; ok?: boolean } | null {
+  const params = new URLSearchParams(window.location.search);
+  const result = params.get("sso");
+  const error = params.get("sso_error");
+  if (!result && !error) return null;
+  const hash = window.location.hash && window.location.hash !== "#/" ? window.location.hash : "";
+  window.history.replaceState(null, "", `/${hash}`);
+  return { error: error && /^[a-z_]{1,40}$/.test(error) ? error : error ? "sso_failed" : null, mfa: result === "mfa", ok: result === "ok" };
+}
 
 function storedValue<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try {
@@ -66,10 +104,13 @@ export function App() {
   // A team invite link (#/my/team?accept=<token>) opened while signed out (docs/43 §0.1).
   const [joinToken, setJoinToken] = useState<string | null>(() => joinTokenFromHash(window.location.hash));
   const [joinSkipped, setJoinSkipped] = useState(false);
+  const [sso, setSso] = useState<SsoOption | null>(null);
+  const [ssoResult] = useState(() => readSsoResult());
 
   const setCsrf = useCallback((token: string) => setCsrfToken(token), []);
 
   const handleUnauthorized = useCallback(() => {
+    rememberRoute();
     setSessionExpired(true);
     setUser(null);
     setCsrfToken("");
@@ -121,12 +162,24 @@ export function App() {
         const registration = (await registrationResponse.json()) as { enabled: boolean };
         setRegistrationEnabled(registration.enabled);
       }
+      const capabilities = await fetch("/api/v1/auth/capabilities", { headers: { Accept: "application/json" }, cache: "no-store" }).catch(() => null);
+      if (capabilities?.ok) {
+        const payload = (await capabilities.json()) as { oidc?: SsoOption };
+        setSso(payload.oidc ?? null);
+      }
       const response = await fetch("/api/v1/auth/me", {
         headers: { Accept: "application/json" },
         cache: "no-store"
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        rememberRoute();
+        return;
+      }
       const payload = (await response.json()) as { user: AuthUser; csrf_token: string };
+      if (ssoResult?.ok) {
+        const back = takeRememberedRoute();
+        if (back) window.history.replaceState(null, "", back);
+      }
       setUser(payload.user);
       setCsrf(payload.csrf_token);
     } catch {
@@ -134,7 +187,7 @@ export function App() {
     } finally {
       setAuthLoading(false);
     }
-  }, [setCsrf]);
+  }, [setCsrf, ssoResult]);
 
   useEffect(() => void loadSession(), [loadSession]);
 
@@ -171,6 +224,9 @@ export function App() {
     (payload: { user: AuthUser; csrf_token: string; must_change_password?: boolean }) => {
       resetHome();
       resetServices();
+      // Back to where the person was before the sign-in (an expired session keeps its page).
+      const back = takeRememberedRoute();
+      if (back && back !== window.location.hash) window.history.replaceState(null, "", back);
       setUser({ ...payload.user, must_change_password: payload.user.must_change_password ?? payload.must_change_password });
       setCsrf(payload.csrf_token);
       setSessionExpired(false);
@@ -178,11 +234,26 @@ export function App() {
     [setCsrf]
   );
 
-  const login = async (username: string, password: string): Promise<true | AuthFailure> => {
+  const login = async (username: string, password: string, remember: boolean): Promise<LoginOutcome> => {
+    rememberRoute();
     const response = await fetch("/api/v1/auth/login", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password, remember })
+    });
+    if (!response.ok) return readAuthFailure(response);
+    const payload = (await response.json()) as { user?: AuthUser; csrf_token?: string; must_change_password?: boolean; status?: string; challenge?: string };
+    if (payload.status === "mfa_required") return { mfa: payload.challenge ?? null };
+    adoptSession(payload as { user: AuthUser; csrf_token: string; must_change_password?: boolean });
+    return true;
+  };
+
+  const secondStep = async (challenge: string | null, value: { code?: string; recovery_code?: string }, remember: boolean): Promise<true | AuthFailure> => {
+    const response = await fetch("/api/v1/auth/login/mfa", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      // `challenge` null: after single sign-on the server keeps it in a cookie (and its remember choice).
+      body: JSON.stringify(challenge ? { challenge, ...value, remember } : value)
     });
     if (!response.ok) return readAuthFailure(response);
     adoptSession((await response.json()) as { user: AuthUser; csrf_token: string; must_change_password?: boolean });
@@ -399,6 +470,15 @@ export function App() {
         onSignOut={onLogout}
       />
     );
+  } else if (user?.must_enroll_mfa) {
+    content = (
+      <ForcedTwoStepPage
+        language={language}
+        onLanguageChange={toggleLanguage}
+        onDone={() => setUser((current) => (current ? { ...current, must_enroll_mfa: false, mfa_enabled: true } : current))}
+        onSignOut={onLogout}
+      />
+    );
   } else if (user) {
     content = (
       <UiModeProvider userId={user.id} language={language}>
@@ -424,6 +504,9 @@ export function App() {
         language={language}
         expired={sessionExpired}
         onLogin={login}
+        onSecondStep={secondStep}
+        sso={sso}
+        ssoResult={ssoResult}
         registrationEnabled={registrationEnabled}
         onRegister={() => setAuthView("register")}
         onLanguageChange={toggleLanguage}

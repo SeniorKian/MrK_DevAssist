@@ -17,6 +17,7 @@ import CloudSyncRoundedIcon from "@mui/icons-material/CloudSyncRounded";
 import CodeRoundedIcon from "@mui/icons-material/CodeRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
 import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
 import PersonAddRoundedIcon from "@mui/icons-material/PersonAddRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
@@ -26,7 +27,8 @@ import type { Language } from "./i18n";
 import { nameConfirmation, pick, say, type Bi } from "./copy";
 import {
   ActionWizard, Bytes, CopyButton, CopyField, EmptyState, FriendlyError, KeyValueList, Ltr, NameDialog, NoAccess, Notice, Num,
-  OneTimeSecret, RelativeTime, ResponsiveList, SectionCard, StatusPill, useCan, useConfirmAction, useKit, useUndoSnackbar
+  OneTimeSecret, PasswordDialog, PasswordInput, RelativeTime, ResponsiveList, SectionCard, StatusPill, passwordProblem, suggestPassword,
+  useCan, useConfirmAction, useKit, useUndoSnackbar, type PasswordRules
 } from "./kit";
 import { useVisibleInterval } from "./polling";
 
@@ -170,7 +172,8 @@ const T = {
   active: { fa: "فعال", en: "Active" },
   inactive: { fa: "غیرفعال", en: "Inactive" },
   userStep: { fa: "مشخصات", en: "Details" },
-  userStepHint: { fa: "رمز ورود خودکار ساخته می‌شود و فقط یک بار نشان داده می‌شود.", en: "A password is made automatically and shown only once." },
+  userStepHint: { fa: "یک رمز قوی پیشنهاد شده است. می‌توانید همین را نگه دارید یا رمز خودتان را بنویسید.", en: "A strong password is suggested. Keep it or type your own." },
+  mustChange: { fa: "در اولین ورود رمزش را عوض کند", en: "Ask them to change it at first sign-in" },
   login: { fa: "نام کاربری", en: "Username" },
   email: { fa: "ایمیل", en: "Email" },
   fullName: { fa: "نام کامل (دلخواه)", en: "Full name (optional)" },
@@ -181,6 +184,11 @@ const T = {
   userSecretTitle: { fa: "کاربر «{name}» ساخته شد", en: "User “{name}” was created" },
   userSecretBody: { fa: "این رمز را به خود او بدهید. بعد از اولین ورود می‌تواند عوضش کند.", en: "Give this password to them. They can change it after the first sign-in." },
   password: { fa: "رمز ورود", en: "Password" },
+  changePassword: { fa: "عوض کردن رمز", en: "Change password" },
+  changePasswordTitle: { fa: "رمز تازه برای «{name}»", en: "New password for “{name}”" },
+  changePasswordHint: { fa: "رمز قبلی دیگر کار نمی‌کند. او در ورود بعدی باید رمزش را عوض کند.", en: "The old password stops working. They'll be asked to change it at their next sign-in." },
+  savePassword: { fa: "ذخیره رمز", en: "Save password" },
+  passwordChanged: { fa: "رمز «{name}» عوض شد", en: "The password of “{name}” was changed" },
   // Organizations
   orgsTitle: { fa: "سازمان‌ها", en: "Organizations" },
   orgsHint: { fa: "مخزن‌های یک تیم یا شرکت را زیر یک نام جمع کنید.", en: "Group a team's or company's repositories under one name." },
@@ -717,12 +725,17 @@ function MirrorWizard({ open, owners, onClose, onCreated }: { open: boolean; own
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
+const PASSWORD_RULES: PasswordRules = { minLength: 8, maxLength: 255 }; // Gitea's own minimum is 8
+
 function UsersSection({ canWrite, notify }: { canWrite: boolean; notify: Notify }) {
   const { language } = useKit();
   const [rows, setRows] = useState<GitUser[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [open, setOpen] = useState(false);
-  const [secret, setSecret] = useState<{ login: string; password: string } | null>(null);
+  const [secret, setSecret] = useState<{ login: string; password: string; changed?: boolean } | null>(null);
+  const [changing, setChanging] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
+  const [mustChange, setMustChange] = useState(true);
   const [login, setLogin] = useState("");
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
@@ -744,6 +757,8 @@ function UsersSection({ canWrite, notify }: { canWrite: boolean; notify: Notify 
     setEmail("");
     setFullName("");
     setAdmin(false);
+    setPassword(suggestPassword());
+    setMustChange(true);
     setOpen(true);
   };
 
@@ -771,6 +786,11 @@ function UsersSection({ canWrite, notify }: { canWrite: boolean; notify: Notify 
             meta: (row) => (row.email ? <Ltr>{row.email}</Ltr> : row.full_name),
             status: (row) => <StatusPill tone={row.active === false ? "off" : "ok"} label={pick(language, row.active === false ? T.inactive : T.active)} />
           }}
+          actions={canWrite ? [{
+            key: "password", label: pick(language, T.changePassword), icon: KeyRoundedIcon,
+            hidden: (row: GitUser) => !row.login || row.login === "mrk-panel",
+            onClick: (row: GitUser) => setChanging(row.login ?? null)
+          }] : undefined}
           empty={<EmptyState compact title={pick(language, T.emptyUsers)} body={pick(language, T.emptyUsersBody)} action={canWrite ? <Button variant="contained" onClick={start}>{pick(language, T.newUser)}</Button> : undefined} />}
         />
       )}
@@ -787,13 +807,15 @@ function UsersSection({ canWrite, notify }: { canWrite: boolean; notify: Notify 
             validate: () => {
               if (!NAME_RE.test(login.trim())) return pick(language, T.nameRule);
               if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return pick(language, T.emailRule);
-              return null;
+              return passwordProblem(language, password, PASSWORD_RULES);
             },
             render: () => (
               <Stack spacing={2}>
                 <TextField autoFocus label={pick(language, T.login)} value={login} onChange={(event) => setLogin(event.target.value)} slotProps={{ htmlInput: { dir: "ltr", autoComplete: "off" } }} fullWidth />
                 <TextField type="email" label={pick(language, T.email)} value={email} onChange={(event) => setEmail(event.target.value)} slotProps={{ htmlInput: { dir: "ltr" } }} fullWidth />
                 <TextField label={pick(language, T.fullName)} value={fullName} onChange={(event) => setFullName(event.target.value)} fullWidth />
+                <PasswordInput value={password} onChange={setPassword} rules={PASSWORD_RULES} />
+                <FormControlLabel control={<Switch checked={mustChange} onChange={(event) => setMustChange(event.target.checked)} />} label={pick(language, T.mustChange)} />
                 <Box>
                   <FormControlLabel control={<Switch checked={admin} onChange={(event) => setAdmin(event.target.checked)} />} label={pick(language, T.isAdmin)} />
                   <Typography variant="caption" color="text.secondary" component="p">{pick(language, T.isAdminHelp)}</Typography>
@@ -803,7 +825,7 @@ function UsersSection({ canWrite, notify }: { canWrite: boolean; notify: Notify 
           }
         ]}
         onFinish={async () => {
-          const body: Record<string, unknown> = { login: login.trim(), email: email.trim(), admin };
+          const body: Record<string, unknown> = { login: login.trim(), email: email.trim(), admin, password, must_change_password: mustChange };
           if (fullName.trim()) body.full_name = fullName.trim();
           const result = await mutateJson<{ user?: GitUser; password?: string }>(`${API}/users`, { method: "POST", body });
           const created = result?.user?.login ?? login.trim();
@@ -812,9 +834,23 @@ function UsersSection({ canWrite, notify }: { canWrite: boolean; notify: Notify 
           load();
         }}
       />
+      <PasswordDialog
+        open={changing !== null}
+        title={say(language, T.changePasswordTitle, { name: changing ?? "" })}
+        hint={pick(language, T.changePasswordHint)}
+        saveLabel={pick(language, T.savePassword)}
+        rules={PASSWORD_RULES}
+        onClose={() => setChanging(null)}
+        onSubmit={async (value) => {
+          if (!changing) return;
+          const result = await mutateJson<{ login?: string; password?: string }>(`${API}/users/${encodeURIComponent(changing)}/password`, { method: "POST", body: { password: value } });
+          setSecret({ login: changing, password: result?.password ?? value, changed: true });
+          setChanging(null);
+        }}
+      />
       <OneTimeSecret
         open={secret !== null}
-        title={say(language, T.userSecretTitle, { name: secret?.login ?? "" })}
+        title={say(language, secret?.changed ? T.passwordChanged : T.userSecretTitle, { name: secret?.login ?? "" })}
         body={pick(language, T.userSecretBody)}
         items={secret ? [{ label: pick(language, T.login), value: secret.login, ltr: true }, { label: pick(language, T.password), value: secret.password, ltr: true }] : []}
         onClose={() => setSecret(null)}

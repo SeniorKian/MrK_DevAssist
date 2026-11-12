@@ -22,6 +22,7 @@ import {
 } from "./kit";
 import { formatNumber } from "./format";
 import type { Language } from "./i18n";
+import FirewallQuick from "./FirewallQuick";
 
 /**
  * Security › Firewall › «پورت‌ها و سرویس‌ها» (docs/45).
@@ -49,7 +50,7 @@ type PortStatus = {
   configured: boolean; reachable: boolean | null; force_dry_run: boolean; nft_available: boolean | null; settings: PortSettings; active: boolean;
   applied_rules: number; pending: { deadline: number; started_at: number; remaining: number } | null;
   last_rollback: { at: number; reason: string; outcome: string } | null; applied_at: number | null;
-  draft: { rules: number; enabled: number; differs: boolean }; ssh: { ports: number[]; source: "settings" | "server" | "default" };
+  draft: { rules: number; enabled: number; differs: boolean }; ssh: { ports: number[]; source: "admin" | "listener" | "ssh_socket" | "sshd_config" | "assumed" };
   panel_ports: number[]; requester: string | null; problems: Problem[]; warnings: { code: string; name?: string }[]; protected: string[];
 };
 type Preview = { current: string; next: string; diff: string[]; changed: boolean; problems: Problem[]; rules: number; temp_allow: string[]; ssh_ports: number[]; panel_ports: number[] };
@@ -195,10 +196,6 @@ const T = {
   trustBridges: { fa: "کانتینرها همیشه به خود سرور برسند", en: "Containers can always reach the server" },
   allowIcmp: { fa: "پاسخ به «ping»", en: "Answer «ping»" },
   logDrops: { fa: "اتصال‌های ردشده ثبت شوند", en: "Log dropped connections" },
-  sshPorts: { fa: "پورت SSH", en: "SSH port" },
-  sshDetected: { fa: "از تنظیمات SSH سرور خوانده شد: {ports}", en: "Read from the server's SSH settings: {ports}" },
-  sshDefault: { fa: "تنظیمات SSH سرور خوانده نشد؛ 22 فرض شده است.", en: "Couldn't read the server's SSH settings; 22 is assumed." },
-  sshOverride: { fa: "پورت SSH دستی (خالی = خودکار)", en: "SSH port by hand (empty = automatic)" },
   panelPorts: { fa: "پورت‌های دیگر پنل (جدا با کاما)", en: "Other panel ports (comma separated)" },
   panelPortsHint: { fa: "پورتی که الان با آن وارد شده‌اید ({ports}) همیشه بررسی می‌شود.", en: "The port you're using now ({ports}) is always checked." },
   tempAllow: { fa: "نشانی من موقتاً همیشه باز باشد", en: "Keep my address open for a while" },
@@ -358,9 +355,11 @@ export default function FirewallPorts({ canWrite }: { canWrite: boolean }) {
   const [listEditing, setListEditing] = useState<SourceList | "new" | null>(null);
   const [applyOpen, setApplyOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [quickKey, setQuickKey] = useState(0);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
+    setQuickKey((key) => key + 1);
     try {
       const [nextStatus, nextRules, nextLists] = await Promise.all([
         getJson<PortStatus>(`${API}/status`, signal),
@@ -463,6 +462,8 @@ export default function FirewallPorts({ canWrite }: { canWrite: boolean }) {
           )}
         </Stack>
       </SectionCard>
+
+      <FirewallQuick canWrite={canWrite} reloadKey={quickKey} onChanged={() => void load()} renderError={(caught, onClose) => <ErrorView error={caught} onClose={onClose} />} />
 
       <SectionCard
         title={pick(language, T.rulesTitle)}
@@ -733,11 +734,9 @@ function parsePorts(text: string) {
 function SettingsCard({ status, canWrite, onSaved, onError }: { status: PortStatus; canWrite: boolean; onSaved: () => void; onError: (error: unknown) => void }) {
   const { language, isAdvanced } = useKit();
   const [draft, setDraft] = useState<PortSettings>(status.settings);
-  const [sshText, setSshText] = useState(status.settings.ssh_ports.join(","));
   const [panelText, setPanelText] = useState(status.settings.panel_ports.join(","));
   useEffect(() => {
     setDraft(status.settings);
-    setSshText(status.settings.ssh_ports.join(","));
     setPanelText(status.settings.panel_ports.join(","));
   }, [status.settings]);
   const flag = (key: keyof PortSettings, label: Bi, hint?: string) => (
@@ -748,13 +747,14 @@ function SettingsCard({ status, canWrite, onSaved, onError }: { status: PortStat
   );
   const save = async () => {
     try {
-      await mutateJson(`${API}/settings`, { method: "PUT", body: { ...draft, ssh_ports: parsePorts(sshText), panel_ports: parsePorts(panelText) } });
+      const { ssh_ports: _ssh, ...rest } = draft;
+      void _ssh; // the SSH port has its own card (FirewallQuick)
+      await mutateJson(`${API}/settings`, { method: "PUT", body: { ...rest, panel_ports: parsePorts(panelText) } });
       onSaved();
     } catch (caught) {
       if (failed(caught)) onError(caught);
     }
   };
-  const sshLine = status.ssh.source === "default" ? pick(language, T.sshDefault) : say(language, T.sshDetected, { ports: status.ssh.ports.join(", ") });
   return (
     <SectionCard title={pick(language, T.settingsTitle)} hint={pick(language, T.settingsHint)} collapsible>
       <Stack spacing={1.25}>
@@ -764,10 +764,8 @@ function SettingsCard({ status, canWrite, onSaved, onError }: { status: PortStat
         {flag("trust_docker_bridges", T.trustBridges)}
         {flag("allow_icmp", T.allowIcmp)}
         {flag("log_drops", T.logDrops)}
-        <Typography variant="body2" color="text.secondary">{pick(language, T.sshPorts)}: {sshLine}</Typography>
         {isAdvanced && (
           <>
-            <TextField label={pick(language, T.sshOverride)} value={sshText} disabled={!canWrite} onChange={(event) => setSshText(event.target.value)} slotProps={{ htmlInput: { dir: "ltr" } }} />
             <TextField label={pick(language, T.panelPorts)} helperText={say(language, T.panelPortsHint, { ports: status.panel_ports.join(", ") })} value={panelText} disabled={!canWrite} onChange={(event) => setPanelText(event.target.value)} slotProps={{ htmlInput: { dir: "ltr" } }} />
             <NumberInput label={pick(language, T.rollbackSeconds)} value={draft.rollback_seconds} onChange={(value) => setDraft({ ...draft, rollback_seconds: value ?? 120 })} min={30} max={900} integer />
             <NumberInput label={pick(language, T.tempSeconds)} value={draft.temp_allow_seconds} onChange={(value) => setDraft({ ...draft, temp_allow_seconds: value ?? 3600 })} min={300} max={604800} integer />

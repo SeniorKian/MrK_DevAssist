@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import difflib
 import ipaddress
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -43,6 +44,7 @@ SOURCE_KINDS = ("public", "cidrs", "list")
 RULE_ORIGINS = ("manual", "ufw", "paasify")
 MANAGEMENT_LIST = "management"
 DEFAULT_ROLLBACK_SECONDS = 120
+MAX_RULE_LIFETIME = 30 * 86400  # temporary rules: at most 30 days
 
 DEFAULT_PORT_SETTINGS: dict[str, Any] = {
     # Default deny per scope. Off = the chains accept what no rule matches, so turning
@@ -119,7 +121,7 @@ def validate_port_rule(payload: object, *, partial: bool = False) -> dict[str, A
     if not isinstance(payload, dict):
         raise _err("invalid_port_rule", "rule must be an object")
     fields = {"name", "description", "protocol", "ports", "source", "scope", "action",
-              "enabled", "priority", "log", "log_rate"}
+              "enabled", "priority", "log", "log_rate", "expires_at"}
     unknown = set(payload) - fields
     if unknown:
         raise _err("invalid_port_rule", f"unknown field: {sorted(unknown)[0]}")
@@ -173,6 +175,12 @@ def validate_port_rule(payload: object, *, partial: bool = False) -> dict[str, A
         out["log"] = _bool(payload["log"], "log")
     if "log_rate" in payload:
         out["log_rate"] = _int(payload["log_rate"], "log_rate", MIN_LOG_RATE, MAX_LOG_RATE)
+    if "expires_at" in payload:
+        expires = payload["expires_at"]
+        now = int(time.time())
+        if expires is not None:
+            expires = _int(expires, "expires_at", now + 1, now + MAX_RULE_LIFETIME)
+        out["expires_at"] = expires
     return out
 
 
@@ -250,10 +258,13 @@ def load_port_settings(stored: object) -> dict[str, Any]:
 
 
 def compile_policy(rules: Iterable[dict[str, Any]], lists: dict[str, dict[str, Any]],
-                   settings: dict[str, Any], *, temp_allow: Iterable[TempAllow] = ()
-                   ) -> tuple[PortPolicy, list[dict[str, Any]]]:
-    """Enabled draft rules in (priority, created) order -> (policy, warnings)."""
-    ordered = sorted((rule for rule in rules if rule["enabled"]),
+                   settings: dict[str, Any], *, temp_allow: Iterable[TempAllow] = (),
+                   now: float | None = None) -> tuple[PortPolicy, list[dict[str, Any]]]:
+    """Enabled draft rules in (priority, created) order -> (policy, warnings). Temporary
+    rules that already expired (at ``now``, default: the current time) are left out."""
+    current = time.time() if now is None else now
+    ordered = sorted((rule for rule in rules if rule["enabled"] and (
+                         rule.get("expires_at") is None or rule["expires_at"] > current)),
                      key=lambda item: (item["priority"], item["created_at"], item["id"]))
     compiled: list[PortRule] = []
     warnings: list[dict[str, Any]] = []
@@ -270,11 +281,14 @@ def compile_policy(rules: Iterable[dict[str, Any]], lists: dict[str, dict[str, A
                                  "name": rule["name"]})
                 continue
             sources = list(listed["cidrs"])
-        compiled.append(PortRule.from_payload({
+        payload = {
             "id": rule["id"], "protocol": rule["protocol"], "ports": rule["ports"],
             "sources": sources, "scope": rule["scope"], "action": rule["action"],
             "log": rule["log"], "log_rate": rule["log_rate"],
-        }))
+        }
+        if rule.get("expires_at") is not None:
+            payload["expires_at"] = int(rule["expires_at"])
+        compiled.append(PortRule.from_payload(payload))
     if len(ordered) > MAX_RULES:
         warnings.append({"code": "too_many_rules", "max": MAX_RULES})
     policy = PortPolicy(
@@ -333,29 +347,50 @@ def relevant_protected(listening: list[dict[str, Any]] | None, dns_installed: bo
 
 def lockout_problems(policy: PortPolicy, *, probes: list[IPAddress | None],
                      ssh_ports: list[int], panel_ports: list[int], protected: set[str],
-                     allowed_closed: Iterable[str] = ()) -> list[dict[str, Any]]:
+                     allowed_closed: Iterable[str] = (), ssh_require_all: bool = False,
+                     now: float | None = None) -> list[dict[str, Any]]:
     """Everything that would lock an admin or a protected service out. The temporary
-    allow of the requester is deliberately ignored: a permanent rule must exist."""
+    allow of the requester is deliberately ignored: a permanent rule must exist.
+
+    The policy is judged twice: as loaded now and once every temporary rule expired
+    (a temporary allow must not be the only way in; ``later`` marks those problems).
+    ``ssh_require_all``: the admin confirmed these SSH ports, so each must stay open;
+    detected ports only need one of them open.
+    """
     if not policy.enabled:
         return []
+    current = time.time() if now is None else now
     problems: list[dict[str, Any]] = []
-    for probe in probes:
-        label = "public" if probe is None else str(probe)
-        if not any(policy.verdict(CHAIN_INPUT, "tcp", port, probe) == "accept"
-                   for port in ssh_ports):
-            problems.append({"code": "lockout_ssh", "address": label, "ports": ssh_ports})
-        for port in panel_ports:
-            for chain, scope in ((CHAIN_INPUT, "host"), (CHAIN_PUBLISHED, "docker")):
-                if policy.verdict(chain, "tcp", port, probe) != "accept":
-                    problems.append({"code": "lockout_panel", "address": label, "port": port,
-                                     "scope": scope})
+    seen: set[str] = set()
+
+    def add(problem: dict[str, Any], later: bool) -> None:
+        key = repr(sorted(problem.items()))
+        if key in seen:
+            return
+        seen.add(key)
+        problems.append({**problem, "later": True} if later else problem)
+
     skip = set(allowed_closed)
-    for key, port, protocol, chain, _group in PROTECTED_PORTS:
-        if key in protected and key not in skip \
-                and not policy.reachable_somewhere(chain, protocol, port):
-            problems.append({"code": "protected_port_closed", "key": key, "port": port,
-                             "protocol": protocol,
-                             "scope": "host" if chain == CHAIN_INPUT else "docker"})
+    for later, view in ((False, policy.without_expired(current)), (True, policy.permanent())):
+        for probe in probes:
+            label = "public" if probe is None else str(probe)
+            open_ssh = [port for port in ssh_ports
+                        if view.verdict(CHAIN_INPUT, "tcp", port, probe) == "accept"]
+            if (ssh_require_all and len(open_ssh) < len(ssh_ports)) or not open_ssh:
+                closed = [port for port in ssh_ports if port not in open_ssh]
+                add({"code": "lockout_ssh", "address": label,
+                     "ports": closed if ssh_require_all else ssh_ports}, later)
+            for port in panel_ports:
+                for chain, scope in ((CHAIN_INPUT, "host"), (CHAIN_PUBLISHED, "docker")):
+                    if view.verdict(chain, "tcp", port, probe) != "accept":
+                        add({"code": "lockout_panel", "address": label, "port": port,
+                             "scope": scope}, later)
+        for key, port, protocol, chain, _group in PROTECTED_PORTS:
+            if key in protected and key not in skip \
+                    and not view.reachable_somewhere(chain, protocol, port):
+                add({"code": "protected_port_closed", "key": key, "port": port,
+                     "protocol": protocol,
+                     "scope": "host" if chain == CHAIN_INPUT else "docker"}, later)
     return problems
 
 

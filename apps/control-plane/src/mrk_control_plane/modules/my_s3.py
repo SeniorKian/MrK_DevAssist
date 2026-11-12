@@ -28,7 +28,7 @@ from .bucket_routes import BucketRoutes
 from .dns_validate import DnsInputError, canonical_zone
 from .s3_client import EngineAdmin, EngineError
 from .s3_policy import WORKSPACE_TEMPLATES
-from .s3_store import S3Error, S3Store
+from .s3_store import S3Error, S3Store, chosen_secret_key
 
 if TYPE_CHECKING:
     from .tenancy import MySpace
@@ -52,7 +52,8 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
         return EngineAdmin(s3().admin_token_path)
 
     def s3_fail(exc: S3Error | EngineError) -> JSONResponse:
-        return ctx.error_payload(exc.code, exc.message, exc.status_code)
+        extra = exc.payload_extra() if isinstance(exc, S3Error) else {}
+        return ctx.error_payload(exc.code, exc.message, exc.status_code, **extra)  # type: ignore[call-arg]
 
     async def run(
         request: Request,
@@ -287,7 +288,7 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
     @router.post("/s3/keys", status_code=201, response_model=None)
     async def create_key(request: Request) -> Any:
         async def work(wctx: WorkspaceContext, body: Any, _owner: Any) -> Any:
-            body = object_body(body, {"name", "access", "buckets"})
+            body = object_body(body, {"name", "access", "buckets", "secret_access_key"})
             label = body.get("name")
             if not isinstance(label, str) or not _KEY_NAME.fullmatch(label):
                 raise TenancyError("invalid_request", 422,
@@ -295,6 +296,8 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
                                    fields=[{"field": "name", "reason_code": "invalid_format"}])
             access = checked_access(body.get("access"))
             buckets = await checked_buckets(wctx, body.get("buckets"))
+            # Checked before anything is reserved; the same value is used below.
+            secret_key = chosen_secret_key(body.get("secret_access_key"))
             identity_name = f"{wctx.slug}.{label}-{secrets.token_hex(2)}"
             created: dict[str, Any] | None = None
             reservation = f"pending-{secrets.token_hex(8)}"
@@ -311,7 +314,8 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
                                                        created["id"], access, buckets)
                     await asyncio.to_thread(s3().update_identity, created["id"],
                                             {"enabled": True})
-                    secret = await asyncio.to_thread(s3().create_key, created["id"])
+                    secret = await asyncio.to_thread(s3().create_key, created["id"],
+                                                     secret_key)
                 except BaseException:
                     await asyncio.to_thread(store.release, "s3_identity", reservation)
                     if created is not None:
@@ -346,6 +350,24 @@ def register_routes(space: MySpace, router: APIRouter) -> None:
                                                    {"enabled": body["enabled"]})
             await space.audit(wctx, "my.s3.key.update", "s3_identity", identity_id)
             return key_view(identity, owner)
+
+        return await run(request, work, scope="my.s3:write", write=True, identity=identity_id)
+
+    @router.post("/s3/keys/{identity_id}/secret", response_model=None)
+    async def reset_key_secret(identity_id: str, request: Request) -> Any:
+        async def work(wctx: WorkspaceContext, body: Any, _owner: Any) -> Any:
+            body = object_body(body if body is not None else {}, {"secret_access_key"})
+            identity = await identity_of(identity_id)
+            keys = identity.get("keys") or []
+            if not keys:
+                raise not_found()
+            akid = keys[0]["access_key_id"]
+            item = await asyncio.to_thread(s3().set_key_secret, identity_id, akid,
+                                           body.get("secret_access_key"))
+            # The secret is in this response only; the audit names the key, never the value.
+            await space.audit(wctx, "my.s3.key.secret", "s3_identity", identity_id)
+            return {"id": identity_id, "access_key_id": akid,
+                    "secret_access_key": item["secret_access_key"]}
 
         return await run(request, work, scope="my.s3:write", write=True, identity=identity_id)
 

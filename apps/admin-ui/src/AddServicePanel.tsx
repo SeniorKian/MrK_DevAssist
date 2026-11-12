@@ -37,6 +37,7 @@ import { getJson, hasPermission, isAbortError, mutateJson } from "./api";
 import { pick, say, type Bi } from "./copy";
 import { ActionWizard, ChoiceCards, CopyButton, CopyField, FriendlyError, Ltr, Notice, StatusPill, useKit, type WizardStep } from "./kit";
 import type { Language } from "./i18n";
+import { InstallStorage, useStorage } from "./InstallStorage";
 
 // ── API types ────────────────────────────────────────────────────────────────
 
@@ -186,6 +187,10 @@ const COPY = {
   retryConnect: { fa: "اتصال دوباره", en: "Connect again" },
   openThere: { fa: "دیدن در همان ابزار", en: "Open it there" },
   reused: { fa: "این سرویس از قبل در Dokploy بود و همان به‌روز شد؛ سرویس تازه‌ای ساخته نشد.", en: "This service was already in Dokploy and was updated in place; no new service was made." },
+  storageUnchecked: {
+    fa: "دستیار سرور وصل نبود، پس پوشه‌های داده بررسی نشدند. اگر سرویس بالا نیامد، مالک پوشه‌ها را بررسی کنید.",
+    en: "The server agent wasn't connected, so the data folders weren't checked. If the service doesn't start, check the folders' owner."
+  },
   composeKept: {
     fa: "فایل compose این سرویس را خودتان تغییر داده بودید، پس پنل آن را دست نزد و فقط متغیرهای لازم را گذاشت.",
     en: "You had changed this service's compose file, so the panel kept it and only set the variables it needs."
@@ -419,6 +424,7 @@ function JobProgress({ job }: { job: AutoJob | null }) {
       {job.reused ? <Notice tone="info">{pick(language, COPY.reused)}</Notice> : null}
       {job.warnings.includes("server_not_local") ? <Notice tone="warning">{pick(language, COPY.serverNotLocal)}</Notice> : null}
       {job.warnings.includes("compose_customized") ? <Notice tone="info">{pick(language, COPY.composeKept)}</Notice> : null}
+      {job.warnings.includes("storage_unchecked") ? <Notice tone="info">{pick(language, COPY.storageUnchecked)}</Notice> : null}
       {job.status === "succeeded" ? <Notice tone="success">{pick(language, COPY.connected)}</Notice> : null}
       {failed ? (
         <Notice tone={job.error_code === "connect_failed" ? "warning" : "error"}>
@@ -507,6 +513,7 @@ function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClos
   const [environmentName, setEnvironmentName] = useState("production");
   const [serverId, setServerId] = useState("");
   const [job, setJob] = useState<AutoJob | null>(null);
+  const storage = useStorage(item.id);
 
   const autoSupported = item.methods.includes("dokploy") || item.methods.includes("coolify");
   const usable = (key: AutoTarget) => item.methods.includes(key) && targetIssue(targets?.[key]) === null;
@@ -583,7 +590,7 @@ function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClos
 
   const startAuto = async () => {
     if (!target) throw new Error(pick(language, COPY.pickTarget));
-    const body: Record<string, unknown> = { target, env: values };
+    const body: Record<string, unknown> = { target, env: values, storage: storage.request };
     if (projectId !== NEW_PROJECT) body.project_id = projectId;
     if (target === "dokploy" && projectId !== NEW_PROJECT && environmentId) body.environment_id = environmentId;
     if (target === "coolify") {
@@ -628,7 +635,7 @@ function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClos
       : async () => {
           const result = await mutateJson<Bundle>(`/api/v1/install/${item.id}/bundle`, {
             method: "POST",
-            body: { env: values, method: method === "auto" || !method ? "compose" : method }
+            body: { env: values, method: method === "auto" || !method ? "compose" : method, storage: storage.request }
           });
           setBundle(result);
           setConnection(null);
@@ -660,6 +667,7 @@ function InstallWizard({ item, onClose, onChanged }: { item: CatalogItem; onClos
             fullWidth
           />
         ) : null}
+        <InstallStorage serviceId={item.id} storage={storage} />
         {(language === "fa" ? item.notes_fa : item.notes_en).map((note) => (
           <Notice key={note} tone="info">{note}</Notice>
         ))}

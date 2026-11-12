@@ -97,11 +97,12 @@ def _env_flag(name: str) -> bool:
 
 
 class AutoError(Exception):
-    def __init__(self, code: str, status_code: int, message: str) -> None:
+    def __init__(self, code: str, status_code: int, message: str, **extra: Any) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.message = message
+        self.extra = extra
 
 
 class CoolifyConfigRequest(BaseModel):
@@ -132,6 +133,8 @@ class AutoRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict, max_length=32)
     url: str | None = Field(default=None, max_length=300)
     engine_url: str | None = Field(default=None, max_length=300)
+    # Where each storage slot lives (install_storage); shared slots follow the panel.
+    storage: dict[str, dict[str, str]] = Field(default_factory=dict, max_length=8)
 
 
 # ---------------------------------------------------------------------- Coolify settings
@@ -534,13 +537,24 @@ class AutoInstaller:
 
     async def start(self, principal: Any, service_id: str, body: AutoRequest) -> Job:
         self._check(service_id, body)
-        bundle = await asyncio.to_thread(self.install.bundle, service_id, body.env)
+        storage = await self.install.resolve_storage(service_id, body.storage)
+        checked = await self.install.check_storage(service_id, storage)
+        if not checked["ok"]:
+            # A folder Docker would create as root, or one owned by another user: the
+            # service could not write there. Nothing is created in Dokploy/Coolify.
+            raise AutoError("storage_not_ready", 409,
+                            "Prepare the chosen folders first (see the commands)",
+                            items=[item for item in checked["items"]
+                                   if item["status"] == "error"])
+        bundle = await asyncio.to_thread(self.install.bundle, service_id, body.env, storage)
         job = Job(
             id=secrets.token_urlsafe(12), service_id=service_id, target=body.target,
             actor_user_id=getattr(principal, "user_id", None),
             url=body.url, engine_url=body.engine_url,
         )
         job.warnings.append("same_host_required")
+        if not checked["checked"]:
+            job.warnings.append("storage_unchecked")
         self.jobs[job.id] = job
         while len(self.jobs) > MAX_JOBS:
             oldest = next(iter(self.jobs))

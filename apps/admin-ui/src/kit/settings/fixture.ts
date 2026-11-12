@@ -81,7 +81,7 @@ export const SETTINGS_FIXTURE: SettingSpec[] = [
 
   // ── B. Sign-in (startup) ───────────────────────────────────────────────────
   {
-    key: "auth.session_ttl_seconds", group: "people.security", type: "duration", unit: "seconds", default: 28800, value: 28800, min: 300, max: 2592000, source: "startup", env: "MRK_SESSION_TTL_SECONDS", restart_required: true, danger: "medium",
+    key: "auth.session_ttl_seconds", group: "people.security", type: "duration", unit: "seconds", default: 43200, value: 43200, min: 900, max: 2592000, source: "startup", env: "MRK_SESSION_TTL_SECONDS", restart_required: true, danger: "medium",
     label: { fa: "مدت اعتبار هر ورود", en: "Sign-in lasts for" },
     description: { fa: "بعد از این مدت باید دوباره وارد شوید.", en: "After this you need to sign in again." }
   },

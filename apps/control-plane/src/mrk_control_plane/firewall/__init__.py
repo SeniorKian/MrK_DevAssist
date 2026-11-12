@@ -7,4 +7,4 @@ RBAC, audit) live in the control plane; the helper re-validates everything it is
 given and never touches any other table (Docker, Dokploy, distro firewall).
 """
 
-FIREWALL_VERSION = "0.1.0"
+FIREWALL_VERSION = "0.2.0"

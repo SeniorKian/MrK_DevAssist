@@ -295,7 +295,7 @@ export const removeBucketDomain = (bucket: string, domain: string) => mutateJson
 export type KeyTemplate = "read_only" | "read_write" | "admin";
 /** docs/43 §0.1: one access key per entry, `{id, name, access, buckets, enabled, access_key_id, created_at}`. */
 export type MyIdentity = { id: string; name: string; template: KeyTemplate; buckets: string[]; enabled: boolean; access_key_id: string; created_at?: number | string | null };
-export type NewS3Key = { access_key_id: string; secret_access_key: string };
+export type NewS3Key = { access_key_id: string; secret_access_key: string; changed?: boolean };
 
 export async function fetchMyIdentities(signal?: AbortSignal): Promise<MyIdentity[]> {
   return itemsOf<unknown>(await getJson(`${MY_S3_BASE}/keys?${fresh()}`, signal), "keys").map((raw) => {
@@ -314,10 +314,20 @@ export async function fetchMyIdentities(signal?: AbortSignal): Promise<MyIdentit
 }
 
 /** DevAssist builds the policy from `access` (docs/43 §3); a policy document is never sent. The secret comes back once. */
-export async function createMyKey(name: string, template: KeyTemplate, buckets: string[]): Promise<NewS3Key | null> {
-  const created = asObject(await mutateJson(`${MY_S3_BASE}/keys`, { method: "POST", body: { name, access: template, buckets } }));
+export async function createMyKey(name: string, template: KeyTemplate, buckets: string[], secretKey?: string): Promise<NewS3Key | null> {
+  const body: Record<string, unknown> = { name, access: template, buckets };
+  if (secretKey) body.secret_access_key = secretKey;
+  const created = asObject(await mutateJson(`${MY_S3_BASE}/keys`, { method: "POST", body }));
   if (typeof created.secret_access_key === "string" && typeof created.access_key_id === "string") {
     return { access_key_id: created.access_key_id, secret_access_key: created.secret_access_key };
+  }
+  return null;
+}
+/** A new secret for an existing key (the user's own or, when omitted, made by the server). The key ID stays. */
+export async function resetMyKeySecret(id: string, secretKey?: string): Promise<NewS3Key | null> {
+  const result = asObject(await mutateJson(`${MY_S3_BASE}/keys/${enc(id)}/secret`, { method: "POST", body: secretKey ? { secret_access_key: secretKey } : {} }));
+  if (typeof result.secret_access_key === "string" && typeof result.access_key_id === "string") {
+    return { access_key_id: result.access_key_id, secret_access_key: result.secret_access_key, changed: true };
   }
   return null;
 }

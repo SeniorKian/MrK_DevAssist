@@ -87,6 +87,41 @@ def parse_proc_net_sockets(text: str, protocol: str) -> list[dict[str, object]]:
     return found
 
 
+def parse_tcp_listeners(text: str) -> list[tuple[int, str]]:
+    """(port, bound address) of every LISTEN socket in /proc/net/tcp[6]."""
+    found: list[tuple[int, str]] = []
+    for line in text.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 4 or parts[3] != "0A" or ":" not in parts[1]:
+            continue
+        address_hex, _, port_hex = parts[1].rpartition(":")
+        try:
+            port = int(port_hex, 16)
+        except ValueError:
+            continue
+        address = _hex_address(address_hex)
+        if address is None or port == 0:
+            continue
+        mapped = getattr(address, "ipv4_mapped", None)
+        found.append((port, str(mapped if mapped is not None else address)))
+    return found
+
+
+def tcp_listeners(proc_net: Path = Path("/proc/net")) -> list[tuple[int, str]] | None:
+    """Unique (port, address) LISTEN sockets of the host, IPv4 and IPv6 (None when
+    /proc/net cannot be read at all)."""
+    seen: set[tuple[int, str]] = set()
+    readable = False
+    for name in ("tcp", "tcp6"):
+        try:
+            text = (proc_net / name).read_text(encoding="ascii", errors="ignore")
+        except OSError:
+            continue
+        readable = True
+        seen.update(parse_tcp_listeners(text))
+    return sorted(seen) if readable else None
+
+
 def listening_ports(proc_net: Path = Path("/proc/net")) -> list[dict[str, object]]:
     """Ports open on the host: [{protocol, port, loopback_only}] (loopback_only when every
     listener of that port binds a loopback address)."""

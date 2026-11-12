@@ -19,7 +19,7 @@ from mrk_control_plane.agent.signing import sign_headers
 from mrk_control_plane.config import Settings
 from mrk_control_plane.main import create_app
 from mrk_control_plane.middleware import TrustedHostsHolder
-from mrk_control_plane.modules import dokploy_client, domains_routing, services
+from mrk_control_plane.modules import dokploy_client, domains_routing, domains_verify, services
 from mrk_control_plane.modules.domains_hosts import HostError, canonical_host
 from mrk_control_plane.modules.domains_verify import Probes, identify, verify_domain
 from mrk_control_plane.modules.services_catalog import SERVICE_INDEX, state_from_programs
@@ -449,6 +449,13 @@ def test_verification_problem_codes(isolated: FakeProbes) -> None:
     assert identify(httpx.Headers({"x-powered-by": "verdaccio/6.1.2"}), b"") == "npm"
     assert identify(httpx.Headers({"server": "MRK", "x-amz-request-id": "1"}), b"") == "s3"
     assert identify(httpx.Headers({}), b'{"type": "apiconfig", "result": {}}') == "pypi"
+    # Zot (registry) and Gitea (git), the services added in 0.2.0.
+    zot = httpx.Headers({"docker-distribution-api-version": "registry/2.0"})
+    assert identify(zot, b"") == "registry"
+    gitea = httpx.Headers([("set-cookie", "_csrf=x; Path=/"),
+                           ("set-cookie", "i_like_gitea=abc; Path=/; HttpOnly")])
+    assert identify(gitea, b"<html>") == "git"
+    assert domains_verify.PROBE_PATHS["registry"] == "/v2/"
     assert identify(httpx.Headers({"server": "nginx"}), b"<html>") is None
 
 

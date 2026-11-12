@@ -228,10 +228,10 @@ def test_env_wins_over_override_which_wins_over_default(tmp_path: Path, clean_en
     # Bootstrap names never come from the file.
     assert config.load_overrides(config.overrides_path(tmp_path)).get("MRK_DATA_DIR") is None
     # A value equal to the image's Dockerfile default is not an operator choice.
-    clean_env.setenv("MRK_SESSION_TTL_SECONDS", "28800")
-    assert config.resolve_env("MRK_SESSION_TTL_SECONDS", "28800") == ("3600", "override")
+    clean_env.setenv("MRK_SESSION_TTL_SECONDS", "43200")
+    assert config.resolve_env("MRK_SESSION_TTL_SECONDS", "43200") == ("3600", "override")
     clean_env.setenv("MRK_SESSION_TTL_SECONDS", "7200")
-    assert config.resolve_env("MRK_SESSION_TTL_SECONDS", "28800") == ("7200", "env")
+    assert config.resolve_env("MRK_SESSION_TTL_SECONDS", "43200") == ("7200", "env")
 
     settings = Settings.from_env()
     assert settings.login_rate_limit_attempts == 9  # env

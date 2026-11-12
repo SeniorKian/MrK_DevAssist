@@ -1,8 +1,11 @@
 name: Publish container image
 
+# PAUSED during development: images are built on the maintainer's machine and pushed to
+# the project's own registry (scripts/publish_images.py). To publish from GitHub again,
+# restore the tag trigger below:
+#   push:
+#     tags: ["v*"]
 on:
-  push:
-    tags: ["v*"]
   # Manual runs must be dispatched against a v* tag ref; branch refs are refused
   # by the job-level `if:` guards below.
   workflow_dispatch:

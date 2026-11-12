@@ -16,8 +16,8 @@ import DeleteForeverRoundedIcon from "@mui/icons-material/DeleteForeverRounded";
 import { ApiError, getJson, hasPermission, isAbortError, mutateJson } from "./api";
 import type { AuthUser } from "./App";
 import {
-  ActionWizard, EmptyState, FriendlyError, KeyValueList, Ltr, NoAccess, Notice, OneTimeSecret, RelativeTime, DateTime, StatusPill,
-  useConfirmAction, useKit, useUndoSnackbar, CardMenu, type WizardStep
+  ActionWizard, EmptyState, FriendlyError, KeyValueList, Ltr, NoAccess, Notice, OneTimeSecret, PasswordDialog, PasswordInput, RelativeTime,
+  DateTime, StatusPill, passwordProblem, suggestPassword, useConfirmAction, useKit, useUndoSnackbar, CardMenu, type WizardStep
 } from "./kit";
 import { RolePicker, covers, fieldMessages, initials, roleTitle, roleView, sortRoles, useRoles, type RoleRecord, type RoleView, type UserRecord } from "./kit/people";
 import { errorSentence, normalizeTyped, pick, say, type Bi } from "./copy";
@@ -51,6 +51,8 @@ const T = {
   stepRoleHint: { fa: "یک نقش انتخاب کنید. بعداً هم می‌شود عوضش کرد.", en: "Pick a role. You can change it later." },
   stepSend: { fa: "بفرستید", en: "Send" },
   stepSendHint: { fa: "حساب ساخته می‌شود و یک رمز موقت و لینک دعوت می‌گیرید.", en: "The account is created and you get a temporary password and an invite link." },
+  tempPassword: { fa: "رمز موقت", en: "Temporary password" },
+  tempPasswordHint: { fa: "یک رمز قوی پیشنهاد شده است. می‌توانید همین را نگه دارید یا رمز خودتان را بنویسید. در اولین ورود باید عوضش کند.", en: "A strong password is suggested. Keep it or type your own. They'll change it at first sign-in." },
   name: { fa: "نام و نام خانوادگی", en: "Full name" },
   nameRule: { fa: "نام را بنویسید (دست‌کم ۲ نویسه).", en: "Write a name (at least 2 characters)." },
   username: { fa: "نام کاربری برای ورود", en: "Username for signing in" },
@@ -104,11 +106,19 @@ const T = {
   enabledToast: { fa: "حساب «{name}» فعال شد.", en: "“{name}” was activated." },
   // reset password
   resetPassword: { fa: "رمز تازه بده", en: "Reset password" },
-  resetTitle: { fa: "برای «{name}» رمز موقت تازه ساخته شود؟", en: "Give “{name}” a new temporary password?" },
+  resetTwoStep: { fa: "ورود دومرحله‌ای را بردار", en: "Remove two-step sign-in" },
+  resetTwoStepTitle: { fa: "ورود دومرحله‌ای {name} برداشته شود؟", en: "Remove {name}'s two-step sign-in?" },
+  resetTwoStepBody: {
+    fa: "برای وقتی که گوشی یا کدهای پشتیبان گم شده‌اند. {name} از همه دستگاه‌ها بیرون می‌رود و بعد از ورود با رمز، اگر قانون سامانه بخواهد، دوباره برنامه احراز هویت را راه می‌اندازد.",
+    en: "For when the phone or backup codes are lost. {name} is signed out everywhere and, after signing in with the password, sets up the authenticator app again if the rules require it."
+  },
+  resetTwoStepConfirm: { fa: "بردار", en: "Remove" },
+  resetTwoStepToast: { fa: "ورود دومرحله‌ای {name} برداشته شد.", en: "{name}'s two-step sign-in was removed." },
   resetBody: { fa: "رمز فعلی «{name}» دیگر کار نمی‌کند. یک رمز موقت و لینک یک‌بار مصرف می‌گیرید تا برایش بفرستید.", en: "“{name}”'s current password stops working. You get a temporary password and a one-time link to send them." },
   resetEffects1: { fa: "از همه دستگاه‌ها خارج می‌شود.", en: "They're signed out everywhere." },
   resetEffects2: { fa: "در ورود بعدی باید رمز خودش را بگذارد.", en: "They'll choose their own password at next sign-in." },
-  resetConfirm: { fa: "بله، رمز تازه بساز", en: "Yes, make a new password" },
+  resetPickTitle: { fa: "رمز موقت تازه برای «{name}»", en: "New temporary password for “{name}”" },
+  resetSave: { fa: "ذخیره رمز موقت", en: "Save temporary password" },
   resetIssuedTitle: { fa: "رمز موقت تازه «{name}»", en: "“{name}”'s new temporary password" },
   resetIssuedBody: { fa: "این اطلاعات را برای «{name}» بفرستید. در ورود بعدی باید رمز را عوض کند.", en: "Send these to “{name}”. They'll change the password at next sign-in." },
   resetIssuedLink: { fa: "لینک گذاشتن رمز", en: "Set-password link" },
@@ -197,7 +207,8 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
 
   // invite wizard
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", username: "", email: "", role: "viewer", link: true });
+  const [form, setForm] = useState({ name: "", username: "", email: "", role: "viewer", link: true, password: "" });
+  const [resetTarget, setResetTarget] = useState<UserRecord | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [issued, setIssued] = useState<Issued | null>(null);
 
@@ -228,7 +239,7 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
   }, [load]);
 
   const openInvite = useCallback(() => {
-    setForm({ name: "", username: "", email: "", role: "viewer", link: true });
+    setForm({ name: "", username: "", email: "", role: "viewer", link: true, password: suggestPassword() });
     setFieldErrors({});
     setInviteOpen(true);
   }, []);
@@ -316,21 +327,34 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
     }
   };
 
-  const resetPassword = async (target: UserRecord) => {
+  // The dialog explains what a reset does and lets the admin keep the suggestion or type their own.
+  const resetPassword = (target: UserRecord) => setResetTarget(target);
+
+  const submitReset = async (value: string) => {
+    if (!resetTarget) return;
+    const target = resetTarget;
+    const name = displayName(target);
+    const result = await mutateJson<InviteResult>(`/api/v1/users/${target.id}/password-reset`, { method: "POST", body: { create_link: true, password: value } });
+    const invite = result.invite ?? null;
+    const link = invite ? (invite.token ? `${window.location.origin}/#/invite/${invite.token}` : `${window.location.origin}${invite.path ?? ""}`) : null;
+    setResetTarget(null);
+    setIssued({ name, username: result.user?.username ?? target.username, password: result.one_time_password, link, kind: "reset" });
+    notify({ message: say(language, T.resetToast, { name }) });
+    await load();
+  };
+
+  const resetTwoStep = async (target: UserRecord) => {
     const name = displayName(target);
     const ok = await ask({
-      title: say(language, T.resetTitle, { name }),
-      body: say(language, T.resetBody, { name }),
-      consequences: [pick(language, T.resetEffects1), pick(language, T.resetEffects2)],
-      confirmLabel: pick(language, T.resetConfirm)
+      title: say(language, T.resetTwoStepTitle, { name }),
+      body: say(language, T.resetTwoStepBody, { name }),
+      confirmLabel: pick(language, T.resetTwoStepConfirm),
+      severity: "disruptive"
     });
     if (!ok) return;
     try {
-      const result = await mutateJson<InviteResult>(`/api/v1/users/${target.id}/password-reset`, { method: "POST", body: { create_link: true } });
-      const invite = result.invite ?? null;
-      const link = invite ? (invite.token ? `${window.location.origin}/#/invite/${invite.token}` : `${window.location.origin}${invite.path ?? ""}`) : null;
-      setIssued({ name, username: result.user?.username ?? target.username, password: result.one_time_password, link, kind: "reset" });
-      notify({ message: say(language, T.resetToast, { name }) });
+      await mutateJson(`/api/v1/users/${target.id}/mfa/reset`, { method: "POST" });
+      notify({ message: say(language, T.resetTwoStepToast, { name }) });
       await load();
     } catch (caught) {
       notify({ message: describeForToast(language, caught), tone: "error" });
@@ -461,6 +485,7 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
       key: "send",
       title: pick(language, T.stepSend),
       hint: pick(language, T.stepSendHint),
+      validate: () => passwordProblem(language, form.password),
       render: () => (
         <Stack spacing={2}>
           <KeyValueList
@@ -470,6 +495,13 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
               { label: pick(language, T.summaryEmail), value: form.email.trim() ? <Ltr>{form.email.trim()}</Ltr> : pick(language, T.none) },
               { label: pick(language, T.summaryRole), value: roleTitle(language, form.role, roles) }
             ]}
+          />
+          <PasswordInput
+            label={pick(language, T.tempPassword)}
+            helperText={pick(language, T.tempPasswordHint)}
+            value={form.password}
+            onChange={(value) => { setForm({ ...form, password: value }); setFieldErrors(({ password: _drop, ...rest }) => rest); }}
+            error={fieldErrors.password ?? null}
           />
           <FormControlLabel
             control={<Switch checked={form.link} onChange={(_event, value) => setForm({ ...form, link: value })} />}
@@ -487,7 +519,7 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
 
   const finishInvite = async () => {
     setFieldErrors({});
-    const body: Record<string, unknown> = { display_name: form.name.trim(), role: form.role, create_link: form.link };
+    const body: Record<string, unknown> = { display_name: form.name.trim(), role: form.role, create_link: form.link, password: form.password };
     if (form.username.trim()) body.username = form.username.trim();
     if (form.email.trim()) body.email = form.email.trim();
     try {
@@ -568,7 +600,10 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
                   : { key: "enable", label: pick(language, T.enable), icon: <CheckCircleOutlineRoundedIcon fontSize="small" />, onClick: () => void toggleEnabled(item) },
                 ...(item.enabled
                   ? [
-                      { key: "reset", label: pick(language, T.resetPassword), icon: <LockResetRoundedIcon fontSize="small" />, onClick: () => void resetPassword(item) },
+                      { key: "reset", label: pick(language, T.resetPassword), icon: <LockResetRoundedIcon fontSize="small" />, onClick: () => resetPassword(item) },
+                      ...(item.mfa_enabled
+                        ? [{ key: "mfa", label: pick(language, T.resetTwoStep), icon: <LockResetRoundedIcon fontSize="small" />, onClick: () => void resetTwoStep(item) }]
+                        : []),
                       { key: "signout", label: pick(language, T.signOutAll), icon: <LogoutRoundedIcon fontSize="small" />, onClick: () => void signOutEverywhere(item) }
                     ]
                   : []),
@@ -679,6 +714,15 @@ export function PeoplePanel({ user, inviteRequest = 0 }: PeoplePanelProps) {
         )}
       </Dialog>
 
+      <PasswordDialog
+        open={resetTarget !== null}
+        title={say(language, T.resetPickTitle, { name: resetTarget ? displayName(resetTarget) : "" })}
+        hint={resetTarget ? [say(language, T.resetBody, { name: displayName(resetTarget) }), pick(language, T.resetEffects1), pick(language, T.resetEffects2)].join(" ") : undefined}
+        label={pick(language, T.tempPassword)}
+        saveLabel={pick(language, T.resetSave)}
+        onClose={() => setResetTarget(null)}
+        onSubmit={submitReset}
+      />
       {confirmDialog}
       {snackbar}
     </Stack>

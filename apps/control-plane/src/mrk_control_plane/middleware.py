@@ -132,3 +132,42 @@ class DynamicTrustedHostMiddleware:
         else:
             response = PlainTextResponse("Invalid host header", status_code=400)
         await response(scope, receive, send)
+
+
+# request.state key where a route stores a refreshed session cookie (``Set-Cookie`` value).
+SESSION_RENEWAL_STATE = "mrk_session_cookie"
+
+
+class SessionCookieRenewalMiddleware:
+    """Re-send the session cookie when the request extended a sliding session.
+
+    Authentication runs deep inside route handlers, which do not own the response;
+    they leave the new ``Set-Cookie`` value in ``request.state`` and this adds it,
+    unless the response already sets that cookie (sign-in, refresh, sign-out).
+    """
+
+    def __init__(self, app: ASGIApp, cookie_name: str) -> None:
+        self.app = app
+        self.prefix = cookie_name.encode("ascii") + b"="
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        # Created here so every copy of the scope shares this one dict.
+        state = scope.setdefault("state", {})
+
+        async def send_with_cookie(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                value = state.get(SESSION_RENEWAL_STATE)
+                if isinstance(value, bytes):
+                    headers = list(message.get("headers", []))
+                    if not any(
+                        key.lower() == b"set-cookie" and item.startswith(self.prefix)
+                        for key, item in headers
+                    ):
+                        headers.append((b"set-cookie", value))
+                        message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_cookie)

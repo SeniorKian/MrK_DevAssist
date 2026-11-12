@@ -18,6 +18,7 @@ import {
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ArrowUpwardRoundedIcon from "@mui/icons-material/ArrowUpwardRounded";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
 import LayersRoundedIcon from "@mui/icons-material/LayersRounded";
 import LocalOfferRoundedIcon from "@mui/icons-material/LocalOfferRounded";
 import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
@@ -26,8 +27,9 @@ import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import { ApiError, getJson, mutateJson } from "./api";
 import { pick, say, type Bi } from "./copy";
 import {
-  ActionWizard, CopyField, EmptyState, FriendlyError, KeyValueList, ListInput, Ltr, NoAccess, Num, Notice, OneTimeSecret, RelativeTime,
-  ResponsiveList, SectionCard, StatusPill, useCan, useConfirmAction, useKit, useUndoSnackbar
+  ActionWizard, CopyField, EmptyState, FriendlyError, KeyValueList, ListInput, Ltr, NoAccess, Num, Notice, OneTimeSecret, PasswordDialog,
+  PasswordInput, RelativeTime, ResponsiveList, SectionCard, StatusPill, passwordProblem, suggestPassword, useCan, useConfirmAction, useKit,
+  useUndoSnackbar, type PasswordRules
 } from "./kit";
 import { useVisibleInterval } from "./polling";
 import type { CodePanelProps } from "./GitPanel";
@@ -41,12 +43,13 @@ type RegistryStatus = {
 };
 
 type Upstream = { id: string; name: string; destination: string; urls: string[]; enabled: boolean };
-type RegistrySettings = { anonymous_pull: boolean; upstreams: Upstream[] };
+type RegistrySettings = { anonymous_pull: boolean; public_repositories: string[]; upstreams: Upstream[] };
 type ImageRepo = { name: string; tags?: number | null };
 type RegistryUser = { name: string; access: "pull" | "push"; created_at?: number };
 type HelpPayload = { endpoint?: string; docker_login?: string; daemon_mirror_json?: string; examples?: { title_fa?: string; title_en?: string; command?: string }[] };
 
 const API = "/api/v1/registry";
+const PASSWORD_RULES: PasswordRules = { maxBytes: 72 }; // bcrypt reads only 72 bytes
 const USER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const URL_RE = /^https?:\/\/[^\s/]+\S*$/i;
 
@@ -82,6 +85,11 @@ const T = {
   },
   anonymous: { fa: "دریافت بدون ورود", en: "Pull without signing in" },
   anonymousHint: { fa: "هر کسی که به سرور دسترسی دارد بتواند ایمیج بگیرد، بدون نام کاربری.", en: "Anyone who can reach the server can pull images, without a username." },
+  publicRepos: { fa: "مخزن‌های عمومی", en: "Public repositories" },
+  publicReposHint: {
+    fa: "فقط همین مخزن‌ها بدون نام کاربری دریافت می‌شوند (مثلاً ایمیج‌های خود پروژه برای Dokploy). هر خط یک مخزن یا یک پیشوند مثل team/** باشد. آینه‌ها و بقیه مخزن‌ها خصوصی می‌مانند.",
+    en: "Only these can be pulled without signing in (for example the project's own images for Dokploy). One repository or a prefix such as team/** per line. Mirrors and other repositories stay private."
+  },
   anonymousWarning: { fa: "با روشن بودن این گزینه، ایمیج‌های خصوصی شما هم برای همه قابل دریافت است. فقط روی شبکه داخلی روشنش کنید.", en: "With this on, your private images can be pulled by anyone too. Turn it on only on an internal network." },
   sourceOn: { fa: "روشن", en: "On" },
   destination: { fa: "مسیر روی این سرور", en: "Path on this server" },
@@ -128,13 +136,18 @@ const T = {
   accessPullHint: { fa: "برای سرورهایی که فقط برنامه را اجرا می‌کنند.", en: "For servers that only run apps." },
   accessPushHint: { fa: "برای ساختن و فرستادن ایمیج، مثلاً در CI.", en: "For building and pushing images, such as in CI." },
   userStep: { fa: "مشخصات", en: "Details" },
-  userStepHint: { fa: "رمز ورود خودکار ساخته می‌شود و فقط یک بار نشان داده می‌شود.", en: "A password is made automatically and shown only once." },
+  userStepHint: { fa: "یک رمز قوی پیشنهاد شده است. می‌توانید همین را نگه دارید یا رمز خودتان را بنویسید.", en: "A strong password is suggested. Keep it or type your own." },
   nameRule: { fa: "نام فقط حروف انگلیسی، عدد، نقطه، خط تیره و زیرخط باشد و با حرف یا عدد شروع شود.", en: "Use only letters, digits, dots, dashes and underscores, starting with a letter or digit." },
   createUser: { fa: "ساخت کاربر", en: "Create user" },
   secretTitle: { fa: "کاربر «{name}» ساخته شد", en: "User “{name}” was created" },
   secretBody: { fa: "این رمز را جای امنی نگه دارید؛ با دستور زیر وارد شوید.", en: "Keep this password somewhere safe; sign in with the command below." },
   password: { fa: "رمز ورود", en: "Password" },
   loginCommand: { fa: "دستور ورود", en: "Sign-in command" },
+  changePassword: { fa: "عوض کردن رمز", en: "Change password" },
+  changePasswordTitle: { fa: "رمز تازه برای «{name}»", en: "New password for “{name}”" },
+  changePasswordHint: { fa: "پس از ذخیره، رمز قبلی دیگر کار نمی‌کند و باید با رمز تازه وارد شد.", en: "After saving, the old password stops working; sign in again with the new one." },
+  savePassword: { fa: "ذخیره رمز", en: "Save password" },
+  passwordChanged: { fa: "رمز «{name}» عوض شد", en: "The password of “{name}” was changed" },
   removeUser: { fa: "پاک کردن", en: "Delete" },
   removeTitle: { fa: "کاربر «{name}» پاک شود؟", en: "Delete user “{name}”?" },
   removeBody: { fa: "هر سرور یا برنامه‌ای که با این کاربر وارد شده، دیگر نمی‌تواند ایمیج بگیرد یا بفرستد.", en: "Any server or app signed in as this user can no longer pull or push images." },
@@ -154,6 +167,7 @@ function encodePath(name: string) {
 function normalizeSettings(value: Partial<RegistrySettings> | null | undefined): RegistrySettings {
   return {
     anonymous_pull: Boolean(value?.anonymous_pull),
+    public_repositories: Array.isArray(value?.public_repositories) ? value.public_repositories : [],
     upstreams: (value?.upstreams ?? []).map((item, index) => ({
       id: item?.id ?? `source-${index}`,
       name: item?.name ?? "",
@@ -334,7 +348,8 @@ function SettingsSection({ canWrite, notify }: { canWrite: boolean; notify: Noti
     setSaving(true);
     setSaveError(null);
     try {
-      const result = await mutateJson<RegistrySettings>(`${API}/settings`, { method: "PUT", body: draft });
+      const body = { ...draft, public_repositories: draft.public_repositories.filter((line) => line !== "") };
+      const result = await mutateJson<RegistrySettings>(`${API}/settings`, { method: "PUT", body });
       const next = normalizeSettings(result ?? draft);
       setSaved(next);
       setDraft(next);
@@ -371,6 +386,24 @@ function SettingsSection({ canWrite, notify }: { canWrite: boolean; notify: Noti
           <Typography variant="caption" color="text.secondary" component="p">{pick(language, T.anonymousHint)}</Typography>
           {draft.anonymous_pull && <Box sx={{ mt: 1 }}><Notice tone="warning">{pick(language, T.anonymousWarning)}</Notice></Box>}
         </Box>
+        {!draft.anonymous_pull ? (
+          <TextField
+            label={pick(language, T.publicRepos)}
+            value={draft.public_repositories.join("\n")}
+            onChange={(event) => setDraft((current) => current && {
+              ...current,
+              public_repositories: event.target.value.split("\n").map((line) => line.trim()).filter((line, index, all) => line !== "" || index === all.length - 1)
+            })}
+            helperText={pick(language, T.publicReposHint)}
+            disabled={disabled}
+            multiline
+            minRows={2}
+            placeholder="seniorkian/**"
+            slotProps={{ htmlInput: { dir: "ltr", spellCheck: false } }}
+            size="small"
+            fullWidth
+          />
+        ) : null}
         {draft.upstreams.length === 0 ? (
           <EmptyState
             compact
@@ -556,7 +589,9 @@ function UsersSection({ canWrite, endpoint, notify }: { canWrite: boolean; endpo
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [access, setAccess] = useState<"pull" | "push">("pull");
-  const [secret, setSecret] = useState<{ name: string; password: string } | null>(null);
+  const [password, setPassword] = useState("");
+  const [secret, setSecret] = useState<{ name: string; password: string; changed?: boolean } | null>(null);
+  const [changing, setChanging] = useState<RegistryUser | null>(null);
 
   const load = useCallback(() => {
     getJson<{ items?: RegistryUser[] }>(`${API}/users`).then(
@@ -572,6 +607,7 @@ function UsersSection({ canWrite, endpoint, notify }: { canWrite: boolean; endpo
   const start = () => {
     setName("");
     setAccess("pull");
+    setPassword(suggestPassword());
     setOpen(true);
   };
 
@@ -608,7 +644,10 @@ function UsersSection({ canWrite, endpoint, notify }: { canWrite: boolean; endpo
             { key: "created", header: pick(language, T.colCreated), render: (row) => <RelativeTime value={row.created_at} /> }
           ]}
           card={{ title: (row) => <Ltr>{row.name}</Ltr>, meta: (row) => <RelativeTime value={row.created_at} />, status: (row) => <StatusPill tone={row.access === "push" ? "warn" : "ok"} label={accessLabel(row.access)} /> }}
-          actions={canWrite ? [{ key: "delete", label: pick(language, T.removeUser), icon: DeleteOutlineRoundedIcon, danger: true, onClick: (row) => void remove(row) }] : undefined}
+          actions={canWrite ? [
+            { key: "password", label: pick(language, T.changePassword), icon: KeyRoundedIcon, onClick: (row) => setChanging(row) },
+            { key: "delete", label: pick(language, T.removeUser), icon: DeleteOutlineRoundedIcon, danger: true, onClick: (row) => void remove(row) }
+          ] : undefined}
           empty={<EmptyState compact title={pick(language, T.emptyUsers)} body={pick(language, T.emptyUsersBody)} action={canWrite ? <Button variant="contained" onClick={start}>{pick(language, T.newUser)}</Button> : undefined} />}
         />
       )}
@@ -622,7 +661,7 @@ function UsersSection({ canWrite, endpoint, notify }: { canWrite: boolean; endpo
             key: "details",
             title: pick(language, T.userStep),
             hint: pick(language, T.userStepHint),
-            validate: () => (USER_RE.test(name.trim()) ? null : pick(language, T.nameRule)),
+            validate: () => (USER_RE.test(name.trim()) ? passwordProblem(language, password, PASSWORD_RULES) : pick(language, T.nameRule)),
             render: () => (
               <Stack spacing={2}>
                 <TextField autoFocus label={pick(language, T.colName)} value={name} onChange={(event) => setName(event.target.value)} slotProps={{ htmlInput: { dir: "ltr", autoComplete: "off" } }} fullWidth />
@@ -637,21 +676,36 @@ function UsersSection({ canWrite, endpoint, notify }: { canWrite: boolean; endpo
                   <MenuItem value="pull">{pick(language, T.accessPull)}</MenuItem>
                   <MenuItem value="push">{pick(language, T.accessPush)}</MenuItem>
                 </TextField>
+                <PasswordInput value={password} onChange={setPassword} rules={PASSWORD_RULES} />
               </Stack>
             )
           }
         ]}
         onFinish={async () => {
-          const result = await mutateJson<{ name?: string; access?: string; password?: string }>(`${API}/users`, { method: "POST", body: { name: name.trim(), access } });
+          const result = await mutateJson<{ name?: string; access?: string; password?: string }>(`${API}/users`, { method: "POST", body: { name: name.trim(), access, password } });
           const created = result?.name ?? name.trim();
           if (result?.password) setSecret({ name: created, password: result.password });
           else notify(T.secretTitle, created);
           load();
         }}
       />
+      <PasswordDialog
+        open={changing !== null}
+        title={say(language, T.changePasswordTitle, { name: changing?.name ?? "" })}
+        hint={pick(language, T.changePasswordHint)}
+        saveLabel={pick(language, T.savePassword)}
+        rules={PASSWORD_RULES}
+        onClose={() => setChanging(null)}
+        onSubmit={async (value) => {
+          if (!changing) return;
+          const result = await mutateJson<{ name?: string; password?: string }>(`${API}/users/${encodeURIComponent(changing.name)}/password`, { method: "POST", body: { password: value } });
+          setSecret({ name: changing.name, password: result?.password ?? value, changed: true });
+          setChanging(null);
+        }}
+      />
       <OneTimeSecret
         open={secret !== null}
-        title={say(language, T.secretTitle, { name: secret?.name ?? "" })}
+        title={say(language, secret?.changed ? T.passwordChanged : T.secretTitle, { name: secret?.name ?? "" })}
         body={pick(language, T.secretBody)}
         items={secret ? [
           { label: pick(language, T.colName), value: secret.name, ltr: true },

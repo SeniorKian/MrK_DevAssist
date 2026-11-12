@@ -25,7 +25,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import AGENT_VERSION, cgroups, dns_facts, host_metrics
+from . import AGENT_VERSION, cgroups, dns_facts, host_facts, host_metrics
 from . import backup as backup_sources
 from . import traefik as traefik_files
 from .docker_client import (
@@ -55,6 +55,7 @@ _MAX_PULL_LINE = 64 * 1024
 _CONTAINER_CACHE_SECONDS = 10.0
 _DOCKER_FACTS_CACHE_SECONDS = 30.0
 _DOCKER_FACTS_FAILURE_CACHE_SECONDS = 5.0
+_HOST_FACTS_CACHE_SECONDS = 60.0
 _DISCONNECT_POLL_SECONDS = 5.0
 _POST_ROUTES = (
     re.compile(r"^/v1/docker/containers/[^/]+/(start|stop|restart)$"),
@@ -84,6 +85,10 @@ class AgentConfig:
     backup_max_seconds: float = 6 * 3600.0
     # Read-only host root for the DNS setup facts (docs/37); None = not mounted.
     host_root: Path | None = field(default_factory=lambda: _default_host_root())
+    # The host's sysfs for machine facts and temperatures (/host/sys, /host/root/sys, /sys).
+    sys_dir: Path = field(
+        default_factory=lambda: host_facts.resolve_sys_dir(host_root=_default_host_root())
+    )
 
     @classmethod
     def from_env(cls, key: bytes) -> AgentConfig:
@@ -444,6 +449,55 @@ def create_agent_app(
                 containers_data = await asyncio.to_thread(read_container_metrics, raw)
         return {"ts": round(time.time(), 3), "host": host, "containers": containers_data}
 
+    # ----- server overview: machine facts and live counters --------------------
+
+    host_facts_cache: dict[str, Any] = {"at": None, "value": None}
+    host_facts_lock = asyncio.Lock()
+
+    @app.get("/v1/host/facts")
+    async def host_facts_route() -> Any:
+        """What the machine is: OS, CPU, memory, disks, interfaces, sensors (cached 60 s)."""
+        if not host_metrics.available(config.proc_dir):
+            return {"available": False}
+        async with host_facts_lock:
+            at = host_facts_cache["at"]
+            if at is None or time.monotonic() - at > _HOST_FACTS_CACHE_SECONDS:
+                host_facts_cache["value"] = await asyncio.to_thread(
+                    host_facts.collect_facts, config.proc_dir, config.sys_dir, config.host_root
+                )
+                host_facts_cache["at"] = time.monotonic()
+        facts = {"available": True, **host_facts_cache["value"]}
+        docker_data = await docker_overview()
+        if docker_data is not None:
+            daemon_host = docker_data.pop("host_name", None)
+            if daemon_host:
+                facts["hostname"] = daemon_host
+        facts["docker"] = docker_data
+        facts["agent_version"] = AGENT_VERSION
+        return facts
+
+    @app.get("/v1/host/live")
+    async def host_live() -> Any:
+        """Raw monotonic counters; the panel turns two samples into rates."""
+        if not host_metrics.available(config.proc_dir):
+            return {"available": False}
+        data = await asyncio.to_thread(host_facts.collect_live, config.proc_dir, config.sys_dir)
+        containers_data: list[dict[str, Any]] | None = None
+        if docker_possible and cgroups.available(config.cgroup_dir):
+            try:
+                raw = await cached_containers()
+            except DockerUnavailable:
+                raw = None
+            if raw is not None:
+                containers_data = await asyncio.to_thread(read_container_metrics, raw)
+        return {
+            "available": True,
+            "ts": round(time.time(), 3),
+            "mono": round(time.monotonic(), 3),
+            **data,
+            "containers": containers_data,
+        }
+
     # ----- Gate 17: logs ------------------------------------------------------
 
     @app.get("/v1/docker/containers/{ref}/logs")
@@ -799,6 +853,41 @@ def create_agent_app(
     # ----- docs/35: opt-in Traefik dynamic file for MRK domains -------------------
 
     add_traefik_routes(app)
+
+    # ----- storage of service stacks: read-only checks before a deploy -------------
+
+    @app.get("/v1/host/paths")
+    async def host_paths(request: Request) -> Any:
+        from . import host_paths as paths_module
+
+        wanted = request.query_params.getlist("path")
+        if not wanted or len(wanted) > paths_module.MAX_PATHS:
+            return _error("invalid_paths", 422)
+        return await asyncio.to_thread(paths_module.check_all, config.host_root, wanted)
+
+    @app.get("/v1/docker/containers/{ref}/mounts")
+    async def container_mounts(ref: str) -> Any:
+        """Where a container's folders come from (bind source or volume name)."""
+        if not docker_possible:
+            return _error("docker_unavailable", 503)
+        try:
+            raw = await docker.inspect_container(ref)
+        except DockerUnavailable:
+            return _error("docker_unavailable", 503)
+        except (DockerNotAllowed, ValueError):
+            return _error("not_allowed", 403)
+        mounts = []
+        for item in raw.get("Mounts") or []:
+            if not isinstance(item, dict):
+                continue
+            mounts.append({
+                "type": str(item.get("Type") or "")[:16],
+                "source": str(item.get("Source") or "")[:400],
+                "name": str(item.get("Name") or "")[:200] or None,
+                "destination": str(item.get("Destination") or "")[:400],
+                "rw": bool(item.get("RW", True)),
+            })
+        return {"items": mounts}
 
     # ----- docs/37: read-only facts for the DNS setup guide ------------------------
 

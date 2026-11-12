@@ -60,6 +60,10 @@ TRAEFIK_DEFAULT_CERT = "TRAEFIK DEFAULT CERT"
 
 # Path per service and how its answer is recognised.
 PROBE_PATHS = {"panel": "/health/live", "npm": "/-/ping", "pypi": "/+api", "s3": "/",
+               # Zot answers the Docker Registry v2 base (200, or 401 when sign-in is on).
+               "registry": "/v2/",
+               # Gitea's sign-in page is public even with REQUIRE_SIGNIN_VIEW.
+               "git": "/user/login",
                # docs/40 §5: an RFC 8484 GET for ". NS" (id 0, RD) on the default path.
                "dns-doh": "/dns-query?dns=AAABAAABAAAAAAAAAAACAAE"}
 
@@ -74,6 +78,11 @@ def identify(headers: httpx.Headers, body: bytes) -> str | None:
         return "npm"
     if headers.get("server", "").strip() == "MRK" and "x-amz-request-id" in headers:
         return "s3"
+    if headers.get("docker-distribution-api-version", "").strip().lower().startswith("registry/"):
+        return "registry"
+    if any(cookie.strip().lower().startswith("i_like_gitea=")
+           for cookie in headers.get_list("set-cookie")):
+        return "git"
     if (
         b'"apiconfig"' in body[:4096]
         or "x-devpi-uuid" in headers

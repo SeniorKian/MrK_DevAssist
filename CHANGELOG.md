@@ -7,6 +7,44 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+### Added
+- The add-service wizard asks where each service keeps its data: a Docker volume or a folder
+  on the server. Folders shared with the panel (registry config, npm/PyPI data, DNS and firewall
+  sockets) follow the panel's own mount, read from its container or its compose in Dokploy.
+  Chosen folders are checked through the server agent (exists, owner, free space) with the exact
+  commands to fix them, and updates keep them.
+- Every user-facing password or secret key (panel users, S3 keys, registry and Git users) can be
+  typed by the user; the panel suggests a strong one that can be edited, and passwords can be
+  changed later.
+- Firewall quick actions: one-line commands in Persian or English ("open 8080", "allow
+  10.0.0.0/8 -> 5432", "only me to 22 for 1h"), presets, per-port actions on listening ports,
+  temporary rules that expire, undo, and a preview before applying.
+- The real SSH port is found from the server's listening sockets (SSH banner), then ssh.socket
+  and sshd_config; the admin can confirm or set it.
+- S3: a browser opening a public bucket's root gets its index.html or a short page instead of
+  an XML error, and a `/<bucket>/<key>` link opened on the bucket's own domain still finds the
+  file.
+- Two-step sign-in with an authenticator app (TOTP): set up from «My sign-in security» with a QR
+  code, ten one-time backup codes (stored hashed), new codes, turn off with password + code.
+  Admins can require it for everyone or chosen roles (forced setup after sign-in) and reset it
+  for a person (`POST /api/v1/users/{id}/mfa/reset`).
+- Single sign-on with OpenID Connect (Google, Microsoft, Keycloak, Authentik, ...): owner
+  settings under People › Public sign-up, PKCE + state + nonce, ID tokens verified against the
+  provider's keys, link by verified email, optional automatic accounts with a chosen role,
+  allowed email domains, and an "SSO only" mode for everyone except owners.
+- «My sign-in security» lists where you are signed in and can sign out other devices.
+
+### Changed
+- Sessions no longer end while you work: the idle window slides with activity (default 12 h,
+  `MRK_SESSION_TTL_SECONDS`), "Keep me signed in" (on by default) keeps a persistent cookie and
+  allows 7 days idle (`MRK_SESSION_REMEMBER_TTL_SECONDS`), and every sign-in ends after at most
+  30 days (`MRK_SESSION_MAX_AGE_SECONDS`). After an expired session the panel returns to the
+  page you were on.
+
+### Fixed
+- Domain checks recognise the image registry (Zot) and Git (Gitea) instead of reporting that
+  their domain reaches another service.
+
 ## [0.2.1] - 2026-11-12
 
 ### Fixed

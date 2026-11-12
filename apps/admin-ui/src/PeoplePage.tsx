@@ -13,6 +13,7 @@ import { PeoplePanel } from "./PeoplePanel";
 import { RolesPanel } from "./RolesPanel";
 import { AppKeysPanel } from "./AppKeysPanel";
 import { RegistrationCard, SignInSecuritySettings } from "./RegistrationCard";
+import { SignInPolicyCards } from "./AccountSecurity";
 import { TenancyPanel, type TenancyTab } from "./tenancy/TenancyPanel";
 import { TENANCY } from "./copy/mySpace";
 
@@ -79,6 +80,7 @@ export default function PeoplePage({ user, tab: tabProp }: PeoplePageProps) {
         {tab === "signup" && (
           <Stack spacing={2.5}>
             <RegistrationCard user={user} />
+            <SignInPolicyCards user={user} />
             <SignInSecuritySettings user={user} />
           </Stack>
         )}

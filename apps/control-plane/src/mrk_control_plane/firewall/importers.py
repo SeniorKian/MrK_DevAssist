@@ -348,41 +348,164 @@ def read_ufw(etc_root: Path) -> dict[str, Any]:
 # ----- sshd ------------------------------------------------------------------------
 
 
+_SSHD_LINE = re.compile(r"^\s*([A-Za-z]+)(?:\s*=\s*|\s+)(.*?)\s*$")
+_MAX_INCLUDES = 32
+
+
+def _sshd_directives(text: str) -> list[tuple[str, str]]:
+    """(lower-case keyword, value) of the global part (before the first Match)."""
+    out: list[tuple[str, str]] = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0]
+        match = _SSHD_LINE.match(line)
+        if match is None:
+            continue
+        key = match.group(1).lower()
+        if key == "match":
+            break  # Port is not allowed inside Match blocks anyway
+        out.append((key, match.group(2).strip().strip('"')))
+    return out
+
+
+def _port_value(value: str) -> int | None:
+    return int(value) if value.isdigit() and 1 <= int(value) <= 65535 else None
+
+
 def parse_sshd_ports(text: str) -> list[int]:
     ports: list[int] = []
-    for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
-        key, _, value = line.partition(" ")
-        if key.lower() == "match":
-            break  # Port is not allowed inside Match blocks anyway
-        if key.lower() == "port" and value.strip().isdigit():
-            port = int(value.strip())
-            if 1 <= port <= 65535 and port not in ports:
-                ports.append(port)
-        if key.lower() == "listenaddress":
-            match = re.search(r":(\d{1,5})$", value.strip())
-            if match and 1 <= int(match.group(1)) <= 65535 and int(match.group(1)) not in ports:
-                ports.append(int(match.group(1)))
+    for key, value in _sshd_directives(text):
+        port: int | None = None
+        if key == "port":
+            port = _port_value(value)
+        elif key == "listenaddress":
+            match = re.search(r":(\d{1,5})$", value)
+            port = _port_value(match.group(1)) if match else None
+        if port is not None and port not in ports:
+            ports.append(port)
     return ports
 
 
-def read_sshd_ports(etc_root: Path) -> dict[str, Any]:
-    root = etc_root / "ssh"
-    main = _read(root / "sshd_config")
-    if main is None:
-        return {"detected": False, "ports": [22]}
-    ports: list[int] = []
-    # Port is cumulative: sshd listens on every Port line (drop-ins and main file).
-    include_dir = root / "sshd_config.d"
+def _host_path(etc_root: Path, value: str, base: str = "/etc/ssh") -> Path | None:
+    """Map a host path (absolute, or relative to /etc/ssh) onto the read-only mount."""
+    path = value if value.startswith("/") else f"{base}/{value}"
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2 or parts[0] != "etc" or any(part in {".", ".."} for part in parts):
+        return None
+    return etc_root.joinpath(*parts[1:])
+
+
+def _expand(pattern: Path) -> list[Path]:
+    if not any(char in pattern.name for char in "*?["):
+        return [pattern]
     try:
-        dropins = sorted(include_dir.glob("*.conf")) if include_dir.is_dir() else []
+        return sorted(pattern.parent.glob(pattern.name)) if pattern.parent.is_dir() else []
     except OSError:
-        dropins = []
-    for path in dropins[:32]:
-        text = _read(path)
-        if text:
-            ports.extend(port for port in parse_sshd_ports(text) if port not in ports)
-    ports.extend(port for port in parse_sshd_ports(main) if port not in ports)
-    return {"detected": True, "ports": ports or [22]}
+        return []
+
+
+def read_sshd_config(etc_root: Path) -> dict[str, Any]:
+    """Ports of ``/etc/ssh/sshd_config`` with its ``Include`` files (Port is cumulative;
+    no Port line at all means sshd's default 22)."""
+    main = etc_root / "ssh" / "sshd_config"
+    text = _read(main)
+    if text is None:
+        return {"readable": False, "ports": [], "files": 0}
+    ports: list[int] = []
+    seen: set[Path] = set()
+
+    def walk(content: str, depth: int) -> None:
+        for key, value in _sshd_directives(content):
+            if key == "include" and depth < 3:
+                for item in value.split():
+                    pattern = _host_path(etc_root, item)
+                    if pattern is None:
+                        continue
+                    for path in _expand(pattern):
+                        if path in seen or len(seen) >= _MAX_INCLUDES:
+                            continue
+                        seen.add(path)
+                        included = _read(path)
+                        if included:
+                            walk(included, depth + 1)
+        ports.extend(port for port in parse_sshd_ports(content) if port not in ports)
+
+    seen.add(main)
+    walk(text, 0)
+    return {"readable": True, "ports": ports or [22], "files": len(seen)}
+
+
+def read_sshd_ports(etc_root: Path) -> dict[str, Any]:
+    config = read_sshd_config(etc_root)
+    if not config["readable"]:
+        return {"detected": False, "ports": [22]}
+    return {"detected": True, "ports": config["ports"]}
+
+
+# ----- systemd socket activation (Ubuntu 22.10+: ssh.socket) ------------------------
+
+_SOCKET_UNITS = ("ssh.socket", "sshd.socket")
+
+
+def parse_listen_streams(text: str, current: list[int] | None = None) -> list[int] | None:
+    """Apply one unit file's ``[Socket] ListenStream=`` lines to ``current``; an empty
+    ``ListenStream=`` resets the list (systemd semantics). None = the file sets none."""
+    result = None if current is None else list(current)
+    section = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            continue
+        key, sep, value = line.partition("=")
+        if section != "socket" or not sep or key.strip().lower() != "listenstream":
+            continue
+        value = value.strip()
+        if not value:
+            result = []
+            continue
+        if value.startswith(("/", "@")) or "vsock:" in value:
+            result = result if result is not None else []
+            continue  # unix / abstract / vsock sockets are not TCP ports
+        match = re.search(r"(?:^|:|\])(\d{1,5})$", value)
+        port = _port_value(match.group(1)) if match else None
+        result = result if result is not None else []
+        if port is not None and port not in result:
+            result.append(port)
+    return result
+
+
+def read_ssh_socket(etc_root: Path) -> dict[str, Any]:
+    """``ssh.socket`` facts from ``/etc/systemd/system`` (needs /etc/systemd mounted).
+
+    ``explicit`` = an override in /etc sets ListenStream; without one, the stock unit in
+    /lib (22) or the sshd_config generator of Ubuntu 24.04+ decides, so sshd_config wins.
+    """
+    system = etc_root / "systemd" / "system"
+    try:
+        readable = system.is_dir()
+    except OSError:
+        readable = False
+    if not readable:
+        return {"readable": False, "enabled": None, "explicit": False, "ports": []}
+    wants = system / "sockets.target.wants"
+    enabled = any((wants / name).is_symlink() or (wants / name).exists()
+                  for name in _SOCKET_UNITS)
+    ports: list[int] | None = None
+    for name in _SOCKET_UNITS:
+        text = _read(system / name)
+        if text is not None:
+            ports = parse_listen_streams(text, ports)
+        dropins = system / f"{name}.d"
+        try:
+            files = sorted(dropins.glob("*.conf")) if dropins.is_dir() else []
+        except OSError:
+            files = []
+        for path in files[:32]:
+            content = _read(path)
+            if content is not None:
+                ports = parse_listen_streams(content, [22] if ports is None else ports)
+    explicit = ports is not None
+    return {"readable": True, "enabled": enabled, "explicit": explicit,
+            "ports": ports if ports else []}

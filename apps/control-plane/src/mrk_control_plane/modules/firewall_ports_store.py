@@ -31,6 +31,7 @@ def port_rule_public(row: FirewallPortRule) -> dict[str, Any]:
         "priority": row.priority, "log": row.log, "log_rate": row.log_rate,
         "origin": row.origin, "created_by_user_id": row.created_by_user_id,
         "created_at": row.created_at, "updated_at": row.updated_at,
+        "expires_at": row.expires_at,
     }
 
 
@@ -40,7 +41,8 @@ def source_list_public(row: FirewallSourceList) -> dict[str, Any]:
 
 
 _COLUMNS = ("name", "description", "protocol", "ports", "source_kind", "source_cidrs",
-            "source_list_id", "scope", "action", "enabled", "priority", "log", "log_rate")
+            "source_list_id", "scope", "action", "enabled", "priority", "log", "log_rate",
+            "expires_at")
 
 
 class PortStore:
@@ -60,7 +62,8 @@ class PortStore:
             raise FirewallError("source_list_not_found", "the named address list does not exist")
 
     def create_rule(self, values: dict[str, Any], *, origin: str = "manual",
-                    user_id: int | None = None, unique_name: bool = False) -> dict[str, Any]:
+                    user_id: int | None = None, unique_name: bool = False,
+                    rule_id: str | None = None) -> dict[str, Any]:
         now = _now()
         with self.db.session() as db, db.begin():
             count = len(db.scalars(select(FirewallPortRule.id)).all())
@@ -83,7 +86,7 @@ class PortStore:
                     FirewallPortRule.priority.desc()).limit(1))
                 values = {**values, "priority": (last or 0) + 10}
             row = FirewallPortRule(
-                id=secrets.token_hex(8), name=name,
+                id=rule_id or secrets.token_hex(8), name=name,
                 description=values.get("description", ""), protocol=values["protocol"],
                 ports=values["ports"], source_kind=values.get("source_kind", "public"),
                 source_cidrs=values.get("source_cidrs", []),
@@ -91,7 +94,8 @@ class PortStore:
                 action=values.get("action", "accept"), enabled=values.get("enabled", True),
                 priority=values["priority"], log=values.get("log", False),
                 log_rate=values.get("log_rate", 10), origin=origin,
-                created_by_user_id=user_id, created_at=now, updated_at=now,
+                created_by_user_id=user_id, created_at=values.get("created_at", now),
+                updated_at=now, expires_at=values.get("expires_at"),
             )
             db.add(row)
             db.flush()
@@ -130,6 +134,27 @@ class PortStore:
             item = port_rule_public(row)
             db.delete(row)
             return item
+
+    def set_priorities(self, priorities: dict[str, int]) -> None:
+        """Re-order rules (quick actions insert between existing ones); unknown ids skip."""
+        if not priorities:
+            return
+        with self.db.session() as db, db.begin():
+            for rule_id, priority in priorities.items():
+                row = db.get(FirewallPortRule, rule_id)
+                if row is not None:
+                    row.priority = priority
+
+    def delete_expired(self, now: int) -> list[dict[str, Any]]:
+        """Remove temporary rules whose time is over; returns what was removed."""
+        with self.db.session() as db, db.begin():
+            rows = db.scalars(select(FirewallPortRule).where(
+                FirewallPortRule.expires_at.is_not(None),
+                FirewallPortRule.expires_at <= now)).all()
+            items = [port_rule_public(row) for row in rows]
+            for row in rows:
+                db.delete(row)
+            return items
 
     # ----- named source lists ------------------------------------------------------
     def list_lists(self) -> list[dict[str, Any]]:

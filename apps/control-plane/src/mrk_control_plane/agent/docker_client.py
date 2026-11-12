@@ -545,12 +545,29 @@ def summarize_container(
         "image_id": str(raw.get("ImageID", ""))[:80] or None,
         "state": str(raw.get("State", ""))[:32],
         "status": str(raw.get("Status", ""))[:128],
+        "health": container_health(raw),
         "created": _int(raw.get("Created")),
         "ports": ports,
         "labels_subset": labels_subset(container_labels(raw), prefixes),
         "networks": container_networks(raw),
         "protected": protected,
     }
+
+
+def container_health(raw: dict[str, Any]) -> str | None:
+    """healthy / unhealthy / starting when the image has a health check, else None.
+
+    The list endpoint has no health field; Docker appends it to ``Status``
+    ("Up 3 hours (healthy)", "Up 5 seconds (health: starting)").
+    """
+    status = str(raw.get("Status", "")).lower()
+    if "(unhealthy)" in status:
+        return "unhealthy"
+    if "(healthy)" in status:
+        return "healthy"
+    if "(health: starting)" in status:
+        return "starting"
+    return None
 
 
 def container_networks(raw: dict[str, Any]) -> list[str]:

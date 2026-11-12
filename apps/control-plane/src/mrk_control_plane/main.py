@@ -28,12 +28,28 @@ from . import __version__, components, remote_services
 from .auth import (
     AuthStore,
     FieldError,
+    MfaChallenge,
     PermissionEscalationError,
     Principal,
     RoleInUseError,
     password_policy,
     permission_catalog,
 )
+from .auth_api import (
+    AuthApiDeps,
+    mark_session_renewed,
+    session_response,
+)
+from .auth_api import (
+    build_router as build_auth_router,
+)
+from .auth_api import (
+    principal_payload as _principal_payload,
+)
+from .auth_api import (
+    set_session_cookie as _set_session_cookie,
+)
+from .auth_mfa import TwoStep
 from .backup import BackupManager
 from .catalog import PackageCatalog
 from .config import Settings, apply_startup_overrides
@@ -42,11 +58,13 @@ from .logging_config import configure_logging
 from .middleware import (
     DynamicTrustedHostMiddleware,
     RequestSecurityMiddleware,
+    SessionCookieRenewalMiddleware,
     TrustedHostsHolder,
     correlation_id_context,
 )
 from .module_context import Event, EventBus, ModuleContext
 from .netresolve import NetworkSettingsStore, resolve_host, validate_config
+from .oidc import OidcService
 from .outbound import (
     ALL_PROXY_TYPES,
     HTTP_PROXY_TYPES,
@@ -87,12 +105,15 @@ DATA_DIRECTORIES = (
 SESSION_COOKIE = "mrk_session"
 CSRF_FAILED = "csrf_failed"
 PASSWORD_CHANGE_REQUIRED = "password_change_required"  # noqa: S105 - an error code
+MFA_ENROLLMENT_REQUIRED = "mfa_enrollment_required"
 ADMIN_AREA_LOCAL_ONLY = "admin_area_local_only"
 
 
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=1, max_length=256)
+    # "Keep me signed in": a persistent cookie and a longer idle window.
+    remember: bool = True
 
 
 class SetupOwnerRequest(BaseModel):
@@ -149,10 +170,13 @@ class InviteUserRequest(BaseModel):
     role: str = Field(default="viewer", min_length=1, max_length=32)
     username: str | None = Field(default=None, max_length=64)
     create_link: bool = True
+    # Optional: the operator's own one-time password; omitted or empty = generated.
+    password: str | None = Field(default=None, max_length=256)
 
 
 class ResetPasswordRequest(BaseModel):
     create_link: bool = True
+    password: str | None = Field(default=None, max_length=256)
 
 
 class RevokeSessionsRequest(BaseModel):
@@ -436,6 +460,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # npm / PyPI connected from the add-service wizard (docs/44).
     remote_services.apply(active_settings)
     database = Database(active_settings.data_dir, active_settings.database_url)
+    secret_store = SecretStore(active_settings.data_dir)
     auth_store = AuthStore(
         active_settings.data_dir,
         active_settings.session_ttl_seconds,
@@ -443,13 +468,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rate_limit_attempts=active_settings.login_rate_limit_attempts,
         rate_limit_window_seconds=active_settings.login_rate_limit_window_seconds,
         session_prune_age_seconds=active_settings.session_prune_age_seconds,
+        session_max_age_seconds=active_settings.session_max_age_seconds,
+        session_remember_ttl_seconds=active_settings.session_remember_ttl_seconds,
+        secret_store=secret_store,
     )
     upstream_store = UpstreamStore(active_settings.data_dir)
     network_settings = NetworkSettingsStore(active_settings.data_dir)
+    oidc_service = OidcService(auth_store, secret_store, network_settings)
     events = EventBus()
     module_state: dict[str, ModuleContext] = {}
     upstream_health = UpstreamHealthStore(database)
-    secret_store = SecretStore(active_settings.data_dir)
     package_catalog = PackageCatalog(active_settings.data_dir)
     backup_manager = BackupManager(active_settings.data_dir, __version__, database=database)
     task_manager = TaskManager(
@@ -630,6 +658,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.auth_store = auth_store
     app.state.database = database
 
+    app.add_middleware(SessionCookieRenewalMiddleware, cookie_name=SESSION_COOKIE)
     app.add_middleware(RequestSecurityMiddleware)
     # Static MRK_TRUSTED_HOSTS plus the panel's domains (docs/35 §4), updated at runtime.
     trusted_hosts = TrustedHostsHolder(active_settings.trusted_hosts)
@@ -651,6 +680,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # permission denial ("forbidden") must not be retried.
             if exc.detail == CSRF_FAILED:
                 return _error_payload(CSRF_FAILED, "CSRF token is missing or invalid", 403)
+            if exc.detail == MFA_ENROLLMENT_REQUIRED:
+                return _error_payload(
+                    MFA_ENROLLMENT_REQUIRED, "Set up two-step sign-in before continuing", 403
+                )
             if exc.detail == PASSWORD_CHANGE_REQUIRED:
                 return _error_payload(
                     PASSWORD_CHANGE_REQUIRED, "Choose a new password before continuing", 403
@@ -729,10 +762,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 principal = auth_store.principal_for_api_token(authorization[7:].strip())
         if principal is None:
             raise StarletteHTTPException(status_code=401)
+        mark_session_renewed(request, active_settings, principal)
         if permission is not None and principal.must_change_password:
             # An invited account signs in with a one-time password and may only
             # read itself, change the password or sign out until it picks one.
             raise StarletteHTTPException(status_code=403, detail=PASSWORD_CHANGE_REQUIRED)
+        if permission is not None and principal.must_enroll_mfa:
+            # The two-step policy covers this account: set it up first (like the
+            # forced password change above).
+            raise StarletteHTTPException(status_code=403, detail=MFA_ENROLLMENT_REQUIRED)
         if permission is not None and not principal.allows(permission):
             raise StarletteHTTPException(status_code=403)
         tenancy = getattr(app.state, "tenancy", None)
@@ -808,27 +846,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return task_id
 
-    def set_session_cookie(response: JSONResponse, token: str) -> None:
-        response.set_cookie(
-            SESSION_COOKIE,
-            token,
-            max_age=active_settings.session_ttl_seconds,
-            httponly=True,
-            secure=active_settings.auth_cookie_secure,
-            samesite="strict",
-            path="/",
-        )
+    def set_session_cookie(response: JSONResponse, token: str, principal: Principal) -> None:
+        _set_session_cookie(response, active_settings, token, principal)
 
-    def principal_payload(principal: Principal) -> dict[str, object]:
-        return {
-            "id": principal.user_id,
-            "username": principal.username,
-            "display_name": principal.display_name,
-            "email": principal.email,
-            "role": principal.role,
-            "permissions": sorted(principal.permissions),
-            "must_change_password": principal.must_change_password,
-        }
+    principal_payload = _principal_payload
+
+    async def sign_in_with_password(
+        identifier: str, password: str, request: Request, *, remember: bool = False
+    ) -> tuple[str, str, Principal] | MfaChallenge | None | JSONResponse:
+        try:
+            return await asyncio.to_thread(
+                functools.partial(
+                    auth_store.authenticate, identifier, password,
+                    request.client.host if request.client else None,
+                    correlation_id_context.get(), remember=remember,
+                    user_agent=request.headers.get("user-agent"),
+                )
+            )
+        except FieldError as exc:
+            return _field_error(exc)
 
     @app.get("/api/v1/auth/setup-status", include_in_schema=False)
     async def setup_status() -> dict[str, object]:
@@ -868,21 +904,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as exc:
             return _account_error(exc, "setup_rejected")
-        result = await asyncio.to_thread(
-            auth_store.authenticate,
-            identifier,
-            payload.password,
-            request.client.host if request.client else None,
-            correlation_id_context.get(),
-        )
+        result = await sign_in_with_password(identifier, payload.password, request)
+        if isinstance(result, JSONResponse):
+            return result
         if result is None:
             return _error_payload("setup_failed", "First-run setup failed", 500)
-        token, csrf, principal = result
-        response = JSONResponse(
-            {"user": principal_payload(principal), "csrf_token": csrf}, status_code=201
-        )
-        set_session_cookie(response, token)
-        return response
+        return session_response(active_settings, result, status_code=201)
 
     @app.post("/api/v1/auth/register", include_in_schema=False, response_model=None)
     async def register_user(
@@ -927,22 +954,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"status": "pending_approval"}, status_code=202)
         if mode == "open":
             await asyncio.to_thread(tenancy.ensure_personal, created[0])
-        result = await asyncio.to_thread(
-            auth_store.authenticate,
-            identifier,
-            payload.password,
-            request.client.host if request.client else None,
-            correlation_id_context.get(),
-        )
+        result = await sign_in_with_password(identifier, payload.password, request)
+        if isinstance(result, JSONResponse):
+            return result
         if result is None:
             return _error_payload("registration_failed", "Registration failed", 500)
-        token, csrf, principal = result
-        response = JSONResponse(
-            {"user": principal_payload(principal), "csrf_token": csrf},
-            status_code=201,
-        )
-        set_session_cookie(response, token)
-        return response
+        return session_response(active_settings, result, status_code=201)
 
     # docs/43 §0.1: a workspace invite to an email without an account. The email always
     # comes from the invite; tenancy.invite_signup (default: as tenancy.signup) decides.
@@ -995,42 +1012,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"status": "pending_approval", "invite_error": invite_error,
                                  **joined}, status_code=202)
         await asyncio.to_thread(tenancy.ensure_personal, user_id)
-        result = await asyncio.to_thread(
-            auth_store.authenticate, identifier, payload.password, source_ip,
-            correlation_id_context.get(),
-        )
+        result = await sign_in_with_password(identifier, payload.password, request)
+        if isinstance(result, JSONResponse):
+            return result
         if result is None:
             return _error_payload("registration_failed", "Registration failed", 500)
-        token, csrf, principal = result
-        response = JSONResponse(
-            {"user": principal_payload(principal), "csrf_token": csrf,
-             "invite_error": invite_error, **joined},
-            status_code=201,
+        return session_response(
+            active_settings, result, status_code=201,
+            extra={"invite_error": invite_error, **joined},
         )
-        set_session_cookie(response, token)
-        return response
 
     @app.post("/api/v1/auth/login", include_in_schema=False)
     async def login(payload: LoginRequest, request: Request) -> JSONResponse:
-        result = await asyncio.to_thread(
-            auth_store.authenticate,
-            payload.username,
-            payload.password,
-            request.client.host if request.client else None,
-            correlation_id_context.get(),
+        result = await sign_in_with_password(
+            payload.username, payload.password, request, remember=payload.remember
         )
+        if isinstance(result, JSONResponse):
+            return result
         if result is None:
             return _error_payload("invalid_credentials", "Invalid credentials", 401)
-        token, csrf, principal = result
-        response = JSONResponse(
-            {
-                "user": principal_payload(principal),
-                "csrf_token": csrf,
-                "must_change_password": principal.must_change_password,
-            }
-        )
-        set_session_cookie(response, token)
-        return response
+        # Either a session, or {"status": "mfa_required", "challenge": ...} for the
+        # second step (POST /api/v1/auth/login/mfa).
+        return session_response(active_settings, result)
 
     @app.post("/api/v1/auth/change-password", include_in_schema=False, response_model=None)
     async def change_password(
@@ -1079,7 +1082,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 fields=[{"field": "password_confirmation", "reason_code": "mismatch"}],
             )
         try:
-            session_token, csrf, principal = await asyncio.to_thread(
+            accepted = await asyncio.to_thread(
                 auth_store.accept_invite,
                 token,
                 payload.password,
@@ -1088,22 +1091,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except FieldError as exc:
             return _field_error(exc)
-        response = JSONResponse(
-            {
-                "user": principal_payload(principal),
-                "csrf_token": csrf,
-                "must_change_password": False,
-            }
-        )
-        set_session_cookie(response, session_token)
-        return response
+        return session_response(active_settings, accepted)
 
     @app.get("/api/v1/auth/capabilities", include_in_schema=False)
     async def auth_capabilities() -> dict[str, object]:
         return {
             "local": {"enabled": True},
-            "oidc": {"enabled": False, "status": "not_configured"},
-            "mfa": {"enabled": False, "status": "planned"},
+            "oidc": await asyncio.to_thread(oidc_service.sign_in_option),
+            "mfa": {"enabled": True, "status": "available", "methods": ["totp"]},
+            "remember_me": True,
         }
 
     @app.get("/api/v1/auth/me", include_in_schema=False)
@@ -1127,9 +1123,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if principal.session_id is None:
             raise StarletteHTTPException(status_code=400)
         require_csrf(request, principal)
-        token, csrf = await asyncio.to_thread(auth_store.rotate_session, principal)
+        try:
+            token, csrf = await asyncio.to_thread(auth_store.rotate_session, principal)
+        except FieldError as exc:
+            return _field_error(exc)
         response = JSONResponse({"csrf_token": csrf})
-        set_session_cookie(response, token)
+        set_session_cookie(response, token, principal)
         return response
 
     @app.post("/api/v1/auth/logout", include_in_schema=False)
@@ -1962,6 +1961,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.create_link,
                 request.client.host if request.client else None,
                 correlation_id_context.get(),
+                payload.password,
             )
         except PermissionEscalationError as exc:
             return escalation_error(exc)
@@ -2037,6 +2037,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.create_link if payload is not None else True,
                 request.client.host if request.client else None,
                 correlation_id_context.get(),
+                payload.password if payload is not None else None,
             )
         except (PermissionEscalationError, FieldError) as exc:
             return _lifecycle_error(exc)
@@ -2956,6 +2957,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "--offline-confirm I_HAVE_STOPPED_MRK"
             ),
         }
+
+    two_step = TwoStep(auth_store, secret_store)
+    app.include_router(
+        build_auth_router(
+            AuthApiDeps(
+                settings=active_settings,
+                auth_store=auth_store,
+                two_step=two_step,
+                oidc=oidc_service,
+                require_principal=require_principal,
+                require_csrf=require_csrf,
+                error_payload=_error_payload,
+                field_error=_field_error,
+                tenancy=lambda: getattr(app.state, "tenancy", None),
+            )
+        )
+    )
 
     from .modules import register_all
 

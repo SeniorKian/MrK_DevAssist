@@ -42,6 +42,7 @@ from .firewall_engine import (
     validate_rule,
 )
 from .firewall_ports_api import PortPolicyState, register_port_routes
+from .firewall_quick_api import register_quick_routes
 from .firewall_store import DECISION_ACTIONS, FirewallStore
 
 LOGGER = logging.getLogger(__name__)
@@ -224,6 +225,33 @@ class FirewallService:
             LOGGER.exception("port policy sync failed")
         return True, round((time.perf_counter() - started) * 1000, 1), None
 
+    def check_manual_block(self, network: Any, *, settings: dict[str, Any],
+                           requester: Any) -> None:
+        """Every reason a manual block of ``network`` is refused (raises FirewallError)."""
+        refused = refusal(network, settings=settings, requester=requester,
+                          local_addresses=self.local_addresses())
+        if refused is not None:
+            raise FirewallError(refused[0], refused[1])
+        active = self.store.active_blocks(include_simulated=False)
+        if any(item["cidr"] == str(network) for item in active):
+            raise FirewallError("already_blocked", "this address is already blocked", 409)
+        counts = self.store.count_active()
+        if counts["enforced"] + counts["simulated"] >= settings["max_blocks"]:
+            raise FirewallError("max_blocks_reached",
+                                "the maximum number of blocks is reached", 409)
+
+    def manual_block(self, network: Any, *, settings: dict[str, Any], duration: int | None,
+                     reason: str, requester: Any, user_id: int) -> dict[str, Any]:
+        """Add a manual block (all ports); the caller reconciles the helper afterwards."""
+        self.check_manual_block(network, settings=settings, requester=requester)
+        expires = None if duration is None else int(time.time()) + duration
+        item = self.store.add_block(cidr=str(network), origin="manual", reason=reason,
+                                    simulated=False, expires_at=expires, user_id=user_id)
+        self.store.record("manual_block", mode=settings["mode"], ip=str(network),
+                          user_id=user_id, reason=reason,
+                          details={"block_id": item["id"], "expires_at": expires})
+        return item
+
     # ----- detection -------------------------------------------------------
     async def collect_signals(self, settings: dict[str, Any]) -> list[dict[str, Any]]:
         signals: list[dict[str, Any]] = []
@@ -297,6 +325,7 @@ class FirewallService:
             settings = await asyncio.to_thread(self.settings)
             now = time.time()
             expired = await asyncio.to_thread(self.store.expire)
+            await asyncio.to_thread(self.ports.cleanup_expired)
             for item in expired:
                 await asyncio.to_thread(self.store.record, "expire", mode=settings["mode"],
                                         ip=item["cidr"], rule_id=item["rule_id"],
@@ -645,28 +674,9 @@ def register(ctx: ModuleContext) -> None:
                             "invalid_block",
                             f"duration_seconds must be null or 60..{settings['max_ban_seconds']}")
                 requester = parse_requester(request.client.host if request.client else None)
-                refused = refusal(network, settings=settings, requester=requester,
-                                  local_addresses=service.local_addresses())
-                if refused is not None:
-                    raise FirewallError(refused[0], refused[1])
-                active = await asyncio.to_thread(service.store.active_blocks,
-                                                 include_simulated=False)
-                if any(item["cidr"] == str(network) for item in active):
-                    raise FirewallError("already_blocked", "this address is already blocked", 409)
-                counts = await asyncio.to_thread(service.store.count_active)
-                if counts["enforced"] + counts["simulated"] >= settings["max_blocks"]:
-                    raise FirewallError("max_blocks_reached",
-                                        "the maximum number of blocks is reached", 409)
-                expires = None if duration is None else int(time.time()) + duration
                 item = await asyncio.to_thread(
-                    lambda: service.store.add_block(
-                        cidr=str(network), origin="manual", reason=reason.strip(),
-                        simulated=False, expires_at=expires, user_id=principal.user_id))
-                await asyncio.to_thread(
-                    lambda: service.store.record(
-                        "manual_block", mode=settings["mode"], ip=str(network),
-                        user_id=principal.user_id, reason=reason.strip(),
-                        details={"block_id": item["id"], "expires_at": expires}))
+                    service.manual_block, network, settings=settings, duration=duration,
+                    reason=reason.strip(), requester=requester, user_id=principal.user_id)
                 sync = await service.reconcile(force=True)
         except FirewallError as exc:
             await audit(principal.user_id, "firewall.block.create", None, "failure")
@@ -760,6 +770,8 @@ def register(ctx: ModuleContext) -> None:
 
     register_port_routes(router, ctx, service, reader=reader, writer=writer, body=_body,
                          audit=audit)
+    register_quick_routes(router, ctx, service, reader=reader, writer=writer, body=_body,
+                          audit=audit)
     ctx.routers.append(router)
     ctx.start_hooks.append(service.start)
     ctx.stop_hooks.append(service.stop)

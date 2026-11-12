@@ -32,6 +32,8 @@ import { CONFIRM_WORDS, pick, say, statusWord, type Bi } from "./copy";
 import { formatNumber, formatPercent } from "./format";
 import { ContainerLogsDialog } from "./ContainerLogsDialog";
 import { DockerToolsSection, actionLabel, cleanName, isRunning, useContainerActions } from "./DockerTools";
+import { ServerOverview } from "./ServerOverview";
+import type { Tone } from "./copy/kinds";
 
 type AgentStatus = {
   configured: boolean;
@@ -63,6 +65,8 @@ type Container = {
   ports: unknown;
   labels_subset: Record<string, string> | null;
   protected: boolean;
+  /** healthy / unhealthy / starting when the image has a health check (newer agents). */
+  health?: "healthy" | "unhealthy" | "starting" | null;
 };
 type AgentTest = { ok: boolean; latency_ms: number; error_code?: string | null };
 
@@ -152,6 +156,12 @@ const COPY = {
   locked: { fa: "قفل Dokploy", en: "Dokploy lock" },
   lockedHint: { fa: "این کانتینر مال Dokploy است. فقط در حالت پیشرفته و با نوشتن نامش می‌شود آن را خاموش یا راه‌اندازی دوباره کرد.", en: "This container belongs to Dokploy. It can only be stopped or restarted in Advanced mode, by typing its name." },
   logs: { fa: "لاگ", en: "Logs" },
+  stateOn: { fa: "روشن", en: "Running" },
+  stateOnHealthy: { fa: "روشن · سالم", en: "Running · healthy" },
+  stateOnUnhealthy: { fa: "روشن · مشکل دارد", en: "Running · unhealthy" },
+  stateOnStarting: { fa: "روشن · در حال آماده شدن", en: "Running · starting" },
+  stateRestarting: { fa: "در حال راه‌اندازی دوباره", en: "Restarting" },
+  stateWorking: { fa: "در حال انجام", en: "Working…" },
   noOperate: { fa: "روشن و خاموش کردن کانتینرها", en: "Starting and stopping containers" },
 
   advancedTitle: { fa: "اتصال دستیار سرور", en: "Server helper connection" },
@@ -232,6 +242,26 @@ function createdTime(value: Container["created"]): number | null {
     return Number.isNaN(parsed) ? null : parsed / 1000;
   }
   return null;
+}
+
+/** A container's state as a pill: running is "on" (not a busy spinner), with Docker's health if any. */
+function containerPill(language: Language, row: Container, busy: boolean): { tone: Tone; label: string } {
+  if (busy) return { tone: "busy", label: t(language, "stateWorking") };
+  if (row.state === "running") {
+    if (row.health === "unhealthy") return { tone: "error", label: t(language, "stateOnUnhealthy") };
+    if (row.health === "starting") return { tone: "warn", label: t(language, "stateOnStarting") };
+    if (row.health === "healthy") return { tone: "ok", label: t(language, "stateOnHealthy") };
+    return { tone: "ok", label: t(language, "stateOn") };
+  }
+  if (row.state === "restarting") return { tone: "warn", label: t(language, "stateRestarting") };
+  const known = statusWord(language, row.state || "unknown");
+  return { tone: known.tone === "busy" ? "warn" : known.tone, label: known.label };
+}
+
+function ContainerStatePill({ row, busy }: { row: Container; busy: boolean }) {
+  const { language } = useKit();
+  const pill = containerPill(language, row, busy);
+  return <StatusPill tone={pill.tone} label={pill.label} />;
 }
 
 function meterTone(percent: number | null): "ok" | "warn" | "error" | "info" {
@@ -468,7 +498,7 @@ function ContainersSection({
       header: t(language, "colState"),
       render: (row) => (
         <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-          <StatusPill status={busy === row.id ? "running" : row.state} tone={busy === row.id ? "busy" : undefined} />
+          <ContainerStatePill row={row} busy={busy === row.id} />
           {row.protected && <LockBadge />}
         </Stack>
       )
@@ -535,7 +565,7 @@ function ContainersSection({
           card={{
             title: (row) => <Ltr>{cleanName(row.name)}</Ltr>,
             meta: (row) => (isAdvanced ? <Ltr mono>{row.image}</Ltr> : row.protected ? t(language, "locked") : undefined),
-            status: (row) => <StatusPill status={busy === row.id ? "running" : row.state} tone={busy === row.id ? "busy" : undefined} />
+            status: (row) => <ContainerStatePill row={row} busy={busy === row.id} />
           }}
           actions={actions}
           empty={
@@ -934,9 +964,9 @@ export function ServerPanel({ language, permissions, section = "overview" }: Pro
             </Notice>
           )}
           {status.reachable && (
-            <SectionCard title={pick(language, COPY.hostTitle)}>
-              <HostTiles status={status} />
-            </SectionCard>
+            status.host
+              ? <ServerOverview fallback={<SectionCard title={pick(language, COPY.hostTitle)}><HostTiles status={status} /></SectionCard>} />
+              : <SectionCard title={pick(language, COPY.hostTitle)}><HostTiles status={status} /></SectionCard>
           )}
           {status.reachable && (
             <ContainersSection

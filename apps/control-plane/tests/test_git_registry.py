@@ -223,3 +223,21 @@ def test_git_and_registry_templates_are_hardened() -> None:
             assert "@sha256:" in service["image"], name
             for port in service.get("ports") or []:
                 assert port.startswith("${MRK_") and ":-127.0.0.1}" in port, port
+
+
+def test_registry_public_repositories_open_only_those() -> None:
+    from mrk_control_plane.modules import registry_service
+
+    settings = registry_service.validate_settings({
+        "anonymous_pull": False, "public_repositories": ["seniorkian/**", "Tools/cli"],
+        "upstreams": []})
+    assert settings["public_repositories"] == ["seniorkian/**", "tools/cli"]
+    users = [{"name": "ci", "access": "push"}]
+    config = registry_service.render_config(settings, users)
+    repos = config["http"]["accessControl"]["repositories"]
+    assert "anonymousPolicy" not in repos["**"]  # the mirrors stay private
+    assert repos["seniorkian/**"]["anonymousPolicy"] == ["read"]
+    assert repos["seniorkian/**"]["policies"] == repos["**"]["policies"]
+    for bad in ("**", "*", "../x", "a b", "/abs"):
+        with pytest.raises(registry_service.RegistryError):
+            registry_service.validate_settings({"public_repositories": [bad], "upstreams": []})
