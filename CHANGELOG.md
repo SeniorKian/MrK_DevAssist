@@ -7,6 +7,8 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-12
+
 ### Added
 - The add-service wizard asks where each service keeps its data: a Docker volume or a folder
   on the server. Folders shared with the panel (registry config, npm/PyPI data, DNS and firewall
