@@ -17,7 +17,7 @@ services:
   # One-shot: creates the database password once, in a volume only mrk-db and the
   # panel mount. No password lives in .env; restarts keep the same one.
   mrk-db-init:
-    image: ${MRK_PANEL_IMAGE:-ghcr.io/seniorkian/mrk-panel:0.3.0}
+    image: ${MRK_PANEL_IMAGE:-ghcr.io/seniorkian/mrk-panel:0.3.1}
     build: &panel-build
       context: .
       dockerfile: deploy/images/Dockerfile
@@ -92,7 +92,7 @@ services:
         max-file: "3"
 
   mrk-panel:
-    image: ${MRK_PANEL_IMAGE:-ghcr.io/seniorkian/mrk-panel:0.3.0}
+    image: ${MRK_PANEL_IMAGE:-ghcr.io/seniorkian/mrk-panel:0.3.1}
     build: *panel-build
     restart: unless-stopped
     depends_on:
