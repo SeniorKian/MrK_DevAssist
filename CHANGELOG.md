@@ -7,6 +7,8 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-12
+
 ### Fixed
 - The panel and Dokploy agree: Dokploy is the source of truth. A service's Compose is found by
   the service it runs (stale ids from re-created stacks, stacks pasted by hand), domains added in
