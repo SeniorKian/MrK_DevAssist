@@ -427,6 +427,8 @@ class RegistryService:
 class SettingsBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     anonymous_pull: bool = False
+    public_repositories: list[str] = Field(default_factory=list,
+                                           max_length=MAX_PUBLIC_REPOSITORIES)
     upstreams: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_UPSTREAMS)
 
 

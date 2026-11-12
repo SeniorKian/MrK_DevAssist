@@ -7,6 +7,10 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+### Fixed
+- Saving public repositories in the registry settings failed with "unknown field"; the settings
+  route now accepts them.
+
 ## [0.3.0] - 2026-11-12
 
 ### Added

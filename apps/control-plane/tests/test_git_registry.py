@@ -206,6 +206,15 @@ def test_registry_files_users_and_settings(app_client, monkeypatch) -> None:
                               json={"anonymous_pull": False, "upstreams": [upstream]})
         assert rejected.status_code == 422, bad
 
+    # The settings route accepts public repositories (0.3.0 rejected the field).
+    public = client.put("/api/v1/registry/settings", headers=headers, json={
+        "anonymous_pull": False, "public_repositories": ["seniorkian/**"], "upstreams": []})
+    assert public.status_code == 200, public.text
+    assert public.json()["public_repositories"] == ["seniorkian/**"]
+    config = json.loads((folder / "config.json").read_text())
+    assert config["http"]["accessControl"]["repositories"]["seniorkian/**"]["anonymousPolicy"] == [
+        "read"]
+
     assert client.request("DELETE", "/api/v1/registry/users/ci", headers=headers).json() == {
         "ok": True}
     assert "ci:" not in (folder / "htpasswd").read_text()
