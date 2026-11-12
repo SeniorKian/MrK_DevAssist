@@ -16,6 +16,7 @@ import AutoModeRoundedIcon from "@mui/icons-material/AutoModeRounded";
 import HubRoundedIcon from "@mui/icons-material/HubRounded";
 import DescriptionRoundedIcon from "@mui/icons-material/DescriptionRounded";
 import BackHandRoundedIcon from "@mui/icons-material/BackHandRounded";
+import RocketLaunchRoundedIcon from "@mui/icons-material/RocketLaunchRounded";
 import { ApiError, hasPermission } from "./api";
 import { nameConfirmation, pick, reasonFor, say, type Bi } from "./copy";
 import {
@@ -23,10 +24,10 @@ import {
   type ChoiceCardOption, type WizardStep
 } from "./kit";
 import {
-  ROUTING_MODE_WORDS, apiTime, createDomain, deleteDomain, domainHealthSummary, domainProblemText, effectiveMode, modeAvailable, routingModeWord,
-  serviceName, updateDomain, verifyDomain,
+  DOMAIN_NOTICES, ROUTING_MODE_WORDS, apiTime, createDomain, deleteDomain, domainHealthSummary, domainProblemText, effectiveMode, isCurrentHost, modeAvailable,
+  routingModeWord, runSuggestedRedeploy, serviceName, updateDomain, verifyDomain,
   type CreateDomainResult, type DomainHealth, type DomainRecord, type ManualInstructions, type RoutingChoice, type RoutingDetected,
-  type RoutingSummary, type ServiceDomainRef, type ServiceInfo
+  type RoutingSummary, type ServiceDomainRef, type ServiceInfo, type SuggestedAction
 } from "./services";
 
 const COPY = {
@@ -52,6 +53,16 @@ const COPY = {
   addButton: { fa: "افزودن دامنه", en: "Add the domain" },
   stepResult: { fa: "نتیجه", en: "Result" },
   appliedAuto: { fa: "دامنه {host} خودکار وصل شد ({mode}).", en: "{host} was connected automatically ({mode})." },
+  appliedAdopted: { fa: "دامنه {host} از قبل در Dokploy روی همین سرویس بود؛ همان را برداشتیم و چیزی تغییر نکرد.", en: "{host} was already on this service in Dokploy; it was taken over as it is and nothing changed." },
+  appliedNeedsDeploy: { fa: "دامنه {host} در Dokploy ثبت شد، ولی هنوز کار نمی‌کند.", en: "{host} was added in Dokploy, but it doesn't work yet." },
+  deployNow: { fa: "همین حالا «Deploy» کن", en: "Deploy now" },
+  deploying: { fa: "در حال شروع «Deploy»…", en: "Starting the deploy…" },
+  deployStarted: { fa: "«Deploy» شروع شد. وقتی تمام شود، DevAssist خودش دامنه را دوباره بررسی می‌کند.", en: "The deploy has started. When it finishes, DevAssist checks the domain again by itself." },
+  deployPanelWarning: { fa: "این سرویس خود پنل است؛ هنگام «Deploy» پنل حدود یک دقیقه در دسترس نیست و بعد خودش برمی‌گردد.", en: "This is the panel itself; during the deploy the panel is away for about a minute, then comes back by itself." },
+  // lockout guard
+  currentHostNotice: { fa: "همین الان با این دامنه وارد پنل شده‌اید. اگر آن را بردارید، ممکن است دیگر نتوانید پنل را با این آدرس باز کنید.", en: "You're using this domain right now. If you remove it, you may no longer be able to open the panel at this address." },
+  lastPanelNotice: { fa: "این آخرین دامنه پنل است. بعد از برداشتن آن، پنل فقط با آدرس‌های داخلی باز می‌شود.", en: "This is the panel's last domain. After removing it, the panel opens only on its internal addresses." },
+  removeCurrentBody: { fa: "شما همین الان با این دامنه وارد پنل شده‌اید و بعد از برداشتن آن ممکن است پنل با این آدرس باز نشود. فقط وقتی ادامه دهید که آدرس دیگری برای ورود دارید.", en: "You're using this domain right now and the panel may stop opening at this address after it's removed. Continue only if you have another way in." },
   certWait: { fa: "گرفتن گواهی HTTPS ممکن است چند دقیقه طول بکشد. بعد «بررسی کن» را بزنید.", en: "The HTTPS certificate can take a few minutes. Then press “Check it”." },
   savedNotApplied: { fa: "دامنه ذخیره شد، ولی خودکار وصل نشد: {reason} آن را دستی در Dokploy ثبت کنید:", en: "The domain was saved but not connected automatically: {reason} Add it in Dokploy by hand:" },
   manualIntro: { fa: "دامنه ذخیره شد. حالا آن را در Dokploy ثبت کنید:", en: "The domain was saved. Now add it in Dokploy:" },
@@ -216,7 +227,7 @@ export function ManualSteps({ host, port, instructions, detected }: {
         ))}
       </Box>
       <CopyField label={pick(language, COPY.fieldHost)} value={finalHost} />
-      {service ? <CopyField label={pick(language, COPY.fieldService)} value={service} /> : null}
+      {service ? <CopyField label={pick(language, COPY.fieldService)} value={dokploy.service_name ?? service} /> : null}
       {finalPort ? <CopyField label={pick(language, COPY.fieldPort)} value={String(finalPort)} /> : null}
     </Stack>
   );
@@ -241,7 +252,15 @@ export function DomainHealthDetails({ health, port, detected }: { health?: Domai
   const summary = domainHealthSummary(language, health ?? null);
   const unknown = pick(language, COPY.unknownValue);
   let message: ReactNode;
-  if (summary.tone === "off") message = <Notice>{pick(language, COPY.notChecked)}</Notice>;
+  const notice = summary.notice ? DOMAIN_NOTICES[summary.notice] : undefined;
+  if (notice) {
+    message = (
+      <Notice tone="info">
+        <Typography variant="body2" sx={{ fontWeight: 700 }}>{pick(language, notice.title)}</Typography>
+        <Typography variant="body2" sx={{ lineHeight: 1.9 }}>{pick(language, notice.body)}</Typography>
+      </Notice>
+    );
+  } else if (summary.tone === "off") message = <Notice>{pick(language, COPY.notChecked)}</Notice>;
   else if (summary.tone === "ok") message = <Notice tone="success">{pick(language, COPY.allGood)}</Notice>;
   else {
     const problem = domainProblemText(language, summary.problem ?? health?.problem_code ?? null, { health, port, expectedIps: detected?.server_ips });
@@ -316,7 +335,47 @@ export function DomainHealthDetails({ health, port, detected }: { health?: Domai
 
 // ── chips ────────────────────────────────────────────────────────────────────
 
-const DOT: Record<string, string> = { ok: "success.main", warn: "warning.main", error: "error.main", off: "text.disabled" };
+const DOT: Record<string, string> = { ok: "success.main", warn: "warning.main", error: "error.main", off: "text.disabled", info: "info.main" };
+
+/** The «needs one deploy» notice with a button that starts the deploy the server suggested. */
+export function RedeployNotice({ host, action, panel, onStarted }: { host: string; action?: SuggestedAction | null; panel?: boolean; onStarted?: () => void }) {
+  const { language } = useKit();
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const notice = DOMAIN_NOTICES.pending_redeploy;
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await runSuggestedRedeploy(action);
+      setDone(true);
+      onStarted?.();
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Stack spacing={1}>
+      <Notice tone="warning">
+        <Typography variant="body2" sx={{ fontWeight: 700 }}>{say(language, COPY.appliedNeedsDeploy, { host })}</Typography>
+        <Typography variant="body2" sx={{ lineHeight: 1.9 }}>{pick(language, notice.body)}</Typography>
+        {panel ? <Typography variant="body2" sx={{ lineHeight: 1.9 }}>{pick(language, COPY.deployPanelWarning)}</Typography> : null}
+      </Notice>
+      {done ? <Notice tone="success">{pick(language, COPY.deployStarted)}</Notice> : null}
+      {action?.endpoint && !done ? (
+        <Box>
+          <Button variant="contained" onClick={() => void start()} disabled={busy} startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <RocketLaunchRoundedIcon />} sx={{ minHeight: 44 }}>
+            {busy ? pick(language, COPY.deploying) : pick(language, COPY.deployNow)}
+          </Button>
+        </Box>
+      ) : null}
+      {error !== null ? <FriendlyError error={error} scope="domains" onRetry={() => void start()} /> : null}
+    </Stack>
+  );
+}
 
 export function DomainChips({ service, domains, onOpen }: { service: ServiceInfo; domains: (ServiceDomainRef | DomainRecord)[]; onOpen?: (id: string) => void }) {
   const { language } = useKit();
@@ -442,6 +501,7 @@ export function AddDomainWizard({ service, services, routing, availableModes, on
   const appliedMode = (applied?.mode ?? result?.data.domain?.mode ?? plannedMode) as string;
   const isManual = appliedMode === "manual";
   const appliedOk = applied?.ok !== false;
+  const needsDeploy = Boolean(applied?.redeploy_required);
 
   const steps: WizardStep[] = [
     {
@@ -509,10 +569,14 @@ export function AddDomainWizard({ service, services, routing, availableModes, on
         const host = result?.data.domain?.host ?? result?.host ?? "";
         return (
           <Stack spacing={2}>
-            {!isManual && appliedOk ? (
+            {!isManual && appliedOk && needsDeploy ? (
+              <RedeployNotice host={host} action={applied?.suggested_action} panel={service.id === "panel"} onStarted={onChanged} />
+            ) : !isManual && appliedOk ? (
               <Notice tone="success">
-                <Typography variant="body2" sx={{ fontWeight: 700 }}>{say(language, COPY.appliedAuto, { host, mode: routingModeWord(language, appliedMode) })}</Typography>
-                {https ? <Typography variant="body2">{pick(language, COPY.certWait)}</Typography> : null}
+                <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                  {applied?.adopted ? say(language, COPY.appliedAdopted, { host }) : say(language, COPY.appliedAuto, { host, mode: routingModeWord(language, appliedMode) })}
+                </Typography>
+                {https && !applied?.adopted ? <Typography variant="body2">{pick(language, COPY.certWait)}</Typography> : null}
               </Notice>
             ) : (
               <>
@@ -585,6 +649,9 @@ export function DomainDialog({ domain, service, detected, permissions, onClose, 
   const canWrite = hasPermission(permissions, "domains:write");
   const summary = domainHealthSummary(language, health);
   const port = service?.internal_port ?? null;
+  const isPanel = domain.service_id === "panel";
+  const inUseNow = isPanel && isCurrentHost(domain.host);
+  const lastPanel = isPanel && (service?.domains?.length ?? 0) <= 1;
 
   const run = async (kind: NonNullable<typeof busy>, work: () => Promise<void>) => {
     setBusy(kind);
@@ -623,7 +690,7 @@ export function DomainDialog({ domain, service, detected, permissions, onClose, 
   const remove = async () => {
     const confirmed = await ask({
       title: say(language, COPY.removeTitle, { host: domain.host }),
-      body: pick(language, COPY.removeBody),
+      body: pick(language, inUseNow ? COPY.removeCurrentBody : lastPanel ? COPY.lastPanelNotice : COPY.removeBody),
       severity: "destructive",
       typed: nameConfirmation(domain.host, domain.host),
       confirmLabel: pick(language, COPY.removeYes)
@@ -632,7 +699,8 @@ export function DomainDialog({ domain, service, detected, permissions, onClose, 
     setBusy("delete");
     setError(null);
     try {
-      await deleteDomain(domain.id, domain.host);
+      // The server refuses the panel domain in use (or the last one) without this flag.
+      await deleteDomain(domain.id, domain.host, inUseNow || lastPanel);
       notify(say(language, COPY.removed, { host: domain.host }));
       onChanged();
       onClose();
@@ -658,9 +726,16 @@ export function DomainDialog({ domain, service, detected, permissions, onClose, 
             {domain.primary ? <StatusPill tone="info" label={pick(language, COPY.isMain)} /> : null}
             {service ? <Typography variant="body2" color="text.secondary">{serviceName(language, service)}</Typography> : null}
           </Stack>
-          <DomainHealthDetails health={health} port={port} detected={detected} />
+          {domain.pending_redeploy ? (
+            <RedeployNotice host={domain.host} action={domain.suggested_action} panel={isPanel} onStarted={onChanged} />
+          ) : (
+            <DomainHealthDetails health={health} port={port} detected={detected} />
+          )}
+          {inUseNow ? <Notice tone="warning">{pick(language, COPY.currentHostNotice)}</Notice> : lastPanel ? <Notice>{pick(language, COPY.lastPanelNotice)}</Notice> : null}
           {error !== null ? <FriendlyError error={error} scope="domains" onRetry={() => setError(null)} /> : null}
-          {domain.mode === "manual" && summary.tone !== "ok" ? <ManualSteps host={domain.host} port={port} detected={detected} /> : null}
+          {domain.mode === "manual" && summary.tone !== "ok" ? (
+            <ManualSteps host={domain.host} port={domain.instructions?.dokploy?.port ?? port} instructions={domain.instructions} detected={domain.instructions ? null : detected} />
+          ) : null}
           {isAdvanced ? (
             <KeyValueList
               dense

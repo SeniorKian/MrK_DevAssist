@@ -203,6 +203,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   agent_unreachable: { fa: "دستیار سرور جواب نمی‌دهد. مطمئن شوید روی سرور روشن است.", en: "The server helper isn't answering. Make sure it's running on the server.", action: "retry" },
   agent_unavailable: { fa: "دستیار سرور جواب نمی‌دهد. مطمئن شوید روی سرور روشن است.", en: "The server helper isn't answering. Make sure it's running on the server.", action: "retry" },
   agent_timeout: { fa: "دستیار سرور دیر جواب داد. چند لحظه بعد دوباره امتحان کنید.", en: "The server helper answered too slowly. Try again in a moment.", action: "retry" },
+  agent_name_unresolved: { fa: "پنل نام دستیار سرور را پیدا نمی‌کند. پنل و دستیار باید در یک شبکه باشند («mrk-net» یا همان شبکه Dokploy)؛ نام سرویس و نام دیگرش در شبکه را هم بررسی کنید.", en: "The panel can't find the server helper by name. The panel and the helper must share the mrk-net network (or the same Dokploy network); check the service name/alias.", action: "retry" },
   agent_auth_failed: { fa: "دستیار سرور کد اتصال را قبول نکرد. کد تازه را از روی سرور بگیرید و دوباره وصل کنید.", en: "The server helper rejected the pairing code. Get a fresh code from the server and connect again.", action: "pairAgent" },
   agent_rejected: { fa: "دستیار سرور این درخواست را قبول نکرد.", en: "The server helper refused this request." },
   agent_key_required: { fa: "کد اتصال را بچسبانید.", en: "Paste the pairing code.", field: "key" },
@@ -252,6 +253,9 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   invalid_dokploy_api_key: { fa: "کلید Dokploy درست نیست. آن را دوباره از Dokploy کپی کنید.", en: "The Dokploy key isn't right. Copy it from Dokploy again.", field: "api_key" },
   invalid_dokploy_url: { fa: "نشانی Dokploy درست نیست؛ مثل https://dokploy.example.com بنویسید.", en: "The Dokploy address isn't valid; write it like https://dokploy.example.com.", field: "url" },
   invalid_dokploy_config: { fa: "تنظیم Dokploy ذخیره نشد. نشانی و کلید را بررسی کنید.", en: "The Dokploy setting wasn't saved. Check the address and key.", action: "fixFields" },
+  dokploy_forbidden: { fa: "Dokploy به این کلید اجازه این کار را نمی‌دهد. در Dokploy دسترسی کاربری را که این کلید را ساخته بررسی کنید.", en: "Dokploy doesn't let this key do that. Check the key owner's access in Dokploy." },
+  dokploy_failed: { fa: "Dokploy نتوانست این کار را انجام دهد. چند لحظه بعد دوباره امتحان کنید یا وضعیت را در خود Dokploy ببینید.", en: "Dokploy couldn't do this. Try again in a moment, or check it in Dokploy itself.", action: "retry" },
+  invalid_dokploy_public_url: { fa: "نشانی Dokploy در مرورگر درست نیست؛ مثل https://dokploy.example.com بنویسید یا خالی بگذارید.", en: "The Dokploy browser address isn't valid; write it like https://dokploy.example.com or leave it empty.", field: "public_url" },
   dokploy_rate_limited: { fa: "برای این‌که به Dokploy فشار نیاید، کمی صبر کنید و دوباره امتحان کنید.", en: "To go easy on Dokploy, wait a moment and try again.", action: "retry" },
   dokploy_rejected: { fa: "Dokploy این درخواست را قبول نکرد. وضعیت برنامه را در خود Dokploy ببینید.", en: "Dokploy refused this request. Check the app in Dokploy itself." },
   dokploy_not_found: { fa: "این مورد در Dokploy پیدا نشد. فهرست را تازه کنید.", en: "This wasn't found in Dokploy. Refresh the list.", action: "refreshList" },
@@ -342,6 +346,11 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   invalid_bucket_mode: { fa: "نوع پوشه اصلی را از گزینه‌ها انتخاب کنید.", en: "Pick the bucket type from the options.", field: "mode" },
   invalid_link_mode: { fa: "برای پوشه سرور، «فقط خواندن» یا «خواندن و نوشتن» را انتخاب کنید.", en: "For a server folder, choose “read only” or “read and write”.", field: "link_mode" },
   engine_unreachable: { fa: "فضای فایل الان جواب نمی‌دهد. چند لحظه بعد دوباره امتحان کنید.", en: "File space isn't answering right now. Try again in a moment.", action: "retry" },
+  s3_name_unresolved: { fa: "پنل نام سرویس فضای فایل را پیدا نمی‌کند. پنل و آن باید در یک شبکه باشند («mrk-net» یا همان شبکه Dokploy)؛ نام سرویس و نام دیگرش در شبکه را هم بررسی کنید.", en: "The panel can't find the file space service by name. The panel and the service must share the mrk-net network (or the same Dokploy network); check the service name/alias.", action: "retry" },
+  registry_name_unresolved: { fa: "پنل نام این مخزن را پیدا نمی‌کند. پنل و مخزن باید در یک شبکه باشند («mrk-net» یا همان شبکه Dokploy)؛ نام سرویس و نام دیگرش در شبکه را هم بررسی کنید.", en: "The panel can't find this registry by name. The panel and the registry must share the mrk-net network (or the same Dokploy network); check the service name/alias.", action: "retry" },
+  registry_unreachable: { fa: "مخزن جواب نمی‌دهد. مطمئن شوید سرویس آن روشن است.", en: "The registry isn't answering. Make sure its service is running.", action: "retry" },
+  registry_timeout: { fa: "مخزن دیر جواب داد؛ شاید سرش شلوغ است یا تازه روشن شده. چند لحظه بعد دوباره نگاه کنید.", en: "The registry answered too slowly; it may be busy or just starting. Look again in a moment.", action: "retry" },
+  registry_bootstrapping: { fa: "مخزن PyPI هنوز در حال آماده شدن است.", en: "The PyPI registry is still getting ready." },
   engine_error: { fa: "فضای فایل این کار را انجام نداد. دوباره امتحان کنید.", en: "File space didn't do this. Try again.", action: "retry" },
   engine_access_denied: { fa: "فضای فایل اجازه این کار را نداد.", en: "File space didn't allow this." },
   engine_auth_failed: { fa: "فضای فایل کلید دسترسی را قبول نکرد.", en: "File space didn't accept the access key." },
@@ -478,6 +487,7 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   // ── Firewall ──────────────────────────────────────────────────────────────
   firewall_not_configured: { fa: "نگهبان دیوار آتش هنوز وصل نشده.", en: "The firewall helper isn't connected yet." },
   firewall_unreachable: { fa: "نگهبان دیوار آتش جواب نمی‌دهد. روشن بودن آن را روی سرور بررسی کنید.", en: "The firewall helper isn't answering. Check that it's running on the server.", action: "retry" },
+  firewall_name_unresolved: { fa: "پنل نام نگهبان دیوار آتش را پیدا نمی‌کند. پنل و آن باید در یک شبکه باشند («mrk-net» یا همان شبکه Dokploy)؛ نام سرویس و نام دیگرش در شبکه را هم بررسی کنید.", en: "The panel can't find the firewall helper by name. The panel and the helper must share the mrk-net network (or the same Dokploy network); check the service name/alias.", action: "retry" },
   firewall_timeout: { fa: "نگهبان دیوار آتش دیر جواب داد. دوباره امتحان کنید.", en: "The firewall helper answered too slowly. Try again.", action: "retry" },
   firewall_auth_failed: { fa: "نگهبان دیوار آتش کد اتصال را قبول نکرد. کد تازه را از روی سرور بگیرید.", en: "The firewall helper rejected the pairing code. Get a fresh code from the server." },
   firewall_key_required: { fa: "کد اتصال نگهبان دیوار آتش را بچسبانید.", en: "Paste the firewall helper's pairing code.", field: "key" },
@@ -569,6 +579,24 @@ export const ERROR_CATALOG: Record<string, ErrorEntry> = {
   invalid_routing_mode: { fa: "این روش اتصال روی این سرور در دسترس نیست. یکی دیگر را انتخاب کنید.", en: "This routing method isn't available on this server. Pick another one." },
   "domains:invalid_mode": { fa: "این روش اتصال روی این سرور در دسترس نیست. یکی دیگر را انتخاب کنید.", en: "This routing method isn't available on this server. Pick another one." },
   dokploy_domain_failed: { fa: "Dokploy دامنه را ثبت نکرد. اتصال Dokploy را بررسی کنید و دوباره امتحان کنید.", en: "Dokploy didn't add the domain. Check the Dokploy connection and try again.", action: "retry" },
+  dokploy_target_missing: {
+    fa: "سرویسی که این دامنه باید به آن وصل شود در Dokploy پیدا نشد؛ شاید پاک یا دوباره ساخته شده باشد. اتصال Dokploy را بررسی کنید و دوباره امتحان کنید.",
+    en: "The service this domain belongs to wasn't found in Dokploy; it may have been removed or created again. Check the Dokploy connection and try again.",
+    action: "retry"
+  },
+  service_in_own_stack: {
+    fa: "این سرویس در Compose جدای خودش در Dokploy اجرا می‌شود و DevAssist هنوز آن Compose را پیدا نکرده است. اتصال Dokploy را بررسی کنید، یا دامنه را خودتان در Dokploy روی همان Compose اضافه کنید.",
+    en: "This service runs in its own Compose in Dokploy, and DevAssist hasn't found that Compose yet. Check the Dokploy connection, or add the domain yourself on that Compose in Dokploy."
+  },
+  routing_detection_failed: {
+    fa: "Dokploy وصل است، ولی DevAssist نتوانست سرویس خودش را در آن پیدا کند. چند لحظه بعد دوباره امتحان کنید، یا روش «دستی» را انتخاب کنید.",
+    en: "Dokploy is set up, but DevAssist couldn't find its own service there. Try again in a moment, or pick the manual way.",
+    action: "retry"
+  },
+  panel_domain_in_use: {
+    fa: "شما همین الان با این دامنه وارد پنل شده‌اید، یا این آخرین دامنه پنل است. برای برداشتن آن باید جداگانه تأیید کنید.",
+    en: "You're using this domain right now, or it's the panel's last domain. Removing it needs a separate confirmation."
+  },
   traefik_write_failed: { fa: "دستیار سرور نتوانست فایل Traefik را بنویسد. دسترسی پوشه Traefik را بررسی کنید.", en: "The server helper couldn't write the Traefik file. Check access to the Traefik folder.", action: "retry" },
   traefik_dir_unavailable: { fa: "پوشه تنظیمات Traefik در دسترس دستیار سرور نیست.", en: "The server helper can't reach the Traefik settings folder." },
   primary_required: { fa: "دست‌کم یک دامنه باید اصلی باشد. اول دامنه دیگری را اصلی کنید.", en: "At least one domain must be the main one. Make another domain main first." },

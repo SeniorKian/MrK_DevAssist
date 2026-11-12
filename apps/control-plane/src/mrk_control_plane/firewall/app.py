@@ -66,6 +66,7 @@ MIN_ROLLBACK_SECONDS, MAX_ROLLBACK_SECONDS = 30, 900
 _MAX_BODY_BYTES = 4 * 1024 * 1024
 _MAX_SOURCES = 8
 _MAX_SIGNALS = 5000
+_HOST_FACTS_CACHE_SECONDS = 30.0
 _SIGNED_ROUTES = {("GET", "/v1/info"), ("POST", "/v1/apply"), ("POST", "/v1/signals"),
                   ("POST", "/v1/confirm"), ("POST", "/v1/recover"), ("GET", "/v1/import")}
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
@@ -434,10 +435,29 @@ def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None,
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    host_facts: dict[str, Any] = {"at": None, "value": None}
+
+    def read_host_facts() -> dict[str, Any]:
+        # Addresses, the sshd port and listening sockets change rarely; at 0.25 CPU
+        # parsing /proc/net on every probe is what made /v1/info slow.
+        now = time.monotonic()
+        at = host_facts["at"]
+        if at is None or now - at >= _HOST_FACTS_CACHE_SECONDS:
+            host_facts["value"] = {
+                "local_addresses": netinfo.local_addresses(config.proc_net),
+                "ssh": importers.read_sshd_ports(config.host_etc),
+                "listening": netinfo.listening_ports(config.proc_net),
+            }
+            host_facts["at"] = now
+        return host_facts["value"]
+
+    def read_info() -> tuple[dict[str, Any], dict[str, Any]]:
+        return helper.manager.table_status(), read_host_facts()
+
     @app.get("/v1/info")
     async def info() -> dict[str, Any]:
-        table = await asyncio.to_thread(helper.manager.table_status)
-        addresses = await asyncio.to_thread(netinfo.local_addresses, config.proc_net)
+        # One worker-thread hop for everything (the nft listing stays live).
+        table, facts = await asyncio.to_thread(read_info)
         return {
             "version": FIREWALL_VERSION,
             "nft_available": helper.runner.available(),
@@ -448,10 +468,10 @@ def create_firewall_app(config: FirewallConfig, *, runner: Runner | None = None,
             "applied_at": helper.applied_at,
             "last_error": helper.last_error,
             "table": table,
-            "local_addresses": addresses,
+            "local_addresses": facts["local_addresses"],
             "ports": helper.ports_info(),
-            "ssh": await asyncio.to_thread(importers.read_sshd_ports, config.host_etc),
-            "listening": await asyncio.to_thread(netinfo.listening_ports, config.proc_net),
+            "ssh": facts["ssh"],
+            "listening": facts["listening"],
         }
 
     @app.post("/v1/apply")

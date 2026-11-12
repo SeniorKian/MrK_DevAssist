@@ -9,8 +9,10 @@
  * Actions:
  * - panel: `POST /api/v1/releases/panel/upgrade {version, confirmation:"UPDATE"}` when the panel runs
  *   as a Dokploy compose (it restarts); otherwise ready commands to copy;
- * - services the panel deployed through Dokploy/Coolify: `POST /api/v1/releases/services/{id}/upgrade`,
- *   followed with `GET /api/v1/releases/jobs/{job}`; only the image line changes, pairing keys stay;
+ * - services in Dokploy/Coolify: `POST /api/v1/releases/services/{id}/upgrade`, followed with
+ *   `GET /api/v1/releases/jobs/{job}`. Dokploy's Compose is found by its service even when it was
+ *   pasted by hand; an image line like `${{project.MRK_VERSION}}` moves that project variable, and
+ *   a compose file the admin edited is kept (warnings `shared_version_changed`, `compose_customized`);
  * - other services: `GET /api/v1/releases/services/{id}/manual` (new compose.yaml, the one env line,
  *   steps per tool) and `POST /api/v1/releases/services/{id}/mark-updated` once done.
  */
@@ -57,6 +59,8 @@ type Job = {
   status: "running" | "succeeded" | "failed";
   phase: string;
   error_code: string | null;
+  message?: string | null;
+  warnings?: string[];
   connection: Connection | null;
 };
 type Step = { fa: string; en: string };
@@ -123,6 +127,14 @@ const COPY = {
   guide: { fa: "راهنمای به‌روزرسانی", en: "How to update" },
   updated: { fa: "به‌روز شد.", en: "Updated." },
   updateFailed: { fa: "به‌روزرسانی انجام نشد.", en: "The update didn't finish." },
+  sharedVersion: {
+    fa: "نسخه در متغیر MRK_VERSION پروژه در Dokploy عوض شد. بقیه سرویس‌هایی که از همین متغیر می‌خوانند هم در استقرار بعدی همین نسخه را می‌گیرند.",
+    en: "The version was changed in the project's MRK_VERSION variable in Dokploy. Other services that read it take this version on their next deploy."
+  },
+  composeKept: {
+    fa: "فایل compose این سرویس را خودتان تغییر داده‌اید، پس پنل آن را دست نزد و فقط نسخه را عوض کرد. اگر این نسخه چیز تازه‌ای در compose لازم دارد، «راهنما» را ببینید.",
+    en: "You changed this service's compose file, so the panel kept it and only changed the version. If this version needs something new in the compose file, see the guide."
+  },
   noOperate: { fa: "برای به‌روزرسانی سرویس‌ها اجازه «روشن و خاموش کردن سرویس‌ها» لازم است.", en: "Updating services needs the “start and stop services” permission." },
   manualTitle: { fa: "به‌روزرسانی «{name}»", en: "Update “{name}”" },
   manualIntro: { fa: "فایل compose.yaml تازه را جایگزین کنید و در تنظیمات فقط یک خط را عوض کنید. کلید اتصال و بقیه مقدارها همان می‌مانند.", en: "Replace compose.yaml with the new one and change one line of the settings. The pairing key and every other value stay as they are." },
@@ -163,7 +175,15 @@ const JOB_ERRORS: Record<string, Bi> = {
   deploy_failed: { fa: "نسخه تازه بالا نیامد؛ گزارش استقرار را در همان ابزار ببینید.", en: "The new version didn't start; see the deployment log in that tool." },
   deploy_timeout: { fa: "بالا آمدن نسخه تازه بیش از حد طول کشید.", en: "Starting the new version took too long." },
   connect_failed: { fa: "نسخه تازه بالا آمد ولی هنوز به پنل جواب نمی‌دهد؛ کمی بعد دوباره نگاه کنید.", en: "The new version is up but doesn't answer the panel yet; look again in a moment." },
-  service_missing: { fa: "این سرویس دیگر در آن ابزار پیدا نمی‌شود.", en: "This service can't be found in that tool any more." }
+  service_missing: { fa: "این سرویس دیگر در آن ابزار پیدا نمی‌شود.", en: "This service can't be found in that tool any more." },
+  image_reference: {
+    fa: "خط ایمیج این سرویس در Dokploy از چند متغیر ساخته شده و پنل نمی‌تواند آن را درست عوض کند. نسخه را در خود Dokploy عوض کنید.",
+    en: "This service's image line in Dokploy is built from several variables, so the panel can't change it safely. Change the version in Dokploy."
+  },
+  project_unknown: { fa: "پروژه این سرویس در Dokploy پیدا نشد.", en: "This service's project wasn't found in Dokploy." },
+  environment_unknown: { fa: "محیط این سرویس در Dokploy پیدا نشد.", en: "This service's environment wasn't found in Dokploy." },
+  dokploy_rejected: { fa: "Dokploy درخواست را نپذیرفت.", en: "Dokploy refused the request." },
+  dokploy_not_found: { fa: "Dokploy این سرویس را پیدا نکرد.", en: "Dokploy couldn't find this service." }
 };
 
 function title(language: Language, command: Command) {
@@ -355,9 +375,16 @@ function ServiceItem({ row, permissions, onChanged, onGuide }: { row: ServiceRow
               <Typography variant="body2" color="text.secondary">{pick(language, PHASES[job.phase] ?? PHASES.preparing)}</Typography>
             </Stack>
           ) : job.status === "succeeded" ? (
-            <Notice tone="success">{pick(language, COPY.updated)}</Notice>
+            <Stack spacing={1}>
+              <Notice tone="success">{pick(language, COPY.updated)}</Notice>
+              {job.warnings?.includes("shared_version_changed") ? <Notice tone="info">{pick(language, COPY.sharedVersion)}</Notice> : null}
+              {job.warnings?.includes("compose_customized") ? <Notice tone="warning">{pick(language, COPY.composeKept)}</Notice> : null}
+            </Stack>
           ) : (
-            <Notice tone={job.error_code === "connect_failed" ? "warning" : "error"}>{pick(language, jobError ?? COPY.updateFailed)}</Notice>
+            <Notice tone={job.error_code === "connect_failed" ? "warning" : "error"}>
+              {pick(language, jobError ?? COPY.updateFailed)}
+              {job.message ? <Box sx={{ mt: 0.5 }}><Ltr>{job.message}</Ltr></Box> : null}
+            </Notice>
           )}
         </Box>
       ) : null}

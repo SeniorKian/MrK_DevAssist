@@ -21,17 +21,28 @@ export type RoutingMode = "dokploy_api" | "traefik_file" | "manual";
 export type RoutingChoice = RoutingMode | "auto";
 
 export type DomainProblemCode =
-  | "dns_missing" | "dns_wrong_ip" | "tls_missing" | "tls_expiring" | "tls_invalid" | "unreachable" | "wrong_service" | string;
+  | "dns_missing" | "dns_wrong_ip" | "tls_missing" | "tls_pending" | "tls_expiring" | "tls_invalid" | "unreachable" | "wrong_service" | string;
+
+/** Neutral notes on a check (never an alarm): see DOMAIN_NOTICES. */
+export type DomainNoticeCode = "not_checkable_from_server" | "pending_redeploy" | "removed_in_dokploy" | string;
 
 export type DomainHealth = {
   dns?: { ok?: boolean | null; addresses?: string[] | null; expected?: string[] | null } | null;
   tls?: { ok?: boolean | null; expires_at?: number | string | null; issuer?: string | null } | null;
   reach?: { ok?: boolean | null; status_code?: number | null; matched_service?: string | boolean | null } | null;
   checked_at?: number | string | null;
+  /** "traefik_internal" (asked Dokploy's Traefik inside the Docker network) or "public". */
+  checked_via?: string | null;
   problem_code?: DomainProblemCode | null;
+  notice?: DomainNoticeCode | null;
+  /** What the check found while a notice holds it back (e.g. waiting for a deploy). */
+  held_problem_code?: DomainProblemCode | null;
   /** Some servers send a one-word summary instead of the full object. */
   state?: string | null;
 };
+
+/** A redeploy the server suggests (`POST endpoint`, Dokploy deploy permission needed). */
+export type SuggestedAction = { kind?: string | null; service_type?: string | null; service_id?: string | null; method?: string | null; endpoint?: string | null };
 
 /** A domain as listed inside a service (`GET /api/v1/services`). `health` may be the full object or a word. */
 export type ServiceDomainRef = {
@@ -40,6 +51,8 @@ export type ServiceDomainRef = {
   primary?: boolean;
   https?: boolean;
   health?: DomainHealth | string | null;
+  pending_redeploy?: boolean | null;
+  removed_in_dokploy?: boolean | null;
 };
 
 export type ServiceUsage = {
@@ -101,17 +114,33 @@ export type DomainRecord = {
   created_at?: number | string | null;
   dokploy_domain_id?: string | null;
   health?: DomainHealth | null;
+  /** "panel" (added here) or "dokploy" (read back from Dokploy). */
+  source?: string | null;
+  /** Dokploy has it, but the Compose must be deployed once before it works. */
+  pending_redeploy?: boolean | null;
+  suggested_action?: SuggestedAction | null;
+  /** The domain was removed in Dokploy itself. */
+  removed_in_dokploy?: boolean | null;
+  /** Manual rows: the steps for the right Dokploy service. */
+  instructions?: ManualInstructions | null;
 };
 
 export type ManualInstructions = {
   steps_fa?: string[] | null;
   steps_en?: string[] | null;
-  dokploy?: { project?: string | null; service?: string | null; port?: number | null; host?: string | null } | null;
+  dokploy?: { project?: string | null; service?: string | null; service_name?: string | null; port?: number | null; host?: string | null } | null;
 };
 
 export type CreateDomainResult = {
   domain?: DomainRecord | null;
-  applied?: { mode?: RoutingMode | string | null; ok?: boolean | null; error_code?: string | null } | null;
+  applied?: {
+    mode?: RoutingMode | string | null;
+    ok?: boolean | null;
+    error_code?: string | null;
+    redeploy_required?: boolean | null;
+    suggested_action?: SuggestedAction | null;
+    adopted?: boolean | null;
+  } | null;
   instructions?: ManualInstructions | null;
 };
 
@@ -161,8 +190,25 @@ export function updateDomain(id: string, body: { primary?: boolean; https?: bool
   return mutateJson<DomainRecord | { domain?: DomainRecord }>(`/api/v1/domains/${encodeURIComponent(id)}`, { method: "PATCH", body });
 }
 
-export function deleteDomain(id: string, host: string) {
-  return mutateJson(`/api/v1/domains/${encodeURIComponent(id)}`, { method: "DELETE", body: { confirmation: host } });
+export function deleteDomain(id: string, host: string, confirmCurrent = false) {
+  const body: Record<string, unknown> = { confirmation: host };
+  if (confirmCurrent) body.confirm_current = true;
+  return mutateJson(`/api/v1/domains/${encodeURIComponent(id)}`, { method: "DELETE", body });
+}
+
+const REDEPLOY_PATH = /^\/api\/v1\/dokploy\/services\/compose\/[A-Za-z0-9_-]{1,128}\/redeploy$/;
+
+/** Start the Dokploy deploy the server suggested (only its own redeploy endpoint is accepted). */
+export function runSuggestedRedeploy(action: SuggestedAction | null | undefined) {
+  const endpoint = action?.endpoint ?? "";
+  if (!REDEPLOY_PATH.test(endpoint)) return Promise.reject(new Error("unsupported action"));
+  return mutateJson(endpoint, { method: "POST" });
+}
+
+/** True when this page is open on `host` (removing it would cut the current session off). */
+export function isCurrentHost(host: string): boolean {
+  if (typeof window === "undefined") return false;
+  return window.location.hostname.toLowerCase().replace(/\.$/, "") === host.toLowerCase();
 }
 
 export function verifyDomain(id: string) {
@@ -371,6 +417,8 @@ export const SERVICE_REASONS: Record<string, Bi> = {
   dns_unreachable: { fa: "برنامه DNS روی سرور هست ولی جواب نمی‌دهد.", en: "The DNS program is on the server but isn't answering." },
   dns_setup_incomplete: { fa: "DNS روشن است، ولی راه‌اندازی هنوز تمام نشده.", en: "DNS is running, but setup isn't finished yet." },
   setup_incomplete: { fa: "روشن است، ولی راه‌اندازی هنوز تمام نشده.", en: "It's running, but setup isn't finished yet." },
+  own_container_unreachable: { fa: "کانتینر جدای آن جواب نمی‌دهد؛ در Dokploy ببینید روشن است و گزارش‌هایش خطا ندارد.", en: "Its own container isn't answering; check in Dokploy that it's running and its logs show no errors." },
+  own_container_name_unresolved: { fa: "پنل نام کانتینر آن را پیدا نمی‌کند. پنل و آن باید در یک شبکه باشند («mrk-net» یا همان شبکه Dokploy).", en: "The panel can't find its container by name. The panel and it must share a network (mrk-net or the same Dokploy network)." },
   separate_container: { fa: "در کانتینر جدای خودش اجرا می‌شود و از پنل روشن و خاموش نمی‌شود.", en: "It runs in its own container and isn't started or stopped from the panel." },
   listener_failed: { fa: "روی بعضی نشانی‌ها نمی‌تواند گوش بدهد.", en: "It can't listen on some addresses." },
   upstreams_unreachable: { fa: "به هیچ DNS بیرونی نمی‌رسد؛ فقط نام‌های خودتان جواب داده می‌شود.", en: "It can't reach any outside DNS; only your own names get answers." }
@@ -452,12 +500,20 @@ export const DOMAIN_PROBLEMS: Record<string, { title: Bi; fix: Bi; tone: "warn" 
     tone: "error"
   },
   tls_missing: {
-    title: { fa: "هنوز گواهی HTTPS ندارد", en: "There's no HTTPS certificate yet" },
+    title: { fa: "این نشانی جواب می‌دهد، ولی HTTPS ندارد", en: "This address answers, but without HTTPS" },
     fix: {
-      fa: "اگر DNS تازه درست شده، چند دقیقه صبر کنید و دوباره بررسی کنید. اگر نشد، باز بودن پورت ۸۰ و ۴۴۳ سرور را بررسی کنید.",
-      en: "If DNS was just fixed, wait a few minutes and check again. If not, make sure ports 80 and 443 are open on the server."
+      fa: "در Dokploy، HTTPS این دامنه را روشن کنید و برای «Certificate» گزینه «Let's Encrypt» را انتخاب کنید. بعد دوباره بررسی کنید.",
+      en: "In Dokploy, turn HTTPS on for this domain and set Certificate to Let's Encrypt. Then check again."
     },
     tone: "error"
+  },
+  tls_pending: {
+    title: { fa: "گواهی HTTPS هنوز صادر نشده", en: "The HTTPS certificate isn't issued yet" },
+    fix: {
+      fa: "Traefik فعلاً گواهی پیش‌فرض خودش را نشان می‌دهد. معمولاً چند دقیقه بعد از درست شدن DNS، گواهی واقعی صادر می‌شود. اگر بیش از یک ساعت ماند، باز بودن پورت ۸۰ سرور را بررسی کنید و لاگ Traefik را در Dokploy ببینید.",
+      en: "Traefik still shows its own default certificate. Let's Encrypt usually issues the real one a few minutes after DNS is right. If it stays for over an hour, check that port 80 is open and look at the Traefik log in Dokploy."
+    },
+    tone: "warn"
   },
   tls_expiring: {
     title: { fa: "گواهی HTTPS به‌زودی تمام می‌شود", en: "The HTTPS certificate expires soon" },
@@ -476,10 +532,10 @@ export const DOMAIN_PROBLEMS: Record<string, { title: Bi; fix: Bi; tone: "warn" 
     tone: "error"
   },
   unreachable: {
-    title: { fa: "از اینترنت به این دامنه نمی‌رسیم", en: "This domain can't be reached from the internet" },
+    title: { fa: "روی این نشانی چیزی جواب نمی‌دهد", en: "Nothing answers on this address" },
     fix: {
-      fa: "باز بودن پورت ۸۰ و ۴۴۳ سرور و روشن بودن Dokploy را بررسی کنید.",
-      en: "Check that ports 80 and 443 are open on the server and that Dokploy is running."
+      fa: "روشن بودن Dokploy و Traefik را بررسی کنید و ببینید پورت ۸۰ و ۴۴۳ سرور باز است.",
+      en: "Check that Dokploy and its Traefik are running and that ports 80 and 443 are open on the server."
     },
     tone: "error"
   },
@@ -493,13 +549,41 @@ export const DOMAIN_PROBLEMS: Record<string, { title: Bi; fix: Bi; tone: "warn" 
   }
 };
 
+/** Neutral notes: what they mean and what (if anything) to do. Never shown as a problem. */
+export const DOMAIN_NOTICES: Record<string, { label: Bi; title: Bi; body: Bi }> = {
+  not_checkable_from_server: {
+    label: { fa: "از داخل سرور بررسی نمی‌شود", en: "Can't be checked from the server" },
+    title: { fa: "این دامنه از داخل همین سرور بررسی نمی‌شود", en: "This domain can't be checked from this server" },
+    body: {
+      fa: "دامنه به نشانی خود همین سرور اشاره می‌کند و شبکه سرور اجازه نمی‌دهد از داخل به نشانی عمومی خودش وصل شود. این به معنی خراب بودن دامنه نیست. آن را از یک دستگاه دیگر در مرورگر باز کنید.",
+      en: "The domain points to this server's own address, and the server's network doesn't let it reach its own public address from inside. This doesn't mean the domain is broken. Open it in a browser from another device."
+    }
+  },
+  pending_redeploy: {
+    label: { fa: "منتظر «Deploy»", en: "Waiting for a deploy" },
+    title: { fa: "دامنه در Dokploy ثبت شد؛ یک بار «Deploy» لازم است", en: "The domain is in Dokploy; it needs one deploy" },
+    body: {
+      fa: "Dokploy دامنه‌های سرویس Compose را فقط بعد از «Deploy» بعدی فعال می‌کند. «Deploy» را بزنید؛ وقتی تمام شد، DevAssist خودش دوباره بررسی می‌کند.",
+      en: "Dokploy turns on a Compose service's domains only after its next deploy. Start the deploy; when it finishes, DevAssist checks again by itself."
+    }
+  },
+  removed_in_dokploy: {
+    label: { fa: "در Dokploy برداشته شده", en: "Removed in Dokploy" },
+    title: { fa: "این دامنه در Dokploy دیگر نیست", en: "This domain is no longer in Dokploy" },
+    body: {
+      fa: "کسی آن را در خود Dokploy برداشته است. اگر هنوز لازم است، دوباره در Dokploy اضافه کنید؛ وگرنه این‌جا هم آن را بردارید.",
+      en: "Someone removed it in Dokploy itself. If you still need it, add it in Dokploy again; otherwise remove it here too."
+    }
+  }
+};
+
 export const UNKNOWN_DOMAIN_PROBLEM = {
   title: { fa: "این دامنه مشکلی دارد", en: "This domain has a problem" },
   fix: { fa: "دوباره بررسی کنید؛ اگر ماند، جزئیات را در حالت پیشرفته ببینید.", en: "Check again; if it stays, see the details in Advanced mode." },
   tone: "error" as const
 };
 
-export type DomainHealthSummary = { tone: "ok" | "warn" | "error" | "off"; label: string; problem?: string | null };
+export type DomainHealthSummary = { tone: "ok" | "warn" | "error" | "off" | "info"; label: string; problem?: string | null; notice?: string | null };
 
 function looksLikeHealth(value: unknown): value is DomainHealth {
   return Boolean(value) && typeof value === "object";
@@ -517,6 +601,8 @@ export function domainHealthSummary(language: Language, health: DomainHealth | s
     return { tone: "error", label: fa ? "مشکل دارد" : "Has a problem", problem: DOMAIN_PROBLEMS[health] ? health : null };
   }
   if (!looksLikeHealth(health)) return unchecked;
+  const notice = health.notice ? DOMAIN_NOTICES[health.notice] : undefined;
+  if (notice && health.notice) return { tone: "info", label: notice.label[language], notice: health.notice };
   const problem = health.problem_code ?? null;
   if (problem) {
     const tone = DOMAIN_PROBLEMS[problem]?.tone ?? "error";

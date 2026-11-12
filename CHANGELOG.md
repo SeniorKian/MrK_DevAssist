@@ -7,6 +7,25 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+### Fixed
+- The panel and Dokploy agree: Dokploy is the source of truth. A service's Compose is found by
+  the service it runs (stale ids from re-created stacks, stacks pasted by hand), domains added in
+  Dokploy are read back (manual rows become managed, unknown ones are imported), the service's own
+  Dokploy domain is adopted instead of refused, and a domain that needs a deploy says so with a
+  "Deploy now" button instead of raising alarms.
+- Updates keep the admin's setup: an image line like `${{project.MRK_VERSION}}` moves that
+  project variable instead of becoming a literal, an edited compose file is kept, a deploy counts
+  as done only when the new deployment is, and "needs update" reads the running container.
+- Automatic install reuses the existing stack or project instead of creating duplicates, and
+  refuses to start a second copy of a service in another project.
+- No false alarms: domain checks go to Traefik inside the Docker network (the server's own
+  public IP is often unreachable from inside Docker), Dokploy statuses map correctly ("done" is
+  deployed, not "in progress"), and the agent, firewall, S3 and Dokploy are marked unreachable
+  only after repeated failures. Dokploy's own error message is shown and logged.
+- Bucket custom domains route to the S3 service's stack, not the panel's.
+- The firewall healthcheck uses only the standard library (fast at 0.25 CPU); the DNS
+  container defaults to 1 CPU so it starts on 1-vCPU servers.
+
 ## [0.2.0] - 2026-11-11
 
 ### Added

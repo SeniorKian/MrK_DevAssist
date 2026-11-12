@@ -131,6 +131,9 @@ def test_dns_bundle_has_no_pairing_key(tmp_path: Path, agent_backend) -> None:
     assert env_value(bundle["env"], "MRK_DNS_LISTEN") == "10.0.0.5:53"
     compose = yaml.safe_load(bundle["compose"])
     assert compose["volumes"]["mrk-dns-run"] == {"name": "mrk-dns-run", "external": True}
+    # Docker refuses a CPU limit above the host's cores: the default must fit 1 vCPU.
+    assert compose["services"]["mrk-dns"]["cpus"] == "${MRK_DNS_CPUS:-1.0}"
+    assert env_value(bundle["env"], "MRK_DNS_CPUS") == "1.0"
 
 
 def test_every_ready_template_is_valid_compose() -> None:

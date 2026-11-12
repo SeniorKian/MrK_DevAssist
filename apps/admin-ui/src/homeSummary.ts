@@ -199,6 +199,24 @@ const RULES: Record<string, RuleCopy> = {
     why: { fa: "حمله‌ها ثبت می‌شوند ولی جلویشان گرفته نمی‌شود.", en: "Attacks are logged but not blocked." },
     button: { fa: "فعال کردن", en: "Turn it on" }
   },
+  firewall_forced_dry_run: {
+    title: { fa: "دیوار آتش «فعال» است ولی فقط تمرین می‌کند", en: "The firewall is set to active but only practices" },
+    why: {
+      fa: "نگهبان دیوار آتش با MRK_FIREWALL_FORCE_DRY_RUN=true اجرا شده و جلوی هیچ حمله‌ای را نمی‌گیرد. در Dokploy این مقدار را در سرویس «mrk-firewall» به «false» برگردانید و دوباره اجرا کنید.",
+      en: "The firewall helper runs with MRK_FIREWALL_FORCE_DRY_RUN=true, so nothing is blocked. In Dokploy, set it back to false on the mrk-firewall service and redeploy."
+    },
+    button: { fa: "دیدن دیوار آتش", en: "See the firewall" }
+  },
+  firewall_unreachable: {
+    title: { fa: "نگهبان دیوار آتش جواب نمی‌دهد", en: "The firewall helper isn't answering" },
+    why: { fa: "چند بار پشت سر هم جواب نداد؛ تا وصل نشود، قانون‌های دیوار آتش به‌روز نمی‌شوند. مطمئن شوید روی سرور روشن است.", en: "It missed several checks in a row; until it's back, firewall rules aren't updated. Make sure it's running on the server." },
+    button: { fa: "بررسی", en: "Check" }
+  },
+  s3_unreachable: {
+    title: { fa: "فضای فایل جواب نمی‌دهد", en: "File space isn't answering" },
+    why: { fa: "سرویس فضای فایل چند بار پشت سر هم جواب نداد؛ برنامه‌ها نمی‌توانند فایل بخوانند یا بنویسند. در «سرویس‌های من» ببینید روشن است.", en: "The file space service missed several checks in a row; apps can't read or write files. Check it's running in My services." },
+    button: { fa: "بررسی", en: "Check" }
+  },
   no_notification_channel: {
     title: { fa: "اگر مشکلی پیش بیاید خبردار نمی‌شوید", en: "You won't hear about problems" },
     why: { fa: "یک کانال تلگرام، بله یا ایمیل اضافه کنید.", en: "Add a Telegram, Bale or email channel." },
@@ -261,6 +279,21 @@ const UNKNOWN_RULE: RuleCopy = {
 };
 
 const DNS_MONITOR_RULES = new Set(["dns_under_pressure", "dns_attack_detected"]);
+/** Rules whose `error_code`/`code` may say the panel can't resolve the service's name. */
+const NAME_RULES = new Set(["agent_unreachable", "firewall_unreachable", "s3_unreachable"]);
+
+const DATABASE_DOWN: Bi = {
+  fa: "پنل به پایگاه داده‌اش (PostgreSQL که Dokploy می‌سازد) وصل نمی‌شود و پنل خودش نمی‌تواند آن را روشن کند. در Dokploy ببینید سرویس پایگاه داده روشن است و با پنل در یک شبکه است.",
+  en: "The panel can't reach its database (the PostgreSQL that Dokploy manages), and the panel can't start it itself. In Dokploy, check the database service is running and shares a network with the panel."
+};
+const OWN_CONTAINER_DOWN: Bi = {
+  fa: "این بخش در کانتینر جدای خودش اجرا می‌شود و جواب نمی‌دهد. در «سرویس‌های من» ببینید روشن است.",
+  en: "This part runs in its own container and isn't answering. Check it's running in My services."
+};
+
+function pick(text: Bi, language: Language): string {
+  return text[language];
+}
 
 /** docs/41 §6: open the domain (and its tab) the item names. */
 function zoneRoute(zone: unknown, tab: "records" | "signing"): string {
@@ -327,6 +360,15 @@ export function attentionText(language: Language, item: HomeAttention): Attentio
     const when = formatRelative(params.since * 1000, language);
     why = language === "fa" ? `آخرین بار ${when} جواب داد. مطمئن شوید روی سرور روشن است.` : `It last answered ${when}. Make sure it's running on the server.`;
   }
+  if (item.rule === "component_unavailable") {
+    const code = typeof params.code === "string" ? params.code : "";
+    if (code.endsWith("_name_unresolved")) why = reasonFor(language, code);
+    else if (params.component === "database") why = pick(DATABASE_DOWN, language);
+    else if (params.remote === true) why = pick(OWN_CONTAINER_DOWN, language);
+  }
+  // A name the panel can't resolve is a network setup problem, not "it's off".
+  const errorCode = typeof params.error_code === "string" ? params.error_code : typeof params.code === "string" ? params.code : "";
+  if (NAME_RULES.has(item.rule) && errorCode.endsWith("_name_unresolved")) why = reasonFor(language, errorCode);
   const severity = item.severity === "critical" || item.severity === "error" ? "critical" : item.severity === "warning" ? "warning" : "info";
   const route = item.action?.route ?? (item.rule === "domain_problem" ? "#/services" : item.rule === "dns_unreachable" ? "#/dns/status" : DNS_MONITOR_RULES.has(item.rule) ? "#/dns/monitor"
     : item.rule === "dns_certificate_expiring" ? "#/dns/encrypted" : item.rule === "dns_trust_anchor_problem" ? "#/dns/settings"

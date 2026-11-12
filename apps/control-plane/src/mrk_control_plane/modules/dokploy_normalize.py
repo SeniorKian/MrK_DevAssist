@@ -194,8 +194,13 @@ def project_tree(
             continue
         extra = _service_index(details.get(project_id))
         services: list[dict[str, Any]] = []
+        default_environment: str | None = None
         for env in _environments(project):
             env_name = _text(env.get("name")) if env is not project else None
+            env_id = env.get("environmentId") if env is not project else None
+            env_id = env_id[:64] if isinstance(env_id, str) and env_id else None
+            if env_id and (default_environment is None or env.get("isDefault")):
+                default_environment = env_id  # the default one, else the first
             for service_type, (router, id_field, status_field) in SERVICE_TYPES.items():
                 key = router if router != "application" else "applications"
                 for item in _list(env.get(key)):
@@ -211,6 +216,7 @@ def project_tree(
                             "type": service_type,
                             "name": _text(name),
                             "environment": env_name,
+                            "environment_id": env_id,
                             "status": _status(status, SERVICE_STATUSES),
                             "domains": list(domains.get((service_type, service_id), [])),
                             "last_deployment": last_deployment_summary(
@@ -223,10 +229,55 @@ def project_tree(
                 "id": project_id,
                 "name": _text(project.get("name")) or project_id,
                 "description": _text(project.get("description"), 1000),
+                "default_environment_id": default_environment,
                 "services": services,
             }
         )
     return result
+
+
+def project_outline(project: dict[str, Any]) -> dict[str, Any]:
+    """project.one without its secrets: ids, names, appNames and statuses only.
+
+    Same shape as the input (environments -> service lists, or services on the project
+    for pre-environment Dokploy), so :func:`project_tree` / :func:`app_name_index` accept it.
+    """
+
+    def services(holder: dict[str, Any]) -> dict[str, Any]:
+        lists: dict[str, Any] = {}
+        for router, id_field, status_field in SERVICE_TYPES.values():
+            key = router if router != "application" else "applications"
+            if key not in holder:
+                continue
+            lists[key] = [
+                {
+                    id_field: _text(item.get(id_field), 64),
+                    "name": _text(item.get("name")),
+                    "appName": _text(item.get("appName"), 128),
+                    status_field: _text(item.get(status_field), 32),
+                }
+                for item in _list(holder.get(key))
+                if isinstance(item.get(id_field), str)
+            ]
+        return lists
+
+    outline: dict[str, Any] = {
+        "projectId": _text(project.get("projectId"), 64),
+        "name": _text(project.get("name")),
+    }
+    if "environments" in project:
+        outline["environments"] = [
+            {
+                "environmentId": _text(env.get("environmentId"), 64),
+                "name": _text(env.get("name")),
+                "isDefault": bool(env.get("isDefault")),
+                **services(env),
+            }
+            for env in _list(project.get("environments"))
+        ]
+    else:
+        outline.update(services(project))
+    return outline
 
 
 def service_detail(service_type: str, service_id: str, payload: Any) -> dict[str, Any]:

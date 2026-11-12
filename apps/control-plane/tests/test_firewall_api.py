@@ -233,6 +233,83 @@ def test_pairing_status_and_rbac(tmp_path: Path, helper) -> None:
         assert "firewall.config.update" in actions and "firewall.unpair" in actions
 
 
+def test_helper_unreachable_needs_consecutive_failures(tmp_path: Path, helper) -> None:
+    client, app = make_client(tmp_path)
+    events: list[object] = []
+    with client:
+        async def collect(event) -> None:
+            events.append(event)
+
+        app.state.events.subscribe(collect)
+        headers = {"X-CSRF-Token": str(login_owner(client)["csrf_token"])}
+        pair(client, headers)
+        service = firewall.ACTIVE_SERVICE
+        assert service is not None
+        now = [time.time()]
+        service.health.clock = lambda: now[0]
+        helper["online"] = False
+        for _ in range(3):
+            tick(client)  # each 15 s poll fails
+        assert service.health.failures >= 3
+        # Several failures within seconds are not an outage: no flip, no notification.
+        assert service.reachable is True
+        assert not [event for event in events if event.type == "firewall.helper_offline"]
+        now[0] += 30
+        tick(client)
+        assert service.reachable is False
+        status = client.get("/api/v1/firewall/status").json()
+        assert status["reachable"] is False and status["error_code"] == "firewall_unreachable"
+        offline = [event for event in events if event.type == "firewall.helper_offline"]
+        assert len(offline) == 1 and offline[0].details["error_code"] == "firewall_unreachable"
+        from mrk_control_plane.modules import home
+
+        assert home.LAST_SERVICE is not None
+        home.LAST_SERVICE.invalidate()
+        rules = {item["rule"] for item in client.get("/api/v1/home").json()["attention"]}
+        assert "firewall_unreachable" in rules
+        helper["online"] = True
+        tick(client)
+        assert service.reachable is True
+        assert [event.type for event in events if event.type.startswith(
+            "firewall.helper")] == ["firewall.helper_offline", "firewall.helper_online"]
+
+
+def test_wizard_pairing_counts_for_dry_run_age_and_forced_dry_run(
+    tmp_path: Path, helper
+) -> None:
+    from mrk_control_plane.firewall.app import FirewallConfig, create_firewall_app
+    from mrk_control_plane.modules import home
+
+    client, _app = make_client(tmp_path)
+    with client:
+        login_owner(client)
+        service = firewall.ACTIVE_SERVICE
+        assert service is not None
+        # The add-service wizard pairs through the client directly (no audit row).
+        service.client.save(firewall_client.DEFAULT_URL, KEY_TEXT)
+        stored = json.loads(service.client.config_path.read_text())
+        stored["updated_at"] = int(time.time()) - 9 * 86400
+        service.client.config_path.write_text(json.dumps(stored))
+        client.portal.call(service.probe)
+        assert home.LAST_SERVICE is not None
+        home.LAST_SERVICE.invalidate()
+        summary = client.get("/api/v1/home").json()
+        by_rule = {item["rule"]: item for item in summary["attention"]}
+        assert by_rule["firewall_dry_run"]["params"]["days"] == 9
+
+        # Panel says enforce, but the helper runs with MRK_FIREWALL_FORCE_DRY_RUN=true.
+        helper["app"] = create_firewall_app(
+            FirewallConfig(key=KEY, state_dir=tmp_path / "forced", force_dry_run=True,
+                           proc_net=tmp_path / "no-proc"), runner=FakeRunner())
+        settings = service.settings()
+        settings["mode"] = "enforce"
+        service.save_settings(settings)
+        client.portal.call(service.probe)
+        home.LAST_SERVICE.invalidate()
+        rules = {item["rule"] for item in client.get("/api/v1/home").json()["attention"]}
+        assert "firewall_forced_dry_run" in rules and "firewall_dry_run" not in rules
+
+
 def test_blocks_safety_modes_and_kill_switch(tmp_path: Path, helper) -> None:
     runner: FakeRunner = helper["runner"]
     client, _app = make_client(tmp_path)
@@ -424,3 +501,20 @@ def test_rules_crud(tmp_path: Path, helper) -> None:
                             json={"enabled": False}).json()["enabled"] is False
         assert client.request("DELETE", f"/api/v1/firewall/rules/{rule_id}",
                               headers=headers).json() == {"deleted": True, "id": rule_id}
+
+
+def test_unresolvable_helper_name_gets_its_own_code(tmp_path: Path, monkeypatch) -> None:
+    class Unresolvable(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+
+    monkeypatch.setattr(firewall_client, "TRANSPORT_FACTORY", lambda _url: Unresolvable())
+    monkeypatch.delenv("MRK_FIREWALL_URL", raising=False)
+    monkeypatch.delenv("MRK_FIREWALL_KEY_FILE", raising=False)
+    client, _app = make_client(tmp_path)
+    with client:
+        headers = {"X-CSRF-Token": str(login_owner(client)["csrf_token"])}
+        client.put("/api/v1/firewall/config", headers=headers,
+                   json={"url": "http://mrk-firewall:7071", "key": KEY_TEXT})
+        result = client.post("/api/v1/firewall/test", headers=headers).json()
+        assert result["ok"] is False and result["error_code"] == "firewall_name_unresolved"

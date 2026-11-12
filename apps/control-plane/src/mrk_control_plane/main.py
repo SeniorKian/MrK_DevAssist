@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import __version__, remote_services
+from . import __version__, components, remote_services
 from .auth import (
     AuthStore,
     FieldError,
@@ -36,9 +36,8 @@ from .auth import (
 )
 from .backup import BackupManager
 from .catalog import PackageCatalog
-from .components import check_http_component, fetch_json_component
 from .config import Settings, apply_startup_overrides
-from .database import Database, database_health
+from .database import Database
 from .logging_config import configure_logging
 from .middleware import (
     DynamicTrustedHostMiddleware,
@@ -686,96 +685,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def liveness() -> dict[str, str]:
         return {"status": "ok"}
 
-    def stopped_on_purpose(service_id: str) -> bool:
-        # A registry the operator stopped from "My services" must not make the
-        # container unhealthy (Swarm would replace it and restart the service).
-        from .modules import services as services_module
-        from .modules.services_catalog import read_stopped
-
-        if service_id in read_stopped(active_settings.data_dir):
-            return True
-        # A crashed npm/PyPI that the watchdog is retrying must not make the
-        # container unhealthy either (Swarm would restart the panel with it).
-        watched = services_module.ACTIVE_SERVICE
-        return watched is not None and watched.watchdog.handles(service_id)
-
-    async def npm_is_ready() -> bool:
-        if not active_settings.npm_enabled or stopped_on_purpose("npm"):
-            return True
-        if remote_services.is_remote("npm"):
-            return True  # its own container: shown in My services, never gates the panel
-        return await asyncio.to_thread(
-            check_http_component,
-            active_settings.npm_health_host,
-            active_settings.npm_health_port,
-            "/-/ping",
-        )
-
-    async def pypi_is_ready() -> bool:
-        if not active_settings.pypi_enabled or stopped_on_purpose("pypi"):
-            return True
-        if remote_services.is_remote("pypi"):
-            return True
-        if (
-            active_settings.pypi_bootstrap_state_file is not None
-            and not active_settings.pypi_bootstrap_state_file.is_file()
-        ):
-            return False
-        return await asyncio.to_thread(
-            check_http_component,
-            active_settings.pypi_health_host,
-            active_settings.pypi_health_port,
-            "/+status",
-        )
-
     async def pypi_router_status() -> dict[str, object] | None:
-        if not active_settings.pypi_enabled:
-            return None
-        return await asyncio.to_thread(
-            fetch_json_component,
-            active_settings.pypi_router_health_host,
-            active_settings.pypi_router_health_port,
-            "/status",
+        return await components.router_status(
+            active_settings, timeout=components.READINESS_TIMEOUT_SECONDS
         )
 
     @app.get("/health/ready", include_in_schema=False, response_model=None)
     async def readiness(request: Request) -> JSONResponse | dict[str, str]:
         if not request.app.state.ready:
             return JSONResponse(status_code=503, content={"status": "not_ready"})
-        if not await npm_is_ready():
+        # A registry stopped on purpose, recovering under the watchdog or running in
+        # its own container never gates the panel (Swarm would restart the panel for
+        # it); /system/status and /metrics still report its real state.
+        if await components.registry_blocks_readiness(active_settings, "npm"):
             return JSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "component": "npm_registry"},
             )
-        if not await pypi_is_ready():
+        if await components.registry_blocks_readiness(active_settings, "pypi"):
             return JSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "component": "pypi_registry"},
             )
-        if (
-            active_settings.pypi_enabled
-            and not stopped_on_purpose("pypi")
-            and not await asyncio.to_thread(
-                check_http_component,
-                active_settings.pypi_router_health_host,
-                active_settings.pypi_router_health_port,
-                "/health",
-            )
-        ):
+        if await components.router_blocks_readiness(active_settings):
             # Without the router every PyPI cache miss fails, even when upstreams are fine.
             return JSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "component": "pypi_upstream_router"},
             )
-        try:
-            database_ok = await asyncio.wait_for(
-                asyncio.to_thread(database_health, database.engine), timeout=3
-            )
-        except TimeoutError:
-            # PGlite has a single connection; a long backup or scan holds it.
-            # A busy database is alive, so this must not mark the appliance unready.
-            database_ok = True
-        if not database_ok:
+        database_state = await components.database_health_state(database.engine)
+        if database_state.state == "unavailable":
             return JSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "component": "database"},
@@ -1212,19 +1151,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/system/status", include_in_schema=False)
     async def system_status(request: Request) -> dict[str, object]:
         require_principal(request, "system:read")
-        npm_status = "not_configured"
-        if active_settings.npm_enabled:
-            npm_status = "ready" if await npm_is_ready() else "unavailable"
-        pypi_status = "not_configured"
-        if active_settings.pypi_enabled:
-            pypi_status = "ready" if await pypi_is_ready() else "unavailable"
-        router_status = await pypi_router_status()
-        try:
-            database_ready = await asyncio.wait_for(
-                asyncio.to_thread(database_health, database.engine), timeout=3
-            )
-        except TimeoutError:
-            database_ready = True  # busy (backup/scan holds the connection), not down
+        # The same states Home and /metrics use: a registry in its own container is
+        # "unavailable" here when it is down, even though it never gates readiness.
+        health, _router_raw = await components.component_health(
+            active_settings, database.engine
+        )
         total_bytes, used_bytes, free_bytes = await asyncio.to_thread(
             shutil.disk_usage, active_settings.data_dir
         )
@@ -1252,18 +1183,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
             "components": {
                 "control_plane": "ready",
-                "database": "ready" if database_ready else "unavailable",
-                "npm_registry": npm_status,
-                "pypi_registry": pypi_status,
-                "pypi_upstream_router": (
-                    "offline"
-                    if router_status and router_status.get("offline") is True
-                    else "ready"
-                    if router_status is not None
-                    else "not_configured"
-                    if not active_settings.pypi_enabled
-                    else "unavailable"
-                ),
+                **{name: item.state for name, item in health.items()},
+            },
+            "component_details": {
+                name: item.as_dict() for name, item in health.items()
             },
         }
 
@@ -2275,14 +2198,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         task_stats = await asyncio.to_thread(task_manager.stats)
         upstream_items = await asyncio.to_thread(upstream_store.list)
+        health, _router_raw = await components.component_health(
+            active_settings, database.engine
+        )
         component_ready = {
             "control_plane": 1,
-            "npm_registry": int(
-                active_settings.npm_enabled and await npm_is_ready()
+            "npm_registry": int(health["npm_registry"].state == "ready"),
+            "pypi_registry": int(health["pypi_registry"].state == "ready"),
+            "pypi_upstream_router": int(
+                health["pypi_upstream_router"].state in {"ready", "offline"}
             ),
-            "pypi_registry": int(
-                active_settings.pypi_enabled and await pypi_is_ready()
-            ),
+            "database": int(health["database"].state == "ready"),
         }
         lines = [
             "# HELP mrk_uptime_seconds Control plane uptime in seconds.",

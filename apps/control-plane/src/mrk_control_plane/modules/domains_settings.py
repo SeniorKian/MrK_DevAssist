@@ -19,6 +19,10 @@ from ..models import SystemSetting
 
 SETTINGS_KEY = "services.settings"
 STATE_KEY = "services.state"
+# Per-domain notes that have no column on ``service_domains`` (source, redeploy wait).
+DOMAIN_META_KEY = "services.domain_meta"
+# The Dokploy Compose found for each service in its own stack (install.json may be stale).
+OWN_COMPOSE_KEY = "services.own_compose"
 ROUTING_MODES = ("auto", "dokploy_api", "traefik_file", "manual")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 MIDDLEWARE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(@[a-z]{1,16})?$")
@@ -34,6 +38,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "target_host": "",
     "self_container": "",
     "dokploy_network": "dokploy-network",
+    # Domain checks from inside the Docker network: Dokploy's Traefik container answers
+    # with the real SNI/Host, so the check does not depend on hairpin NAT (docs/35 §5).
+    "verify_via_traefik": True,
+    "traefik_internal_host": "dokploy-traefik",
+    "traefik_internal_https_port": 443,
+    "traefik_internal_http_port": 80,
     "verify_interval_seconds": 21600,
     "tls_expiry_warning_days": 14,
     "server_public_ips": [],
@@ -127,18 +137,21 @@ def validate(payload: Any, current: dict[str, Any]) -> dict[str, Any]:
             "route_bucket_domains",
             "bucket_domains_https",
             "auto_restart",
+            "verify_via_traefik",
         }:
             merged[key] = _bool(value, key)
         elif key in {"cert_resolver", "entrypoint_web", "entrypoint_websecure", "dokploy_network"}:
             merged[key] = _pattern(value, key, NAME_RE)
         elif key == "redirect_middleware":
             merged[key] = _pattern(value, key, MIDDLEWARE_RE, allow_empty=True)
-        elif key in {"target_host", "self_container"}:
+        elif key in {"target_host", "self_container", "traefik_internal_host"}:
             merged[key] = _pattern(value, key, TARGET_RE, allow_empty=True)
         elif key == "verify_interval_seconds":
             merged[key] = _int(value, key, 0, 7 * 86400)
             if 0 < merged[key] < 300:
                 raise SettingsError("invalid_settings", "verify interval must be 0 or >= 300")
+        elif key in {"traefik_internal_https_port", "traefik_internal_http_port"}:
+            merged[key] = _int(value, key, 1, 65535)
         elif key == "tls_expiry_warning_days":
             merged[key] = _int(value, key, 1, 90)
         elif key == "conflict_check_budget":
@@ -228,3 +241,40 @@ class SettingsStore:
 
     def save_state(self, value: dict[str, Any]) -> None:
         self._put(STATE_KEY, value, None)
+
+    # Dokploy Compose ids found for services in their own stack (service id -> compose id).
+    def own_compose(self) -> dict[str, str]:
+        return {
+            str(key): str(value)
+            for key, value in self._stored(OWN_COMPOSE_KEY).items()
+            if isinstance(value, str) and value
+        }
+
+    def save_own_compose(self, service_id: str, compose_id: str) -> None:
+        value = self.own_compose()
+        if value.get(service_id) == compose_id:
+            return
+        value[service_id] = compose_id
+        self._put(OWN_COMPOSE_KEY, dict(value), None)
+
+    # Per-domain notes keyed by domain id: {"source", "pending_redeploy", "removed_in_dokploy"}.
+    def domain_meta(self) -> dict[str, dict[str, Any]]:
+        return {
+            str(key): dict(value)
+            for key, value in self._stored(DOMAIN_META_KEY).items()
+            if isinstance(value, dict)
+        }
+
+    def update_domain_meta(self, domain_id: str, changes: dict[str, Any] | None) -> None:
+        """Merge ``changes`` into one domain's notes (None drops them; a None value drops a key)."""
+        meta = self.domain_meta()
+        if changes is None:
+            meta.pop(domain_id, None)
+        else:
+            entry = {**meta.get(domain_id, {}), **changes}
+            entry = {key: value for key, value in entry.items() if value is not None}
+            if entry:
+                meta[domain_id] = entry
+            else:
+                meta.pop(domain_id, None)
+        self._put(DOMAIN_META_KEY, meta, None)

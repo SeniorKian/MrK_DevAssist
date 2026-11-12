@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..agent.signing import KEY_BYTES, decode_key, encode_key, sign_headers
+from ..components import NETWORK_FIX, is_name_resolution_error
 from ..module_context import ModuleContext
 
 CONFIG_FILE = "firewall-helper.json"
@@ -113,6 +114,22 @@ class HelperClient:
                 key = None
         return "panel", stored["url"], key, None
 
+    def paired_at(self) -> float | None:
+        """When the helper was paired: the panel file's ``updated_at`` (the add-service
+        wizard pairs through it too) or, env-managed, the key file's modification time."""
+        if self.env_managed():
+            try:
+                return Path(os.getenv("MRK_FIREWALL_KEY_FILE", "").strip()).stat().st_mtime
+            except OSError:
+                return None
+        try:
+            stored = self._panel()
+        except (OSError, ValueError):
+            return None
+        value = (stored or {}).get("updated_at")
+        return float(value) if isinstance(value, int | float) and not isinstance(
+            value, bool) else None
+
     def save(self, url: str, key_text: str | None) -> None:
         normalized = validate_helper_url(url)
         stored = self._panel() or {}
@@ -187,6 +204,11 @@ class HelperClient:
             except httpx.TimeoutException as exc:
                 raise HelperError("firewall_timeout", 504, "The firewall helper timed out") from exc
             except httpx.HTTPError as exc:
+                if not url.startswith("unix:") and is_name_resolution_error(exc):
+                    raise HelperError(
+                        "firewall_name_unresolved", 502,
+                        f"The firewall helper's host name does not resolve; {NETWORK_FIX}",
+                    ) from exc
                 raise HelperError("firewall_unreachable", 502,
                                   f"The firewall helper is unreachable ({type(exc).__name__})"
                                   ) from exc

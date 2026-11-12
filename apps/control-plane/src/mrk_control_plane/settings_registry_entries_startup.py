@@ -1118,7 +1118,7 @@ DNS_ENV = (
         ("موتور فقط برای گرفتن پورت 53 با دسترسی محدود شروع می‌شود و بلافاصله به این کاربر (uid:gid) می‌رود.",
          "The engine starts with minimal rights only to take port 53, then switches to this uid:gid right away."),
         reason="other_container", danger="high", processes=DNS_ENGINE),
-    env("dns.cpus", DNSG, "string", "2", "MRK_DNS_CPUS",
+    env("dns.cpus", DNSG, "string", "1.0", "MRK_DNS_CPUS",
         ("سقف پردازنده کانتینر DNS", "DNS container CPU limit"),
         ("تعداد هسته‌ای که کانتینر mrk-dns حداکثر مصرف می‌کند.", "Most CPU cores the mrk-dns container may use."),
         reason="compose", processes=COMPOSE),

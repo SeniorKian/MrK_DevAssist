@@ -53,6 +53,15 @@ from ..module_context import Event, ModuleContext
 from ..netresolve import resolve_host
 from .coolify_client import CoolifyError
 from .dokploy_client import DokployError
+from .dokploy_locate import (
+    LocateError,
+    apply_image,
+    compose_detail,
+    deploy_mark,
+    find_compose,
+    wait_deployment,
+)
+from .dokploy_locate import sha256 as text_sha256
 from .install import WRITE_PERMISSION, InstallError, InstallService
 from .install_auto import CoolifySettings, Job, deployment_for
 from .install_catalog import (
@@ -467,18 +476,60 @@ class ReleasesService:
             raise ReleaseError("module_unavailable", 503, "The Dokploy module is not loaded")
         return service
 
+    def _agent(self) -> Any | None:
+        from . import services as services_module
+
+        service = services_module.ACTIVE_SERVICE
+        if service is None or getattr(service, "ctx", None) is not self.ctx:
+            return None
+        try:
+            return service.routing.agent()
+        except Exception:  # noqa: BLE001 - the agent is optional
+            return None
+
+    async def _running_images(self) -> dict[str, str]:
+        """``mrk-<id>`` compose service -> image of its running container (Host Agent)."""
+        agent = self._agent()
+        if agent is None:
+            return {}
+        try:
+            payload = await asyncio.wait_for(agent.call("/v1/docker/containers"), 10)
+        except Exception:  # noqa: BLE001 - fall back to what install.json remembers
+            return {}
+        images: dict[str, str] = {}
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            labels = item.get("labels_subset") or {}
+            name = labels.get("com.docker.compose.service")
+            swarm = str(labels.get("com.docker.swarm.service.name") or "")
+            if not isinstance(name, str) and "_mrk-" in swarm:
+                name = "mrk-" + swarm.split("_mrk-", 1)[1]
+            image = item.get("image")
+            running = str(item.get("state") or "running").lower() == "running"
+            if isinstance(name, str) and isinstance(image, str) and running:
+                images[name] = image
+        return images
+
     def _service_info(self, item: InstallDef, state: dict[str, Any],
-                      ready: dict[str, bool]) -> dict[str, Any]:
+                      ready: dict[str, bool], running: dict[str, str]) -> dict[str, Any]:
         entry = state.get(item.id) if isinstance(state.get(item.id), dict) else None
         deployment = entry.get("deployment") if entry else None
         target = deployment.get("target") if isinstance(deployment, dict) else None
         target = target if target in {"dokploy", "coolify"} and target in item.methods else None
-        deployed = entry.get("image") if entry and isinstance(entry.get("image"), str) else None
+        live = running.get(f"mrk-{item.id}")
+        if target is None and live and "dokploy" in item.methods and ready.get("dokploy"):
+            # Running in Dokploy although the panel did not deploy it: found on update.
+            target = "dokploy"
+        recorded = entry.get("image") if entry and isinstance(entry.get("image"), str) else None
         return {
             "id": item.id,
             "image": public_item(item)["image"],
-            "deployed_image": deployed,
-            "installed": entry is not None,
+            # What really runs wins over what the panel last wrote.
+            "deployed_image": live or recorded,
+            "running": live is not None,
+            "installed": entry is not None or live is not None,
             "target": target,
             "can_auto": bool(target and ready.get(target)),
         }
@@ -494,10 +545,11 @@ class ReleasesService:
             except Exception:  # noqa: BLE001 - a probe never breaks the page
                 return "unreachable"
 
-        states = await asyncio.gather(*(connection(item) for item in items))
+        states, running = await asyncio.gather(
+            asyncio.gather(*(connection(item) for item in items)), self._running_images())
         result = []
         for item, state_name in zip(items, states, strict=True):
-            info = self._service_info(item, state, ready)
+            info = self._service_info(item, state, ready, running)
             info["connection"] = state_name
             in_use = info["target"] is not None or state_name in {"connected", "unreachable"}
             info["needs_update"] = bool(
@@ -553,13 +605,16 @@ class ReleasesService:
         item = self._ready_item(service_id)
         deployment = deployment_for(self.ctx.data_dir, service_id) or {}
         target = deployment.get("target")
+        ready = self._targets_ready()
+        if target is None and "dokploy" in item.methods and ready.get("dokploy"):
+            # Pasted into Dokploy by hand: the update finds its Compose in Dokploy.
+            target = "dokploy"
+            deployment = {"target": "dokploy", "service_name": f"mrk-{service_id}"}
         if target not in {"dokploy", "coolify"} or target not in item.methods:
             raise ReleaseError("manual_upgrade", 409,
                                "The panel did not deploy this service; update it by hand")
-        if not self._targets_ready().get(target):
+        if not ready.get(target):
             raise ReleaseError(f"{target}_not_configured", 409, f"{target} is not connected")
-        if target == "dokploy" and not isinstance(deployment.get("compose_id"), str):
-            raise ReleaseError("manual_upgrade", 409, "The Dokploy service is not recorded")
         if target == "coolify" and not isinstance(deployment.get("uuid"), str):
             raise ReleaseError("manual_upgrade", 409, "The Coolify service is not recorded")
         for job in self.jobs.values():
@@ -603,7 +658,7 @@ class ReleasesService:
             compose = compose_for(item, self.ctx.data_dir)
             await asyncio.to_thread(self._side_files, item.id)
             if job.target == "dokploy":
-                await self._upgrade_dokploy(job, item, deployment["compose_id"], compose, image)
+                await self._upgrade_dokploy(job, item, deployment, compose, image)
             else:
                 await self._upgrade_coolify(job, item, deployment["uuid"], compose, image)
             await self._record_image(item.id, image)
@@ -611,7 +666,7 @@ class ReleasesService:
         except asyncio.CancelledError:
             job.set(status="failed", error_code="cancelled", message="The panel stopped")
             raise
-        except (DokployError, CoolifyError, ReleaseError, InstallError) as exc:
+        except (DokployError, CoolifyError, ReleaseError, InstallError, LocateError) as exc:
             await self._audit(job, f"release.upgrade.{job.phase}", "failure")
             job.set(status="failed", error_code=exc.code, message=redact_text(exc.message)[:300])
         except Exception as exc:  # never log the text: it could carry env values
@@ -620,25 +675,71 @@ class ReleasesService:
             job.set(status="failed", error_code="upgrade_failed",
                     message="The update failed unexpectedly")
 
-    async def _upgrade_dokploy(self, job: Job, item: InstallDef, compose_id: str,
+    async def _record_deployment(self, service_id: str, deployment: dict[str, Any]) -> None:
+        async with self._state_lock:
+            def write() -> None:
+                state = self.install._read()
+                entry = state.get(service_id)
+                entry = dict(entry) if isinstance(entry, dict) else {}
+                entry["deployment"] = {**deployment, "updated_at": int(time.time())}
+                state[service_id] = entry
+                self.install._write(state)
+
+            await asyncio.to_thread(write)
+
+    async def _upgrade_dokploy(self, job: Job, item: InstallDef, deployment: dict[str, Any],
                                compose: str, image: str) -> None:
+        """Update a service in Dokploy the way an admin would, keeping their changes.
+
+        The Compose is found in Dokploy (its id may have changed), the image moves through
+        a shared variable when the line uses one, and the Compose file is replaced only
+        when it is still the one the panel wrote.
+        """
         service = self._dokploy()
         job.set(phase="configuring")
-        one = await service.call("compose.one", params={"composeId": compose_id})
-        if not isinstance(one, dict):
+        name = f"mrk-{item.id}"
+        recorded = deployment.get("compose_id")
+        found = await find_compose(service, name, known=(recorded,), agent=self._agent())
+        if found is None:
+            raise ReleaseError("service_missing", 404,
+                               f"No Dokploy Compose runs {name}; update it by hand")
+        compose_id = str(found["compose_id"])
+        job.set(resource_id=compose_id)
+        one = await compose_detail(service, compose_id)
+        if one is None:
             raise ReleaseError("service_missing", 404, "The Dokploy service was not found")
-        env_text = one.get("env") if isinstance(one.get("env"), str) else ""
-        del one
+        body: dict[str, Any] = {"composeId": compose_id}
         if item.upstream_image is None:
-            env_text = set_env_line(env_text, "MRK_IMAGE", image)
-        await service.call(
-            "compose.update",
-            body={"composeId": compose_id, "sourceType": "raw", "composeType": "docker-compose",
-                  "composeFile": compose, "env": env_text},
-            mutation=True, parse=False,
-        )
-        del env_text
+            env_text, shared = await apply_image(service, one, "MRK_IMAGE", image)
+            if env_text is not None:
+                body["env"] = env_text
+            if shared:
+                job.warnings.append("shared_version_changed")
+        current_file = one.get("composeFile") if isinstance(one.get("composeFile"), str) else ""
+        del one
+        written = deployment.get("compose_sha256")
+        new_hash = text_sha256(compose)
+        if text_sha256(current_file) == new_hash:
+            pass  # already the current template
+        elif written and written == text_sha256(current_file):
+            body["composeFile"] = compose  # still the panel's own file: safe to replace
+        else:
+            new_hash = written  # the admin changed it: keep theirs, say so
+            job.warnings.append("compose_customized")
+        if len(body) > 1:
+            await service.call("compose.update", body=body, mutation=True, parse=False)
+        body.clear()
+        if compose_id != recorded or new_hash != written:
+            await self._record_deployment(item.id, {
+                **deployment, "target": "dokploy", "compose_id": compose_id,
+                "service_name": name,
+                "project_id": found.get("project_id") or deployment.get("project_id"),
+                "environment_id": found.get("environment_id")
+                or deployment.get("environment_id"),
+                "compose_sha256": new_hash,
+            })
         job.set(phase="deploying")
+        before = await deploy_mark(service, compose_id)
         await service.call(
             "compose.deploy",
             body={"composeId": compose_id, "title": "Update from MrK DevAssist"},
@@ -647,20 +748,8 @@ class ReleasesService:
         service.cache.clear()
         await self._audit(job, "release.upgrade.deploy")
         job.set(phase="waiting")
-        deadline = time.monotonic() + DEPLOY_TIMEOUT_SECONDS
-        while True:
-            await asyncio.sleep(POLL_SECONDS)
-            detail = await service.call("compose.one", params={"composeId": compose_id})
-            status = detail.get("composeStatus") if isinstance(detail, dict) else None
-            del detail
-            if status == "done":
-                break
-            if status == "error":
-                raise ReleaseError("deploy_failed", 502,
-                                   "Dokploy could not deploy the service; see its deployment log")
-            if time.monotonic() > deadline:
-                raise ReleaseError("deploy_timeout", 504,
-                                   "Dokploy did not finish the deployment in time")
+        await wait_deployment(service, compose_id, before,
+                              timeout=DEPLOY_TIMEOUT_SECONDS, poll=POLL_SECONDS)
         job.set(deployed=True)
 
     async def _upgrade_coolify(self, job: Job, item: InstallDef, uuid: str,
@@ -755,18 +844,26 @@ class ReleasesService:
             raise ReleaseError("manual_upgrade", 409,
                                "The panel does not run as a Dokploy compose; update it by hand")
         service = self._dokploy()
-        one = await service.call("compose.one", params={"composeId": compose_id})
-        if not isinstance(one, dict):
+        one = await compose_detail(service, compose_id)
+        if one is None:
             raise ReleaseError("service_missing", 404, "The panel's Dokploy service was not found")
-        env_text = one.get("env") if isinstance(one.get("env"), str) else ""
-        del one
+        compose_file = one.get("composeFile") if isinstance(one.get("composeFile"), str) else ""
+        if "MRK_PANEL_IMAGE" not in compose_file:
+            raise ReleaseError(
+                "manual_upgrade", 409,
+                "The panel's compose file does not read MRK_PANEL_IMAGE; change its image "
+                "in Dokploy by hand",
+            )
         image = panel_image(version_text(wanted))
-        # Only the env changes; the compose file (and its source) stay as they are.
-        await service.call(
-            "compose.update",
-            body={"composeId": compose_id, "env": set_env_line(env_text, "MRK_PANEL_IMAGE", image)},
-            mutation=True, parse=False,
-        )
+        # Only the env (or the shared variable it reads) changes; the compose file stays.
+        try:
+            env_text, shared = await apply_image(service, one, "MRK_PANEL_IMAGE", image)
+        except LocateError as exc:
+            raise ReleaseError(exc.code, exc.status_code, exc.message) from None
+        del one
+        if env_text is not None:
+            await service.call("compose.update", body={"composeId": compose_id, "env": env_text},
+                               mutation=True, parse=False)
         del env_text
         await service.call(
             "compose.deploy",
@@ -774,7 +871,8 @@ class ReleasesService:
             mutation=True, parse=False,
         )
         service.cache.clear()
-        return {"version": version_text(wanted), "image": image, "status": "deploying"}
+        return {"version": version_text(wanted), "image": image, "status": "deploying",
+                "shared_variable": shared}
 
     async def status(self) -> dict[str, Any]:
         latest = self.latest()
@@ -867,6 +965,11 @@ def dokploy_commands(version: str) -> list[dict[str, str]]:
         _cmd("در Dokploy، در زبانه «Environment» سرویس پنل این خط را بگذارید و ذخیره کنید:",
              "In Dokploy, in the panel service's “Environment” tab, set this line and save:",
              f"MRK_PANEL_IMAGE={panel_image(version)}"),
+        _cmd("اگر آن خط به متغیر پروژه اشاره می‌کند (مثل ${{project.MRK_VERSION}})، "
+             "خط را دست نزنید و در «Environment» پروژه فقط این مقدار را بگذارید:",
+             "If that line points at a project variable (like ${{project.MRK_VERSION}}), leave it "
+             "and set only this value in the project's “Environment”:",
+             f"MRK_VERSION={version}"),
         _cmd("بعد «Deploy» را بزنید؛ پنل چند ثانیه قطع می‌شود و با نسخه تازه برمی‌گردد.",
              "Then click “Deploy”; the panel goes away for a few seconds and comes back updated.",
              ""),
@@ -874,8 +977,8 @@ def dokploy_commands(version: str) -> list[dict[str, str]]:
 
 
 def manual_steps(env_line: bool) -> dict[str, list[dict[str, str]]]:
-    env_fa = "در زبانه «Environment» فقط خط MRK_IMAGE را با خط بالا عوض کنید؛ بقیه خط‌ها، به‌خصوص کلید اتصال، همان بمانند."  # noqa: E501
-    env_en = "In the “Environment” tab change only the MRK_IMAGE line to the line above; keep every other line, especially the pairing key."  # noqa: E501
+    env_fa = "در زبانه «Environment» فقط خط MRK_IMAGE را با خط بالا عوض کنید؛ بقیه خط‌ها، به‌خصوص کلید اتصال، همان بمانند. اگر MRK_IMAGE به متغیر پروژه اشاره می‌کند (مثل ${{project.MRK_VERSION}})، خط را دست نزنید و فقط آن متغیر را در «Environment» پروژه عوض کنید."  # noqa: E501
+    env_en = "In the “Environment” tab change only the MRK_IMAGE line to the line above; keep every other line, especially the pairing key. If MRK_IMAGE points at a project variable (like ${{project.MRK_VERSION}}), leave the line and change only that variable in the project's “Environment”."  # noqa: E501
     steps: dict[str, list[dict[str, str]]] = {
         "dokploy": [
             {"fa": "در Dokploy سرویس Compose همین بخش را باز کنید.",

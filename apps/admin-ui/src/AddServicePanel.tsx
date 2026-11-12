@@ -185,7 +185,11 @@ const COPY = {
   stillWorking: { fa: "هنوز در حال نصب است؛ کمی صبر کنید.", en: "Still installing; please wait." },
   retryConnect: { fa: "اتصال دوباره", en: "Connect again" },
   openThere: { fa: "دیدن در همان ابزار", en: "Open it there" },
-  reused: { fa: "سرویس قبلی با همین نام به‌روز شد.", en: "The existing service with this name was updated." },
+  reused: { fa: "این سرویس از قبل در Dokploy بود و همان به‌روز شد؛ سرویس تازه‌ای ساخته نشد.", en: "This service was already in Dokploy and was updated in place; no new service was made." },
+  composeKept: {
+    fa: "فایل compose این سرویس را خودتان تغییر داده بودید، پس پنل آن را دست نزد و فقط متغیرهای لازم را گذاشت.",
+    en: "You had changed this service's compose file, so the panel kept it and only set the variables it needs."
+  },
   autoFailed: { fa: "نصب خودکار کامل نشد.", en: "The automatic install didn't finish." },
   finish: { fa: "تمام", en: "Done" },
   stepSettings: { fa: "تنظیمات", en: "Settings" },
@@ -295,6 +299,10 @@ const JOB_ERRORS: Record<string, Bi> = {
   connect_failed: {
     fa: "سرویس بالا آمد ولی هنوز به پنل جواب نمی‌دهد. چند ثانیه بعد «اتصال دوباره» را بزنید و مطمئن شوید روی همین سرور اجرا شده است.",
     en: "The service started but doesn't answer the panel yet. Press “Connect again” in a few seconds, and make sure it runs on this server."
+  },
+  already_installed: {
+    fa: "این سرویس همین حالا در پروژه دیگری از Dokploy اجرا می‌شود. همان پروژه را انتخاب کنید (یا هیچ پروژه‌ای را) تا همان به‌روز شود، یا اول آن یکی را پاک کنید.",
+    en: "This service already runs in another Dokploy project. Pick that project (or none) to update it in place, or remove the other one first."
   },
   server_required: { fa: "Coolify چند سرور دارد؛ سروری را که پنل روی آن است انتخاب کنید.", en: "Coolify has several servers; pick the one the panel runs on." },
   server_not_found: { fa: "این سرور در Coolify پیدا نشد.", en: "That server wasn't found in Coolify." },
@@ -410,11 +418,12 @@ function JobProgress({ job }: { job: AutoJob | null }) {
       </Box>
       {job.reused ? <Notice tone="info">{pick(language, COPY.reused)}</Notice> : null}
       {job.warnings.includes("server_not_local") ? <Notice tone="warning">{pick(language, COPY.serverNotLocal)}</Notice> : null}
+      {job.warnings.includes("compose_customized") ? <Notice tone="info">{pick(language, COPY.composeKept)}</Notice> : null}
       {job.status === "succeeded" ? <Notice tone="success">{pick(language, COPY.connected)}</Notice> : null}
       {failed ? (
         <Notice tone={job.error_code === "connect_failed" ? "warning" : "error"}>
           {errorCopy ? pick(language, errorCopy) : pick(language, COPY.autoFailed)}
-          {!errorCopy && job.message ? <Box sx={{ mt: 0.5 }}><Ltr>{job.message}</Ltr></Box> : null}
+          {job.message ? <Box sx={{ mt: 0.5 }}><Ltr>{job.message}</Ltr></Box> : null}
         </Notice>
       ) : null}
       {job.resource_url ? (

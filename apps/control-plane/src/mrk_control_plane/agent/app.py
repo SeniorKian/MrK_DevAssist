@@ -53,6 +53,8 @@ _MAX_LOG_TAIL = 5000
 _MAX_LOG_BYTES = 5 * 1024 * 1024
 _MAX_PULL_LINE = 64 * 1024
 _CONTAINER_CACHE_SECONDS = 10.0
+_DOCKER_FACTS_CACHE_SECONDS = 30.0
+_DOCKER_FACTS_FAILURE_CACHE_SECONDS = 5.0
 _DISCONNECT_POLL_SECONDS = 5.0
 _POST_ROUTES = (
     re.compile(r"^/v1/docker/containers/[^/]+/(start|stop|restart)$"),
@@ -229,6 +231,11 @@ def create_agent_app(
     docker_possible = docker_transport is not None or Path(config.docker_socket).exists()
     cpu_sampler = host_metrics.CpuSampler()
     container_cache: dict[str, Any] = {"at": 0.0, "items": None}
+    # /v1/info is the panel's reachability probe: serve Docker facts from a short
+    # cache (one refresh at a time) so a slow daemon at 0.5 CPU never makes the
+    # probe itself slow. A failed refresh is cached briefly too.
+    docker_facts: dict[str, Any] = {"at": None, "value": None}
+    docker_facts_lock = asyncio.Lock()
     prune_lock = asyncio.Lock()
 
     @asynccontextmanager
@@ -265,9 +272,32 @@ def create_agent_app(
     async def docker_overview() -> dict[str, Any] | None:
         if not docker_possible:
             return None
+
+        def fresh() -> bool:
+            at = docker_facts["at"]
+            if at is None:
+                return False
+            ttl = (_DOCKER_FACTS_CACHE_SECONDS if docker_facts["value"] is not None
+                   else _DOCKER_FACTS_FAILURE_CACHE_SECONDS)
+            return time.monotonic() - at < ttl
+
+        if not fresh():
+            async with docker_facts_lock:
+                if not fresh():
+                    docker_facts["value"] = await read_docker_facts()
+                    docker_facts["at"] = time.monotonic()
+        value = docker_facts["value"]
+        return dict(value) if value is not None else None
+
+    async def read_docker_facts() -> dict[str, Any] | None:
         try:
-            version = await docker.version()
-            info = await docker.info()
+            if docker.api_version is None:
+                # First call negotiates the API version that info() needs.
+                version = await docker.version()
+                info = await docker.info()
+            else:
+                # Both at once: the probe waits for one Docker timeout, not two.
+                version, info = await asyncio.gather(docker.version(), docker.info())
         except DockerUnavailable as exc:
             LOGGER.warning("docker unavailable", extra={"reason": str(exc)})
             return None

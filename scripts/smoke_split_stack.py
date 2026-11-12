@@ -138,7 +138,7 @@ def main() -> int:
         panel = Panel(PANEL.format(port=args.port))
         wait_until("panel ready", lambda: urllib.request.urlopen(  # noqa: S310
             panel.base + "/health/ready", timeout=5).status == 200, 400)
-        password = secrets.token_urlsafe(18)
+        password = f"smoke-owner-7{secrets.token_urlsafe(18)}"  # letter + digit: password policy
         status, session = panel.call("POST", "/api/v1/auth/setup", {
             "display_name": "Smoke Owner", "email": "owner@example.test",
             "password": password, "password_confirmation": password})

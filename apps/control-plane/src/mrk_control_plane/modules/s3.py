@@ -53,7 +53,8 @@ FALLBACK_ENDPOINT = "http://127.0.0.1:9000"
 _STATS_CONCURRENCY = 8
 S3_DOKPLOY_TARGET_KEY = "s3.dokploy_target"
 # Sources that identify the S3 Compose for certain; anything else is a suggestion.
-DEPLOYABLE_TARGET_SOURCES = frozenset({"saved", "installer", "container"})
+# "located": the Compose domain routing found through Dokploy (it defines mrk-s3).
+DEPLOYABLE_TARGET_SOURCES = frozenset({"saved", "installer", "container", "located"})
 _S3_NAME = re.compile(r"(?<![a-z0-9])s3(?![a-z0-9])")
 
 ACTIVE_STORE: S3Store | None = None
@@ -280,6 +281,19 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
                 except Exception:  # noqa: BLE001 - candidates below remain usable
                     LOGGER.info("S3 Dokploy container detection skipped", exc_info=True)
 
+        # The same resolver domain routing uses (dokploy_locate.find_compose: a Compose
+        # that defines mrk-s3), so bucket domains and redeploys point at one Compose.
+        if selected_id is None:
+            routes = bucket_routes_module.active()
+            if routes is not None:
+                try:
+                    located = await routes.service.routing.stack_compose("s3")
+                except Exception:  # noqa: BLE001 - the weaker hints below remain
+                    LOGGER.info("S3 Compose lookup skipped", exc_info=True)
+                    located = None
+                if located in by_id:
+                    selected_id, source = str(located), "located"
+
         # Weaker hints, never used to deploy on their own: the Compose owns the configured
         # public S3 hostname, or exactly one Compose is named like S3. The admin saves
         # such a suggestion first; only then is it a redeploy target.
@@ -403,6 +417,10 @@ def build_router(ctx: ModuleContext, store: S3Store) -> APIRouter:
             compose_id = raw_id
             detail = await active_dokploy().service("compose", compose_id)
             await asyncio.to_thread(save_dokploy_target, compose_id)
+            routes = bucket_routes_module.active()
+            if routes is not None:
+                # Domain routing reads the saved Compose first: forget older lookups.
+                routes.service.routing.invalidate()
         except (S3Error, DokployError) as exc:
             if exc.status_code != 422:
                 await audit(principal, "s3.dokploy_target.update", "dokploy",

@@ -158,3 +158,73 @@ def test_wizard_connects_a_separate_engine(tmp_path: Path, remote_engine, monkey
         )
         assert s3.get_object(Bucket="photos", Key="hello.txt")["Body"].read() == (
             b"hello split world")
+
+
+def test_engine_health_retries_once_and_names_dns_failures(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    import httpx
+
+    token = tmp_path / "admin.token"
+    token.write_text(TOKEN)
+    monkeypatch.setattr(s3_client, "HEALTH_RETRY_DELAY_SECONDS", 0)
+    calls: list[str] = []
+    mode = {"value": "flaky"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if mode["value"] == "dns":
+            raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+        if mode["value"] == "flaky" and len(calls) == 1:
+            raise httpx.ReadTimeout("slow", request=request)
+        if mode["value"] == "down":
+            raise httpx.ConnectError("[Errno 111] Connection refused", request=request)
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(s3_client, "TRANSPORT_FACTORY", lambda: httpx.MockTransport(handler))
+    admin = s3_client.EngineAdmin(token, "http://mrk-s3:9001")
+    # One slow answer is retried instead of reporting "degraded".
+    assert asyncio.run(admin.probe()) == (True, None) and len(calls) == 2
+    calls.clear()
+    mode["value"] = "dns"
+    assert asyncio.run(admin.probe()) == (False, "s3_name_unresolved")
+    assert len(calls) == 1  # an unknown name will not resolve on a retry
+    calls.clear()
+    mode["value"] = "down"
+    assert asyncio.run(admin.probe()) == (False, "engine_unreachable") and len(calls) == 2
+
+
+def test_home_warns_when_a_separate_engine_stays_unreachable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import httpx
+    from mrk_control_plane.modules import home
+
+    for name in ("MRK_S3_ENGINE_URL", "MRK_S3_ADMIN_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(s3_client, "HEALTH_RETRY_DELAY_SECONDS", 0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+
+    monkeypatch.setattr(s3_client, "TRANSPORT_FACTORY", lambda: httpx.MockTransport(handler))
+    try:
+        with TestClient(create_app(Settings.for_test(tmp_path / "cp"))) as client:
+            login_owner(client)
+            s3_client.configure_remote(tmp_path / "cp")
+            s3_client.save_remote("http://mrk-s3:9000", "http://mrk-s3:9001")
+            service = home.LAST_SERVICE
+            assert service is not None
+
+            def rules() -> dict[str, dict]:
+                service.invalidate()
+                service._s3_probed_at = 0.0  # noqa: SLF001 - skip the 30 s spacing
+                items = client.get("/api/v1/home").json()["attention"]
+                return {item["rule"]: item for item in items}
+
+            assert "s3_unreachable" not in rules()  # one failed check is not an outage
+            second = rules()
+            assert second["s3_unreachable"]["params"]["code"] == "s3_name_unresolved"
+            assert second["s3_unreachable"]["action"]["route"] == "#/services"
+    finally:
+        s3_client._REMOTE_PATH = None  # noqa: SLF001 - module global set by the panel

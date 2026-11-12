@@ -42,19 +42,32 @@ import {
 } from "./kit";
 import { CONFIRM_WORDS, pick, reasonFor, say, type Bi } from "./copy";
 
-type DokployConfig = {
+/** Connection health as of the latest Dokploy call (also sent with every /projects answer). */
+type DokployHealth = {
+  reachable?: boolean | null;
+  /** Dokploy's own words (redacted) for the last connection problem; technical details only. */
+  last_error: string | null;
+  /** Machine code of that problem; the sentence shown comes from the copy catalog. */
+  last_error_code?: string | null;
+};
+
+type DokployConfig = DokployHealth & {
   configured: boolean;
   url: string | null;
   source: "panel" | "env" | null;
-  last_error: string | null;
-  /** The Dokploy web panel (docs/34 §4), for «باز کردن در Dokploy». */
+  /** The address people open Dokploy at, when `url` is an internal one. */
+  public_url?: string | null;
+  /** The Dokploy web panel (docs/34 §4), for «باز کردن در Dokploy»: public_url or url. */
   panel_url?: string | null;
 };
 
-/** Dokploy's own page for a project (`<panel>/dashboard/project/<id>`). */
-function dokployProjectHref(panelUrl: string | null | undefined, projectId: string): string | null {
+/** Dokploy's own page for a project. The server sends it (with the environment, needed
+ * since Dokploy 0.25); building it here is only a fallback for older servers. */
+function dokployProjectHref(panelUrl: string | null | undefined, project: Project): string | null {
+  if (project.url) return project.url;
   if (!panelUrl) return null;
-  return `${panelUrl.replace(/\/+$/, "")}/dashboard/project/${encodeURIComponent(projectId)}`;
+  const base = `${panelUrl.replace(/\/+$/, "")}/dashboard/project/${encodeURIComponent(project.id)}`;
+  return project.default_environment_id ? `${base}/environment/${encodeURIComponent(project.default_environment_id)}` : base;
 }
 
 function OpenInDokploy({ href, label }: { href: string; label: string }) {
@@ -66,11 +79,12 @@ function OpenInDokploy({ href, label }: { href: string; label: string }) {
 }
 type ServiceType = "application" | "compose" | "postgres" | "mysql" | "mariadb" | "mongo" | "redis";
 type LastDeployment = { status: string; created_at: string | number | null; title?: string | null };
-type Service = { id: string; type: ServiceType; name: string; status: string | null; domains: string[] | null; last_deployment: LastDeployment | null };
-type Project = { id: string; name: string; description: string | null; services: Service[] };
+type Service = { id: string; type: ServiceType; name: string; status: string | null; domains: string[] | null; last_deployment: LastDeployment | null; environment_id?: string | null; url?: string | null };
+type Project = { id: string; name: string; description: string | null; services: Service[]; default_environment_id?: string | null; url?: string | null };
+type ProjectsPayload = DokployHealth & { items: Project[]; partial?: boolean };
 type Deployment = { id: string; status: string; title: string | null; created_at: string | number | null; finished_at: string | number | null };
 type ServiceDetail = Service & { deployments?: Deployment[] };
-type DokployTest = { ok: boolean; latency_ms: number; version?: string | null; error_code?: string | null };
+type DokployTest = { ok: boolean; latency_ms: number; version?: string | null; error_code?: string | null; message?: string | null };
 type ServiceAction = "deploy" | "redeploy" | "start" | "stop";
 
 type Props = { language: Language; permissions: string[]; onUnauthorized: () => void };
@@ -134,6 +148,8 @@ const T = {
   url: { fa: "نشانی Dokploy", en: "Dokploy address" },
   urlExample: { fa: "مثلاً https://dokploy.example.com یا http://dokploy:3000", en: "For example https://dokploy.example.com or http://dokploy:3000" },
   urlRule: { fa: "نشانی باید با http:// یا https:// شروع شود.", en: "The address must start with http:// or https://." },
+  publicUrl: { fa: "نشانی Dokploy در مرورگر (اختیاری)", en: "Dokploy address in the browser (optional)" },
+  publicUrlHint: { fa: "اگر نشانی بالا فقط داخل سرور کار می‌کند (مثل http://dokploy:3000)، نشانی‌ای را بنویسید که خودتان Dokploy را با آن باز می‌کنید. دکمه‌های «باز کردن در Dokploy» به همین نشانی می‌روند.", en: "If the address above only works inside the server (like http://dokploy:3000), enter the one you open Dokploy with. “Open in Dokploy” buttons go there." },
   keyHint: { fa: "یک کلید دسترسی در Dokploy بسازید و این‌جا بچسبانید.", en: "Create an access key in Dokploy and paste it here." },
   keyStep1: { fa: "وارد Dokploy شوید و به «Settings» و بعد «Profile» بروید.", en: "Sign in to Dokploy and open “Settings”, then “Profile”." },
   keyStep2: { fa: "در بخش «API/CLI» دکمه «Generate» را بزنید و کلید را کپی کنید.", en: "Under “API/CLI”, press “Generate” and copy the key." },
@@ -154,6 +170,7 @@ const T = {
   sourceEnv: { fa: "فایل Compose", en: "Compose file" },
   envManaged: { fa: "این اتصال از فایل Compose تنظیم شده؛ برای تغییر، همان فایل را ویرایش کنید.", en: "This connection is set in the Compose file; edit that file to change it." },
   lastProblem: { fa: "آخرین مشکل", en: "Last problem" },
+  publicAddress: { fa: "نشانی Dokploy در مرورگر", en: "Dokploy address in the browser" },
   technical: { fa: "جزئیات فنی", en: "Technical details" },
   test: { fa: "امتحان اتصال", en: "Test connection" },
   edit: { fa: "تغییر نشانی یا کلید", en: "Change address or key" },
@@ -174,13 +191,25 @@ const KIND_WORDS: Record<string, Bi> = {
   redis: { fa: "Redis", en: "Redis" }
 };
 
-/** Dokploy's own status words → our status table. */
+/**
+ * A Dokploy app/database status → our status table. Dokploy's words describe the last
+ * deploy, not a process: done = deployed fine, running = a deploy is in progress,
+ * idle = stopped or never deployed, error = the last deploy failed (the previous
+ * container may well still be serving).
+ */
 function serviceStatus(status: string | null | undefined): string {
-  if (!status) return "unknown";
-  if (status === "done") return "running";
-  if (status === "idle") return "stopped";
-  if (status === "deploying") return "running";
-  return status;
+  switch (status) {
+    case "done": return "deployed";
+    case "running": return "deploying";
+    case "idle": return "stopped";
+    case "error": return "deploy_failed";
+    default: return "unknown";
+  }
+}
+
+/** A single deployment's own status (done / error / cancelled / running) as-is. */
+function deploymentStatus(status: string | null | undefined): string {
+  return status && ["done", "error", "cancelled", "running"].includes(status) ? status : "unknown";
 }
 
 /** A bare 404 (no specific code) means the module isn't on this server. */
@@ -202,16 +231,20 @@ function domainHref(domain: string): string | null {
 }
 
 function canStart(status: string | null) {
-  return !status || ["idle", "stopped", "exited", "error"].includes(status);
+  return !status || ["idle", "error", "unknown"].includes(status);
 }
 
 function canStop(status: string | null) {
-  return !status || !["idle", "stopped", "exited"].includes(status);
+  return !status || status !== "idle";
 }
 
 function testOutcome(result: DokployTest, language: Language): TestOutcome {
   if (result.ok) return { state: "ok", latencyMs: result.latency_ms, message: result.version ? say(language, T.versionLine, { version: result.version }) : undefined };
-  return { state: "fail", code: result.error_code ?? null, message: result.error_code ? reasonFor(language, result.error_code) : undefined };
+  const code = result.error_code ?? "dokploy_unreachable";
+  // As an ApiError the plain sentence comes from the catalog and Dokploy's own words stay
+  // under «جزئیات فنی».
+  if (result.message) return { state: "fail", error: new ApiError(502, code, result.message) };
+  return { state: "fail", code, message: reasonFor(language, code) };
 }
 
 async function runTest(language: Language): Promise<TestOutcome> {
@@ -224,23 +257,29 @@ async function runTest(language: Language): Promise<TestOutcome> {
 
 // ── Connection wizard ─────────────────────────────────────────────────────────
 
-function ConnectWizard({ open, initialUrl, hasKey, onClose, onSaved }: { open: boolean; initialUrl: string; hasKey: boolean; onClose: () => void; onSaved: () => void }) {
+function ConnectWizard({ open, initialUrl, initialPublicUrl, hasKey, onClose, onSaved }: { open: boolean; initialUrl: string; initialPublicUrl: string; hasKey: boolean; onClose: () => void; onSaved: () => void }) {
   const { language } = useKit();
   const [url, setUrl] = useState(initialUrl);
+  const [publicUrl, setPublicUrl] = useState(initialPublicUrl);
   const [key, setKey] = useState("");
   const [outcome, setOutcome] = useState<TestOutcome>({ state: "idle" });
 
   useEffect(() => {
     if (!open) return;
     setUrl(initialUrl);
+    setPublicUrl(initialPublicUrl);
     setKey("");
     setOutcome({ state: "idle" });
-  }, [open, initialUrl]);
+  }, [open, initialUrl, initialPublicUrl]);
 
   const urlOk = /^https?:\/\/[^\s/]+/i.test(url.trim());
+  const publicOk = !publicUrl.trim() || /^https?:\/\/[^\s/]+/i.test(publicUrl.trim());
 
   const save = async () => {
-    const body: { url: string; api_key?: string } = { url: url.trim().replace(/\/+$/, "") };
+    const body: { url: string; api_key?: string; public_url: string } = {
+      url: url.trim().replace(/\/+$/, ""),
+      public_url: publicUrl.trim().replace(/\/+$/, "")
+    };
     if (key.trim()) body.api_key = key.trim();
     await mutateJson(`${BASE}/config`, { method: "PUT", body });
     setKey("");
@@ -261,7 +300,7 @@ function ConnectWizard({ open, initialUrl, hasKey, onClose, onSaved }: { open: b
           key: "address",
           title: pick(language, T.stepAddress),
           hint: pick(language, T.addressHint),
-          validate: () => (urlOk ? null : pick(language, T.urlRule)),
+          validate: () => (urlOk && publicOk ? null : pick(language, T.urlRule)),
           render: () => (
             <Stack spacing={2}>
               <TextField
@@ -272,6 +311,15 @@ function ConnectWizard({ open, initialUrl, hasKey, onClose, onSaved }: { open: b
                 onChange={(event) => setUrl(event.target.value)}
                 error={url.length > 0 && !urlOk}
                 helperText={pick(language, T.urlExample)}
+                slotProps={{ htmlInput: { dir: "ltr", autoComplete: "off", spellCheck: false } }}
+              />
+              <TextField
+                fullWidth
+                label={pick(language, T.publicUrl)}
+                value={publicUrl}
+                onChange={(event) => setPublicUrl(event.target.value)}
+                error={!publicOk}
+                helperText={pick(language, T.publicUrlHint)}
                 slotProps={{ htmlInput: { dir: "ltr", autoComplete: "off", spellCheck: false } }}
               />
               <Typography variant="body2" color="text.secondary">{pick(language, T.safety)}</Typography>
@@ -420,13 +468,13 @@ function DeploymentHistoryDialog({ service, onClose, onLog }: { service: Service
             rowKey={(row) => row.id}
             dense
             columns={[
-              { key: "status", header: pick(language, T.colStatus), render: (row) => <StatusPill status={serviceStatus(row.status)} /> },
+              { key: "status", header: pick(language, T.colStatus), render: (row) => <StatusPill status={deploymentStatus(row.status)} /> },
               { key: "title", header: pick(language, T.colName), render: (row) => <Box component="span" dir="auto">{row.title || "—"}</Box> },
               { key: "started", header: pick(language, T.started), render: (row) => <RelativeTime value={row.created_at} /> },
               { key: "took", header: "", render: (row) => { const value = seconds(row); return value === null ? "—" : say(language, T.took, { seconds: value }); } },
               { key: "id", header: pick(language, T.colId), render: (row) => <Ltr mono>{row.id}</Ltr>, ltr: true, hideOnCard: true }
             ]}
-            card={{ title: (row) => <Box component="span" dir="auto">{row.title || "—"}</Box>, meta: (row) => <RelativeTime value={row.created_at} />, status: (row) => <StatusPill status={serviceStatus(row.status)} /> }}
+            card={{ title: (row) => <Box component="span" dir="auto">{row.title || "—"}</Box>, meta: (row) => <RelativeTime value={row.created_at} />, status: (row) => <StatusPill status={deploymentStatus(row.status)} /> }}
             actions={[{ key: "log", label: pick(language, T.viewLog), icon: ArticleRoundedIcon, onClick: onLog }]}
             empty={<Typography variant="body2" color="text.secondary">{pick(language, T.noHistory)}</Typography>}
           />
@@ -456,7 +504,7 @@ function ProjectCard({ project, canDeploy, busy, onAction, onHistory, panelUrl }
       hint={project.description ?? undefined}
       flush
       action={(() => {
-        const href = dokployProjectHref(panelUrl, project.id);
+        const href = dokployProjectHref(panelUrl, project);
         return href ? <OpenInDokploy href={href} label={pick(language, T.openInDokploy)} /> : undefined;
       })()}
     >
@@ -471,7 +519,7 @@ function ProjectCard({ project, canDeploy, busy, onAction, onHistory, panelUrl }
           {
             key: "last",
             header: pick(language, T.colLast),
-            render: (row) => (row.last_deployment ? <Stack direction="row" spacing={0.75} alignItems="center"><StatusPill status={serviceStatus(row.last_deployment.status)} size="small" /><RelativeTime value={row.last_deployment.created_at} /></Stack> : pick(language, T.never))
+            render: (row) => (row.last_deployment ? <Stack direction="row" spacing={0.75} alignItems="center"><StatusPill status={deploymentStatus(row.last_deployment.status)} size="small" /><RelativeTime value={row.last_deployment.created_at} /></Stack> : pick(language, T.never))
           },
           {
             key: "domains",
@@ -524,7 +572,14 @@ function ProjectCard({ project, canDeploy, busy, onAction, onHistory, panelUrl }
                 { key: "deploy", label: pick(language, T.deploy), icon: RocketLaunchRoundedIcon, advancedOnly: true, onClick: (row: Service) => onAction(row, "deploy"), disabled: () => busy !== null }
               ]
             : []),
-          { key: "history", label: pick(language, T.history), icon: HistoryRoundedIcon, advancedOnly: true, onClick: onHistory }
+          { key: "history", label: pick(language, T.history), icon: HistoryRoundedIcon, advancedOnly: true, onClick: onHistory },
+          {
+            key: "open",
+            label: pick(language, T.openInDokploy),
+            icon: OpenInNewRoundedIcon,
+            hidden: (row: Service) => !row.url,
+            onClick: (row: Service) => { if (row.url) window.open(row.url, "_blank", "noopener,noreferrer"); }
+          }
         ]}
         empty={<Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>{pick(language, T.noServices)}</Typography>}
       />
@@ -566,9 +621,13 @@ export function DokployPanel({ language, permissions }: Props) {
       setLoadError(null);
       if (nextConfig.configured) {
         try {
-          const payload = await getJson<{ items: Project[] }>(`${BASE}/projects`, current.signal);
+          const payload = await getJson<ProjectsPayload>(`${BASE}/projects`, current.signal);
           setProjects(payload.items ?? []);
           setProjectsError(null);
+          // /config was read before this load; the health that came with the list is newer.
+          if ("last_error" in payload) {
+            setConfig({ ...nextConfig, reachable: payload.reachable ?? nextConfig.reachable, last_error: payload.last_error ?? null, last_error_code: payload.last_error_code ?? null });
+          }
         } catch (caught) {
           if (isAbortError(caught)) throw caught;
           if (caught instanceof ApiError && caught.status === 401) return;
@@ -700,10 +759,11 @@ export function DokployPanel({ language, permissions }: Props) {
               <KeyValueList
                 items={[
                   { label: pick(language, T.url), value: <Ltr>{config.url ?? "—"}</Ltr>, copy: config.url ?? undefined },
+                  ...(config.public_url ? [{ label: pick(language, T.publicAddress), value: <Ltr>{config.public_url}</Ltr>, copy: config.public_url }] : []),
                   { label: pick(language, T.source), value: config.source === "env" ? pick(language, T.sourceEnv) : config.source === "panel" ? pick(language, T.sourcePanel) : "—" },
                   ...(config.last_error
                     ? [
-                        { label: pick(language, T.lastProblem), value: reasonFor(language, config.last_error) },
+                        { label: pick(language, T.lastProblem), value: reasonFor(language, config.last_error_code ?? "dokploy_unreachable") },
                         { label: pick(language, T.technical), value: <Ltr mono>{config.last_error}</Ltr> }
                       ]
                     : [])
@@ -732,7 +792,7 @@ export function DokployPanel({ language, permissions }: Props) {
 
       {isAdvanced && config && <RegistrySettings groups={["server.apps"]} permissions={permissions} title={pick(language, T.settingsTitle)} />}
 
-      <ConnectWizard open={wizardOpen} initialUrl={config?.url ?? ""} hasKey={configured} onClose={() => { setWizardOpen(false); void load(true); }} onSaved={() => void load(true)} />
+      <ConnectWizard open={wizardOpen} initialUrl={config?.url ?? ""} initialPublicUrl={config?.public_url ?? ""} hasKey={configured} onClose={() => { setWizardOpen(false); void load(true); }} onSaved={() => void load(true)} />
       {historyFor && <DeploymentHistoryDialog service={historyFor} onClose={() => setHistoryFor(null)} onLog={setLogDeployment} />}
       {logDeployment && <DeploymentLogDialog deployment={logDeployment} onClose={() => setLogDeployment(null)} />}
       {dialog}

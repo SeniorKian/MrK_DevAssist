@@ -11,8 +11,8 @@ import SyncRoundedIcon from "@mui/icons-material/SyncRounded";
 import { ApiError, getJson, hasPermission, isAbortError, mutateJson } from "./api";
 import { pick, reasonFor, say, type Bi } from "./copy";
 import { FriendlyError, Ltr, SectionCard, StatusPill, useKit, useUndoSnackbar } from "./kit";
-import { ManualSteps } from "./ServiceDomains";
-import { routingModeWord, type ManualInstructions } from "./services";
+import { ManualSteps, RedeployNotice } from "./ServiceDomains";
+import { routingModeWord, type ManualInstructions, type SuggestedAction } from "./services";
 
 const BASE = "/api/v1/domains/bucket-routes";
 
@@ -27,7 +27,10 @@ type RouteItem = {
     state: RouteState;
     mode: string | null;
     error_code: string | null;
+    /** Dokploy's own words for the last failure (Advanced mode). */
+    upstream_message?: string | null;
     redeploy_required: boolean | null;
+    suggested_action?: SuggestedAction | null;
     instructions: ManualInstructions | null;
   };
 };
@@ -53,10 +56,6 @@ const T = {
   adminOwner: { fa: "باکت مدیریتی «{bucket}»", en: "Admin bucket “{bucket}”" },
   noOwner: { fa: "صاحبی ندارد؛ مسیرش برداشته می‌شود", en: "No owner; its route is being removed" },
   via: { fa: "روش: {mode}", en: "Method: {mode}" },
-  redeploy: {
-    fa: "Dokploy دامنه را ثبت کرد. یک بار سرویس DevAssist را در Dokploy دوباره منتشر کنید و بعد «دوباره امتحان کن» را بزنید.",
-    en: "Dokploy has the domain. Deploy the DevAssist service once in Dokploy, then press “Try again”."
-  },
   state_ok: { fa: "وصل است", en: "Routed" },
   state_pending: { fa: "در انتظار انتشار", en: "Waiting for a deploy" },
   state_manual: { fa: "دستی", en: "Manual" },
@@ -74,7 +73,7 @@ const TONE: Record<RouteState, "ok" | "warn" | "error" | "info" | "off" | "busy"
 const RETRYABLE: RouteState[] = ["pending", "manual", "failed", "conflict", "stale", "none"];
 
 export function S3BucketRoutes({ permissions }: { permissions: string[] }) {
-  const { language } = useKit();
+  const { language, isAdvanced } = useKit();
   const { notify, snackbar } = useUndoSnackbar();
   const canRead = hasPermission(permissions, "domains:read");
   const canWrite = hasPermission(permissions, "domains:write");
@@ -163,8 +162,13 @@ export function S3BucketRoutes({ permissions }: { permissions: string[] }) {
               {route.error_code && (state === "failed" || state === "conflict" || state === "stale") && (
                 <Typography variant="body2" color="error" sx={{ mt: 0.5 }}>{reasonFor(language, route.error_code)}</Typography>
               )}
+              {isAdvanced && route.upstream_message && (state === "failed" || state === "stale") && (
+                <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 0.5 }}><Ltr>{route.upstream_message}</Ltr></Typography>
+              )}
               {state === "pending" && route.redeploy_required && (
-                <Typography variant="body2" sx={{ mt: 0.5 }}>{pick(language, T.redeploy)}</Typography>
+                <Box sx={{ mt: 1 }}>
+                  <RedeployNotice host={item.host} action={route.suggested_action} onStarted={() => void load()} />
+                </Box>
               )}
               {state === "manual" && route.instructions && (
                 <Box sx={{ mt: 1 }}>

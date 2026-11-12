@@ -233,7 +233,9 @@ def test_dokploy_service_upgrade_keeps_pairing_key(tmp_path: Path, fakes, ghcr, 
     assert "compose.create" not in procedures
     assert procedures.index("compose.update") < procedures.index("compose.deploy")
     update = next(body for name, body in dokploy.requests if name == "compose.update")
-    assert update["composeId"] == "c1" and "mrk-net" in update["composeFile"]
+    # The compose file is already the current one: only the env line changes.
+    assert update["composeId"] == "c1" and "composeFile" not in update
+    assert "sourceType" not in update
     assert env_value(update["env"], "MRK_IMAGE") == "ghcr.io/seniorkian/mrk-agent:0.2.0"
     assert env_value(update["env"], "MRK_AGENT_PAIRING_KEY") == key
     assert env_value(update["env"], "MRK_DOCKER_GID") == "988"
@@ -377,13 +379,18 @@ def test_panel_self_upgrade_through_dokploy(tmp_path: Path, fakes, ghcr,  # noqa
 
         dokploy.env_text = ("POSTGRES_PASSWORD=keep-me\n"
                             "MRK_PANEL_IMAGE=ghcr.io/seniorkian/mrk-panel:0.2.0\n")
+        # A compose file that does not read MRK_PANEL_IMAGE would not change: refused.
+        dokploy.compose_file = "services:\n  mrk-panel:\n    image: x/mrk-panel:0.2.0\n"
+        fixed = client.post("/api/v1/releases/panel/upgrade", headers=headers, json=body)
+        assert fixed.status_code == 409 and fixed.json()["error"]["code"] == "manual_upgrade"
+        dokploy.compose_file = "services:\n  mrk-panel:\n    image: ${MRK_PANEL_IMAGE}\n"
         dokploy.requests.clear()
         dokploy.deploy_result = "running"  # the panel restarts; the request returns at once
         done = client.post("/api/v1/releases/panel/upgrade", headers=headers, json=body)
         assert done.status_code == 202, done.text
         assert done.json() == {"version": "0.3.0",
                                "image": "ghcr.io/seniorkian/mrk-panel:0.3.0",
-                               "status": "deploying"}
+                               "status": "deploying", "shared_variable": None}
         assert "release.panel.upgrade" in actions(client)
 
         client.cookies.clear()
@@ -400,3 +407,70 @@ def test_panel_self_upgrade_through_dokploy(tmp_path: Path, fakes, ghcr,  # noqa
     assert env_value(update["env"], "POSTGRES_PASSWORD") == "keep-me"
     deploy = next(body for name, body in dokploy.requests if name == "compose.deploy")
     assert deploy["composeId"] == "c-panel"
+
+
+def test_panel_upgrade_moves_the_shared_project_version(tmp_path: Path, fakes, ghcr,  # noqa: F811
+                                                         monkeypatch) -> None:
+    """MRK_PANEL_IMAGE=...:${{project.MRK_VERSION}}: the project variable moves, not the line."""
+    dokploy = fakes["dokploy"]
+    monkeypatch.setenv("MRK_IMAGE_TAG", "0.2.0")
+    detected = {"inside_dokploy": True, "dokploy_connected": True,
+                "dokploy_service_type": "compose", "dokploy_service_id": "c-panel"}
+
+    async def fake_detected(self):
+        return detected
+
+    monkeypatch.setattr(releases.ReleasesService, "_detected", fake_detected)
+    reference = "ghcr.io/seniorkian/mrk-panel:${{project.MRK_VERSION}}"
+    dokploy.env_text = f"MRK_PANEL_IMAGE={reference}\n"
+    dokploy.project_env = "# one version for every service\nMRK_VERSION=0.2.0\nOTHER=x\n"
+    dokploy.compose_file = "services:\n  mrk-panel:\n    image: ${MRK_PANEL_IMAGE}\n"
+    dokploy.deploy_result = "running"
+    with TestClient(create_app(Settings.for_test(tmp_path / "cp"))) as client:
+        headers = owner(client)
+        connect_dokploy(client, headers)
+        client.post("/api/v1/releases/check", headers=headers)
+        done = client.post("/api/v1/releases/panel/upgrade", headers=headers,
+                           json={"version": "0.3.0", "confirmation": "UPDATE"})
+        assert done.status_code == 202, done.text
+        assert done.json()["shared_variable"] == "project.MRK_VERSION"
+    names = [name for name, _ in dokploy.requests]
+    assert "compose.update" not in names and "compose.deploy" in names
+    assert env_value(dokploy.env_text, "MRK_PANEL_IMAGE") == reference
+    assert env_value(dokploy.project_env, "MRK_VERSION") == "0.3.0"
+    assert env_value(dokploy.project_env, "OTHER") == "x"
+    assert dokploy.project_env.startswith("# one version for every service")
+
+
+def test_service_upgrade_keeps_shared_version_and_edited_compose(
+    tmp_path: Path, fakes, ghcr, monkeypatch,  # noqa: F811
+) -> None:
+    """The admin's ${{project.MRK_VERSION}} line and edited compose file survive an update."""
+    dokploy = fakes["dokploy"]
+    keys = restarts_with_same_key(dokploy)
+    monkeypatch.setenv("MRK_IMAGE_TAG", "0.1.0")
+    with TestClient(create_app(Settings.for_test(tmp_path / "cp"))) as client:
+        headers = owner(client)
+        connect_dokploy(client, headers)
+        started = client.post("/api/v1/install/agent/auto", headers=headers,
+                              json={"target": "dokploy", "project_id": "p1",
+                                    "environment_id": "e1", "env": {"MRK_DOCKER_GID": "988"}})
+        assert wait_job(client, started.json()["id"])["status"] == "succeeded"
+        reference = "ghcr.io/seniorkian/mrk-agent:${{project.MRK_VERSION}}"
+        env = dokploy.env_text.replace("MRK_IMAGE=ghcr.io/seniorkian/mrk-agent:0.1.0",
+                                       f"MRK_IMAGE={reference}")
+        dokploy.env_text = env
+        dokploy.project_env = "MRK_VERSION=0.1.0\n"
+        dokploy.compose_file += "# my bind mounts\n"
+        edited = dokploy.compose_file
+        monkeypatch.setenv("MRK_IMAGE_TAG", "0.2.0")
+        dokploy.requests.clear()
+        upgrade = client.post("/api/v1/releases/services/agent/upgrade", headers=headers)
+        job = wait_release_job(client, upgrade.json()["id"])
+        assert job["status"] == "succeeded", job
+        assert {"shared_version_changed", "compose_customized"} <= set(job["warnings"])
+    names = [name for name, _ in dokploy.requests]
+    assert "compose.update" not in names and "compose.deploy" in names
+    assert dokploy.env_text == env and dokploy.compose_file == edited
+    assert env_value(dokploy.project_env, "MRK_VERSION") == "0.2.0"
+    assert len(keys) == 2 and keys[0] == keys[1]

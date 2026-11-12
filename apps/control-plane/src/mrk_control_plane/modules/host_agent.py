@@ -24,14 +24,23 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..agent.signing import KEY_BYTES, decode_key, encode_key, sign_headers
+from ..components import NETWORK_FIX, Reachability, is_name_resolution_error
 from ..module_context import Event, ModuleContext
 
 LOGGER = logging.getLogger(__name__)
 MODULE_NAME = "host_agent"
 CONFIG_FILE = "agent.json"
 DEDUPE_KEY = "agent.reachability"
-REQUEST_TIMEOUT_SECONDS = 5.0
+# Above the agent's own Docker timeout (5 s per call, MRK_AGENT_DOCKER_TIMEOUT_SECONDS):
+# at 0.5 CPU a slow daemon must surface as the agent's answer, not as a panel timeout.
+REQUEST_TIMEOUT_SECONDS = 12.0
 STATUS_REFRESH_SECONDS = 10.0
+# Hysteresis: "unreachable" (and the agent.offline notification) only after this many
+# failed probes in a row; after a failure the next background probe comes sooner.
+OFFLINE_AFTER_FAILURES = 3
+RETRY_INTERVAL_SECONDS = 15
+# Errors a retry cannot fix flip the state at once.
+DEFINITE_ERRORS = frozenset({"agent_auth_failed"})
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 # Tests replace this with a factory returning e.g. httpx.ASGITransport(agent_app).
@@ -90,10 +99,15 @@ class HostAgentService:
         self.interval = self._interval()
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
-        self.reachable: bool | None = None
+        self.health = Reachability(OFFLINE_AFTER_FAILURES)
         self.last_checked_at: float | None = None
         self.last_error: str | None = None
+        self.last_error_code: str | None = None
         self.info: dict[str, Any] | None = None
+
+    @property
+    def reachable(self) -> bool | None:
+        return self.health.reachable
 
     @staticmethod
     def _interval() -> int:
@@ -186,9 +200,10 @@ class HostAgentService:
         self._reset()
 
     def _reset(self) -> None:
-        self.reachable = None
+        self.health.reset()
         self.last_checked_at = None
         self.last_error = None
+        self.last_error_code = None
         self.info = None
 
     # ----- outbound calls ------------------------------------------------
@@ -269,6 +284,18 @@ class HostAgentService:
             raise AgentError("agent_timeout", 504, "The agent timed out")
         raise AgentError("agent_unreachable", 502, f"The agent returned HTTP {status_code}")
 
+    @staticmethod
+    def _connection_error(url: str, exc: Exception) -> AgentError:
+        if is_name_resolution_error(exc):
+            host = urlsplit(url).hostname or url
+            return AgentError(
+                "agent_name_unresolved", 502,
+                f"The agent's host name {host!r} does not resolve; {NETWORK_FIX}",
+            )
+        return AgentError(
+            "agent_unreachable", 502, f"The agent is unreachable ({type(exc).__name__})"
+        )
+
     async def request(
         self,
         method: str,
@@ -297,9 +324,7 @@ class HostAgentService:
             except httpx.TimeoutException as exc:
                 raise AgentError("agent_timeout", 504, "The agent timed out") from exc
             except httpx.HTTPError as exc:
-                raise AgentError(
-                    "agent_unreachable", 502, f"The agent is unreachable ({type(exc).__name__})"
-                ) from exc
+                raise self._connection_error(url, exc) from exc
         self._raise_for_status(response.status_code, bytes(data))
         try:
             return json.loads(bytes(data))
@@ -320,9 +345,7 @@ class HostAgentService:
             except httpx.TimeoutException as exc:
                 raise AgentError("agent_timeout", 504, "The agent timed out") from exc
             except httpx.HTTPError as exc:
-                raise AgentError(
-                    "agent_unreachable", 502, f"The agent is unreachable ({type(exc).__name__})"
-                ) from exc
+                raise self._connection_error(url, exc) from exc
             if response.status_code != 200:
                 try:
                     body = await response.aread()
@@ -340,7 +363,11 @@ class HostAgentService:
         return client, response
 
     async def probe(self) -> tuple[bool, float, str | None]:
-        """Call /v1/info, update cached state, emit events on transitions."""
+        """Call /v1/info, update cached state, emit events on confirmed transitions.
+
+        The returned ``ok`` is this probe's own result; ``reachable`` (and the
+        agent.offline notification) follow the hysteresis in ``self.health``.
+        """
         async with self._lock:
             started = time.perf_counter()
             error_code: str | None = None
@@ -360,13 +387,13 @@ class HostAgentService:
                 ok = False
             latency_ms = round((time.perf_counter() - started) * 1000, 1)
             self.last_checked_at = time.time()
-            previous = self.reachable
-            self.reachable = ok
-            self._publish_transition(previous, ok, error_code)
+            self.last_error_code = error_code
+            transition = self.health.record(ok, immediate=error_code in DEFINITE_ERRORS)
+            self._publish_transition(transition, error_code)
             return ok, latency_ms, error_code
 
-    def _publish_transition(self, previous: bool | None, ok: bool, error_code: str | None) -> None:
-        if ok and previous is False:
+    def _publish_transition(self, transition: str | None, error_code: str | None) -> None:
+        if transition == "online":
             self.ctx.events.publish(
                 Event(
                     type="agent.online",
@@ -376,7 +403,7 @@ class HostAgentService:
                     dedupe_key=DEDUPE_KEY,
                 )
             )
-        elif not ok and previous is not False:
+        elif transition == "offline":
             self.ctx.events.publish(
                 Event(
                     type="agent.offline",
@@ -385,7 +412,8 @@ class HostAgentService:
                     message=self.last_error or "",
                     module=MODULE_NAME,
                     dedupe_key=DEDUPE_KEY,
-                    details={"error_code": error_code},
+                    details={"error_code": error_code,
+                             "consecutive_failures": self.health.failures},
                 )
             )
 
@@ -410,6 +438,9 @@ class HostAgentService:
             "reachable": self.reachable if configured else None,
             "last_checked_at": self.last_checked_at,
             "last_error": self.last_error if configured else None,
+            "error_code": self.last_error_code if configured else None,
+            "consecutive_failures": self.health.failures if configured else 0,
+            "last_ok_at": self.health.last_ok_at if configured else None,
             "version": info.get("version") if info else None,
             "capabilities": info.get("capabilities") if info else None,
             "docker": info.get("docker") if info else None,
@@ -428,7 +459,12 @@ class HostAgentService:
                 raise
             except Exception:
                 LOGGER.exception("host agent probe failed")
-            await asyncio.sleep(self.interval)
+            # While failures are unconfirmed, check again soon so a real outage is
+            # reported within ~30 s and a one-off blip clears itself.
+            pending = self.health.failures > 0 and self.health.reachable is not False
+            await asyncio.sleep(
+                min(self.interval, RETRY_INTERVAL_SECONDS) if pending else self.interval
+            )
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="mrk-host-agent-probe")

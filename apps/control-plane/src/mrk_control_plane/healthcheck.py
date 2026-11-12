@@ -7,6 +7,8 @@ import time
 import urllib.error
 import urllib.request
 
+READY_TIMEOUT_SECONDS = 7
+
 
 def probe_host() -> str:
     """Pick a Host header that TrustedHostMiddleware accepts.
@@ -35,7 +37,9 @@ def _check_once(port: int) -> bool:
     )
     try:
         # The URL is fixed to loopback and the only variable is a range-checked integer port.
-        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
+        # Readiness may take up to ~6 s (three 1 s component probes + a 3 s database
+        # check); stay just under the image's HEALTHCHECK --timeout=8s.
+        with urllib.request.urlopen(request, timeout=READY_TIMEOUT_SECONDS) as response:  # noqa: S310
             body = json.load(response)
             return response.status == 200 and body.get("status") == "ready"
     except (OSError, ValueError, urllib.error.URLError):

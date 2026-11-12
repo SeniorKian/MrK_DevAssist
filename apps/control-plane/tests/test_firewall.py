@@ -424,3 +424,25 @@ def test_helper_force_dry_run_never_installs_rules(tmp_path: Path) -> None:
         assert result["mode"] == "enforce" and result["effective_mode"] == "dry_run"
         assert runner.table is None
         assert "198.51.100.1" in result["ruleset"]  # still reported for review
+
+
+def test_helper_info_caches_host_facts_but_keeps_the_table_live(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = {"listening": 0}
+    real = netinfo.listening_ports
+
+    def counted(proc_net):
+        calls["listening"] += 1
+        return real(proc_net)
+
+    monkeypatch.setattr(netinfo, "listening_ports", counted)
+    runner = FakeRunner()
+    with TestClient(helper_app(tmp_path, runner)) as client:
+        first = signed(client, "GET", "/v1/info").json()
+        listings = len(runner.calls)
+        for _ in range(3):
+            assert signed(client, "GET", "/v1/info").json()["listening"] == first["listening"]
+        # /proc/net is parsed once per 30 s at most (0.25 CPU), not on every probe.
+        assert calls["listening"] == 1
+        assert len(runner.calls) > listings  # the nft table status is still read live

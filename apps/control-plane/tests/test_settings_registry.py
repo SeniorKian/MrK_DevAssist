@@ -35,6 +35,7 @@ IGNORED_ENV_NAMES = frozenset(
         "MRK_E2E_KEEP_WORKDIR", "MRK_DBADMIN_DOCKER_TESTS", "MRK_INITIAL_ADMIN",  # test tools
         "MRK_ADMIN_ORIGIN", "MRK_NPM_ORIGIN", "MRK_PYPI_ORIGIN",  # load-test targets
         "MRK_S3_",  # documentation prefix ("MRK_S3_* variables")
+        "MRK_VERSION",  # a Dokploy project variable the admin may define, not read by the panel
     }
 )
 SCANNED = ("apps/control-plane/src", "deploy", "scripts")

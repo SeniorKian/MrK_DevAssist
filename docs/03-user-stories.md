@@ -1482,7 +1482,7 @@ docs/41. ACL ترتیبی با `!` و «اولین تطابق برنده»؛ `0.
 - موتور Go در `apps/dns-engine` (کتابخانه پروتکل `miekg/dns`؛ منطق سرور، cache، سیاست، لاگ و API کد خود DevAssist) با باینری‌های
   `mrk-dns` (`serve|health|version`) و `mrk-dnsbench`، داخل همان ایمیج؛ ایمیج جدا ندارد.
 - container جدای `mrk-dns` از همان ایمیج (Compose profile `dns`، `network_mode: host` تا IP واقعی کلاینت و سرعت UDP بماند)،
-  سقف `MRK_DNS_CPUS`=2، `MRK_DNS_MEMORY`=512m، `MRK_DNS_PIDS`=256، `GOMEMLIMIT` خودکار، `read_only`، `no-new-privileges`،
+  سقف `MRK_DNS_CPUS`=1.0، `MRK_DNS_MEMORY`=512m، `MRK_DNS_PIDS`=256، `GOMEMLIMIT` خودکار، `read_only`، `no-new-privileges`،
   `cap_drop: ALL`، healthcheck و `restart: unless-stopped`. DNS به پنل وابسته نیست.
 - **مدل مجوز پورت 53:** چون با `no-new-privileges` file capability نادیده گرفته می‌شود، سرویس با `user: "0:10001"` و فقط
   `NET_BIND_SERVICE, SETUID, SETGID` شروع می‌شود و موتور پیش از هر کاری روی همه threadها به `MRK_DNS_RUN_AS` (پیش‌فرض

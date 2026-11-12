@@ -9,8 +9,9 @@ or error code reaches Simple mode.
 Facts are gathered once per 15 s for everybody (one source at a time may fail or
 time out without failing the response), then filtered per person by
 permission. Module state is read through each module's own service object or
-its tables; nothing here makes outbound calls of its own except the local
-registry health checks the system status page already makes.
+its tables; nothing here makes outbound calls of its own except the shared
+component health checks the system status page makes (``components.py``) and a
+background reachability check of an S3 engine in its own container.
 """
 
 from __future__ import annotations
@@ -28,8 +29,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from ..auth import Principal
-from ..components import check_http_component, fetch_json_component
-from ..database import database_health
+from ..components import Reachability, component_health, fetch_json_component, held_back
 from ..models import (
     AuditEvent,
     MetricMinute,
@@ -48,7 +48,12 @@ from ..module_context import ModuleContext
 LOGGER = logging.getLogger(__name__)
 
 CACHE_SECONDS = 15.0
-SOURCE_TIMEOUT_SECONDS = 3.0
+# Component probes run in parallel with a 3 s timeout each (components.py).
+SOURCE_TIMEOUT_SECONDS = 5.0
+# Hysteresis: a component / the S3 engine must fail this many collections in a row.
+COMPONENT_FAILURES_NEEDED = 2
+S3_FAILURES_NEEDED = 2
+S3_PROBE_EVERY_SECONDS = 30.0
 DEFAULT_DISK_THRESHOLD = 85.0
 DISK_CRITICAL_PERCENT = 95.0
 FIREWALL_DRY_RUN_DAYS = 7
@@ -58,6 +63,7 @@ PREFS_KEY = "home.prefs.{user_id}"
 
 # Rule id -> (who may see it, default action). The id doubles as title_key.
 ATTENTION_RULES: dict[str, dict[str, Any]] = {
+    # The route depends on the component (see COMPONENT_ROUTES).
     "component_unavailable": {"any_of": ["system:read"],
                               "action": {"kind": "navigate", "route": "#/packages/sources"}},
     "disk_almost_full": {"any_of": ["system:read", "metrics:read"],
@@ -82,6 +88,15 @@ ATTENTION_RULES: dict[str, dict[str, Any]] = {
                               "action": {"kind": "navigate", "route": "#/security/vuln"}},
     "firewall_dry_run": {"any_of": ["firewall:read"],
                          "action": {"kind": "navigate", "route": "#/security/firewall"}},
+    # The panel says enforce but the helper runs with MRK_FIREWALL_FORCE_DRY_RUN=true.
+    "firewall_forced_dry_run": {"any_of": ["firewall:read"],
+                                "action": {"kind": "navigate", "route": "#/security/firewall"}},
+    # The paired helper failed several checks in a row (hysteresis in the module).
+    "firewall_unreachable": {"any_of": ["firewall:read"],
+                             "action": {"kind": "navigate", "route": "#/security/firewall"}},
+    # docs/44: the S3 engine in its own container does not answer (2 checks in a row).
+    "s3_unreachable": {"any_of": ["s3:admin", "services:read"],
+                       "action": {"kind": "navigate", "route": "#/services"}},
     "no_notification_channel": {"any_of": ["notification:write"],
                                 "action": {"kind": "create",
                                            "route": "#/alerts/channels?new=1"}},
@@ -114,6 +129,15 @@ ATTENTION_RULES: dict[str, dict[str, Any]] = {
                               "action": {"kind": "navigate", "route": "#/dns/names"}},
     "dns_signing_problem": {"any_of": ["dns:read"],
                             "action": {"kind": "navigate", "route": "#/dns/names"}},
+}
+# Where "component unavailable" sends you: a registry in its own container is
+# managed from My services; the database is a Dokploy-managed Postgres the panel
+# cannot restart, so About explains its state.
+COMPONENT_ROUTES = {
+    "npm_registry": "#/packages/sources",
+    "pypi_registry": "#/packages/sources",
+    "pypi_upstream_router": "#/packages/sources",
+    "database": "#/about",
 }
 CERTIFICATE_WARNING_DAYS = 14
 CERTIFICATE_ERROR_DAYS = 3
@@ -180,11 +204,20 @@ def evaluate(facts: dict[str, Any], now: float) -> list[dict[str, Any]]:
 
     core = facts.get("core")
     if core:
-        # 1. a component unavailable
+        # 1. a component unavailable (stopped on purpose / recovering never counts)
+        details = core.get("details") or {}
         for component, state in sorted((core.get("components") or {}).items()):
-            if state == "unavailable":
-                items.append(_item("component_unavailable", "critical",
-                                   {"component": component}, component))
+            if state != "unavailable":
+                continue
+            detail = details.get(component)
+            detail = detail if isinstance(detail, dict) else {}
+            remote = bool(detail.get("remote"))
+            item = _item("component_unavailable", "critical",
+                         {"component": component, "remote": remote,
+                          "code": detail.get("code")}, component)
+            item["action"]["route"] = "#/services" if remote else COMPONENT_ROUTES.get(
+                component, "#/about")
+            items.append(item)
 
     # 2. disk at or above the alert threshold (data volume or host)
     monitoring = facts.get("monitoring") or {}
@@ -227,8 +260,10 @@ def evaluate(facts: dict[str, Any], now: float) -> list[dict[str, Any]]:
         if not agent.get("configured"):
             items.append(_item("agent_not_paired", "info", {}))
         elif agent.get("reachable") is False:
+            # "since" = the last good answer (the panel says "it last answered ...").
             items.append(_item("agent_unreachable", "error",
-                               {"since": agent.get("last_checked_at")}))
+                               {"since": agent.get("last_ok_at"),
+                                "error_code": agent.get("error_code")}))
 
     backups = facts.get("backups")
     if backups is not None:
@@ -269,13 +304,25 @@ def evaluate(facts: dict[str, Any], now: float) -> list[dict[str, Any]]:
                                {"count": critical + high, "critical": critical,
                                 "high": high}))
 
-    # 10. firewall in dry-run for more than 7 days
+    # 10. firewall: helper unreachable, forced dry-run, or practice mode for > 7 days.
+    # The helper's own effective mode wins over the panel setting when it is known.
     firewall = facts.get("firewall")
-    if firewall and firewall.get("configured") and firewall.get("mode") == "dry_run":
-        since = firewall.get("since")
-        if isinstance(since, int | float) and now - since > FIREWALL_DRY_RUN_DAYS * 86400:
-            items.append(_item("firewall_dry_run", "warning",
-                               {"days": int((now - since) // 86400), "since": int(since)}))
+    if firewall and firewall.get("configured"):
+        effective = firewall.get("effective_mode") or firewall.get("mode")
+        if firewall.get("reachable") is False:
+            items.append(_item("firewall_unreachable", "error",
+                               {"error_code": firewall.get("error_code"),
+                                "since": firewall.get("last_ok_at")}))
+        elif firewall.get("mode") == "enforce" and (
+            firewall.get("force_dry_run") or firewall.get("effective_mode") == "dry_run"
+        ):
+            items.append(_item("firewall_forced_dry_run", "warning",
+                               {"forced": bool(firewall.get("force_dry_run"))}))
+        elif effective == "dry_run":
+            since = firewall.get("since")
+            if isinstance(since, int | float) and now - since > FIREWALL_DRY_RUN_DAYS * 86400:
+                items.append(_item("firewall_dry_run", "warning",
+                                   {"days": int((now - since) // 86400), "since": int(since)}))
 
     # 11. no notification channel
     notifications = facts.get("notifications")
@@ -294,6 +341,10 @@ def evaluate(facts: dict[str, Any], now: float) -> list[dict[str, Any]]:
     ):
         items.append(_item("s3_public_endpoint_missing", "info",
                            {"buckets": int(s3["buckets"])}))
+    engine = (s3 or {}).get("engine")
+    if isinstance(engine, dict) and engine.get("expected") and engine.get("reachable") is False:
+        items.append(_item("s3_unreachable", "error",
+                           {"code": engine.get("code"), "since": engine.get("last_ok_at")}))
 
     # 14. service domains with a problem (docs/35 §5)
     for domain in (facts.get("domains") or {}).get("problems") or []:
@@ -491,6 +542,11 @@ class HomeService:
         self.clock = clock
         self._cache: tuple[float, dict[str, Any]] | None = None
         self._lock = asyncio.Lock()
+        self._component_strikes: dict[str, int] = {}
+        self._s3_engine = Reachability(S3_FAILURES_NEEDED, clock=clock)
+        self._s3_engine_code: str | None = None
+        self._s3_probe: asyncio.Task[None] | None = None
+        self._s3_probed_at = 0.0
         self.collectors: dict[str, Callable[[], Awaitable[dict[str, Any] | None]]] = {
             "core": self._core,
             "upstreams": self._upstreams,
@@ -543,37 +599,28 @@ class HomeService:
 
     # -- core ------------------------------------------------------------------------
     async def _core(self) -> dict[str, Any]:
-        settings = self.ctx.settings
+        # The same states /system/status and /metrics report (one shared probe).
+        health, _router = await component_health(self.ctx.settings, self.ctx.database.engine)
         components: dict[str, str] = {}
-
-        async def http_ok(host: str, port: int, path: str) -> bool:
-            return await asyncio.to_thread(check_http_component, host, port, path)
-
-        if getattr(settings, "npm_enabled", False):
-            ready = await http_ok(settings.npm_health_host, settings.npm_health_port, "/-/ping")
-            components["npm_registry"] = "ready" if ready else "unavailable"
-        if getattr(settings, "pypi_enabled", False):
-            state_file = getattr(settings, "pypi_bootstrap_state_file", None)
-            ready = (state_file is None or state_file.is_file()) and await http_ok(
-                settings.pypi_health_host, settings.pypi_health_port, "/+status"
-            )
-            components["pypi_registry"] = "ready" if ready else "unavailable"
-            router = await asyncio.to_thread(
-                fetch_json_component, settings.pypi_router_health_host,
-                settings.pypi_router_health_port, "/status",
-            )
-            components["pypi_upstream_router"] = "ready" if router is not None \
-                else "unavailable"
-        try:
-            database_ready = await asyncio.wait_for(
-                asyncio.to_thread(database_health, self.ctx.database.engine), timeout=2
-            )
-        except TimeoutError:
-            database_ready = True  # busy, not down (same rule as /system/status)
-        components["database"] = "ready" if database_ready else "unavailable"
+        details: dict[str, dict[str, Any]] = {}
+        for name, item in health.items():
+            if item.state == "not_configured":
+                self._component_strikes.pop(name, None)
+                continue
+            state = item.state
+            if state == "unavailable":
+                strikes = self._component_strikes.get(name, 0) + 1
+                self._component_strikes[name] = strikes
+                if strikes < COMPONENT_FAILURES_NEEDED:
+                    state = "checking"  # one failed probe is not an outage yet
+            else:
+                self._component_strikes.pop(name, None)
+            components[name] = state
+            details[name] = item.as_dict()
         total, used, _free = await asyncio.to_thread(shutil.disk_usage, self.ctx.data_dir)
         return {
             "components": components,
+            "details": details,
             "storage_used_percent": round(used / total * 100, 1) if total else None,
         }
 
@@ -677,6 +724,8 @@ class HomeService:
             "configured": bool(status.get("configured")),
             "reachable": status.get("reachable"),
             "last_checked_at": status.get("last_checked_at"),
+            "last_ok_at": status.get("last_ok_at"),
+            "error_code": status.get("error_code"),
         }
 
     async def _backups(self) -> dict[str, Any] | None:
@@ -752,20 +801,35 @@ class HomeService:
             return None
         configured = await asyncio.to_thread(service.configured)
         settings = await asyncio.to_thread(service.settings)
+        # Cached by the module (never a helper call from here).
+        info = service.info if isinstance(service.info, dict) and service.reachable else None
 
-        def since() -> int | None:
-            # The mode has been what it is since the last mode change or pairing.
+        def since() -> float | None:
+            # The mode has been what it is since the last mode change or pairing. The
+            # add-service wizard pairs without a firewall.* audit row, so the pairing
+            # time itself counts too.
             with self.ctx.database.session() as db:
-                return db.scalar(
+                changed = db.scalar(
                     select(func.max(AuditEvent.occurred_at)).where(
                         AuditEvent.action.in_(("firewall.mode.change",
                                                "firewall.config.update")),
                         AuditEvent.result == "success",
                     )
                 )
+            paired = service.client.paired_at()
+            known = [value for value in (changed, paired) if isinstance(value, int | float)]
+            return max(known) if known else None
 
-        return {"configured": bool(configured), "mode": settings.get("mode"),
-                "since": await asyncio.to_thread(since)}
+        return {
+            "configured": bool(configured),
+            "mode": settings.get("mode"),
+            "effective_mode": info.get("effective_mode") if info else None,
+            "force_dry_run": bool(info.get("force_dry_run")) if info else False,
+            "reachable": service.reachable if configured else None,
+            "error_code": getattr(service, "last_error_code", None),
+            "last_ok_at": getattr(service, "last_ok_at", None),
+            "since": await asyncio.to_thread(since),
+        }
 
     async def _notifications(self) -> dict[str, Any]:
         def count() -> int:
@@ -790,9 +854,47 @@ class HomeService:
                     .where(ServiceDomain.service_id == "s3")
                 ) or 0)
             return {"buckets": buckets, "public_endpoint": bool(stored.get("public_endpoint")),
-                    "domains": s3_domains}
+                    "domains": s3_domains, "enabled": stored.get("enabled", True) is not False}
 
-        return await asyncio.to_thread(read)
+        facts = await asyncio.to_thread(read)
+        facts["engine"] = await self._s3_engine_state(bool(facts.pop("enabled")))
+        return facts
+
+    async def _s3_engine_state(self, enabled: bool) -> dict[str, Any] | None:
+        """Reachability of an S3 engine in its own container (docs/44).
+
+        Checked in the background at most every 30 s so Home never waits on it; the
+        flag turns False only after two failed checks in a row.
+        """
+        from . import s3 as s3_module
+        from .s3_client import EngineAdmin, is_remote
+
+        store = s3_module.ACTIVE_STORE
+        if store is None or not enabled or not await asyncio.to_thread(is_remote):
+            self._s3_engine.reset()
+            return {"expected": False, "reachable": None}
+        if await asyncio.to_thread(held_back, self.ctx.settings, "s3") is not None:
+            return {"expected": False, "reachable": None}
+        now = time.monotonic()
+        running = self._s3_probe is not None and not self._s3_probe.done()
+        if not running and now - self._s3_probed_at >= S3_PROBE_EVERY_SECONDS:
+            self._s3_probed_at = now
+            admin = EngineAdmin(store.admin_token_path)
+
+            async def check() -> None:
+                try:
+                    ok, code = await admin.probe()
+                except Exception:  # noqa: BLE001 - a broken probe is a failed check
+                    LOGGER.exception("S3 engine probe failed")
+                    ok, code = False, "engine_unreachable"
+                self._s3_engine_code = None if ok else code
+                self._s3_engine.record(ok)
+
+            self._s3_probe = asyncio.create_task(check(), name="mrk-home-s3-probe")
+            # Answer from the fresh probe when it is quick; otherwise from the last one.
+            await asyncio.wait({self._s3_probe}, timeout=1.0)
+        return {"expected": True, "reachable": self._s3_engine.reachable,
+                "code": self._s3_engine_code, "last_ok_at": self._s3_engine.last_ok_at}
 
     async def _domains(self) -> dict[str, Any]:
         def read() -> dict[str, Any]:

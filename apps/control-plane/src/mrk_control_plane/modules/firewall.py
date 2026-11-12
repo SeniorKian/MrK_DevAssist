@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ..components import Reachability
 from ..firewall.addresses import AddressError, parse_network
 from ..firewall.nft import Block, DesiredState, render_ruleset
 from ..module_context import Event, ModuleContext
@@ -47,6 +48,13 @@ LOGGER = logging.getLogger(__name__)
 MODULE_NAME = "firewall"
 SETTINGS_FILE = "firewall.json"
 RESYNC_SECONDS = 600
+# Hysteresis: the helper counts as unreachable (and firewall.helper_offline is
+# published) only after this many failed calls in a row spanning this long. The
+# 15 s signals poll, the reconcile and status probes all feed it.
+OFFLINE_AFTER_FAILURES = 3
+OFFLINE_AFTER_SECONDS = 25.0
+# A rejected key will not fix itself on a retry.
+DEFINITE_ERRORS = frozenset({"firewall_auth_failed"})
 PRUNE_EVERY_SECONDS = 3600
 ACTIVE_SERVICE: FirewallService | None = None
 _SENT: Any = object()  # desired(): use the applied port policy snapshot
@@ -75,9 +83,10 @@ class FirewallService:
         self.lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self.last_audit_id: int | None = None
-        self.reachable: bool | None = None
+        self.health = Reachability(OFFLINE_AFTER_FAILURES, OFFLINE_AFTER_SECONDS)
         self.last_checked_at: float | None = None
         self.last_error: str | None = None
+        self.last_error_code: str | None = None
         self.info: dict[str, Any] | None = None
         self.helper_hash: str | None = None
         self.applied_hash: str | None = None
@@ -87,6 +96,14 @@ class FirewallService:
         self.sources: dict[str, Any] = {}
         self._last_prune = 0.0
         self.ports = PortPolicyState(self)
+
+    @property
+    def reachable(self) -> bool | None:
+        return self.health.reachable
+
+    @property
+    def last_ok_at(self) -> float | None:
+        return self.health.last_ok_at
 
     # ----- settings --------------------------------------------------------
     def settings(self) -> dict[str, Any]:
@@ -154,7 +171,7 @@ class FirewallService:
         except HelperError as exc:
             self.last_apply_error = exc.code
             if exc.status_code != 409:
-                self._mark(False, exc.message)
+                self._mark(False, exc.message, exc.code)
             return {"applied": False, "error": exc.code, "message": exc.message}
         self._mark(True, None)
         self.applied_hash = self.helper_hash = str(result.get("state_hash") or digest)
@@ -167,21 +184,23 @@ class FirewallService:
                 "effective_mode": result.get("effective_mode"), "action": result.get("action")}
 
     # ----- helper reachability --------------------------------------------
-    def _mark(self, ok: bool, error: str | None) -> None:
-        previous = self.reachable
-        self.reachable = ok
+    def _mark(self, ok: bool, error: str | None, code: str | None = None) -> None:
         self.last_checked_at = time.time()
         self.last_error = error
-        if ok and previous is False:
+        self.last_error_code = None if ok else code
+        transition = self.health.record(ok, immediate=code in DEFINITE_ERRORS)
+        if transition == "online":
             self.ctx.events.publish(Event(
                 type="firewall.helper_online", severity="info",
                 title="Firewall helper is reachable again", module=MODULE_NAME,
                 dedupe_key="firewall.helper"))
-        elif not ok and previous is not False:
+        elif transition == "offline":
             self.ctx.events.publish(Event(
                 type="firewall.helper_offline", severity="error",
                 title="Firewall helper is unreachable", message=error or "",
-                module=MODULE_NAME, dedupe_key="firewall.helper"))
+                module=MODULE_NAME, dedupe_key="firewall.helper",
+                details={"error_code": code,
+                         "consecutive_failures": self.health.failures}))
 
     async def probe(self) -> tuple[bool, float, str | None]:
         started = time.perf_counter()
@@ -191,9 +210,9 @@ class FirewallService:
                 raise HelperError("firewall_unreachable", 502, "unexpected helper payload")
         except HelperError as exc:
             if exc.code == "firewall_not_configured":
-                self.reachable = None
+                self.health.reset()
                 return False, 0.0, exc.code
-            self._mark(False, exc.message)
+            self._mark(False, exc.message, exc.code)
             return False, round((time.perf_counter() - started) * 1000, 1), exc.code
         self.info = info
         self.helper_hash = info.get("state_hash") if isinstance(info.get("state_hash"), str) \
@@ -226,7 +245,7 @@ class FirewallService:
                     signals.extend(item for item in items if isinstance(item, dict))
         except HelperError as exc:
             if exc.code != "firewall_not_configured":
-                self._mark(False, exc.message)
+                self._mark(False, exc.message, exc.code)
         if sources.get("mrk", {}).get("enabled"):
             start = self.last_audit_id or 0
             last, login = await asyncio.to_thread(self.store.login_failures_after, start)
@@ -327,6 +346,9 @@ class FirewallService:
             "reachable": self.reachable if configured else None,
             "last_checked_at": self.last_checked_at,
             "last_error": (self.last_error or env_error) if configured else None,
+            "error_code": self.last_error_code if configured else None,
+            "consecutive_failures": self.health.failures if configured else 0,
+            "last_ok_at": self.health.last_ok_at if configured else None,
             "mode": settings["mode"],
             "helper": None if info is None else {
                 "version": info.get("version"),
@@ -449,7 +471,7 @@ def register(ctx: ModuleContext) -> None:
             return ctx.error_payload(code, message, 422)
         service.info = None
         service.applied_hash = service.helper_hash = None
-        service.reachable = None
+        service.health.reset()
         await audit(principal.user_id, "firewall.config.update", "mrk-firewall")
         await service.probe()
         async with service.lock:
@@ -467,7 +489,7 @@ def register(ctx: ModuleContext) -> None:
                                      409)
         await asyncio.to_thread(service.client.unpair)
         service.info = None
-        service.reachable = None
+        service.health.reset()
         service.applied_hash = service.helper_hash = None
         await audit(principal.user_id, "firewall.unpair", "mrk-firewall")
         return await service.status()

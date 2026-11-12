@@ -27,7 +27,7 @@ def main() -> int:
         database.initialize()
         suffix = secrets.token_hex(4)
         username = f"smoke-{suffix}"
-        password = f"smoke-test-password-{secrets.token_urlsafe(18)}"
+        password = f"smoke-test-password-7{secrets.token_urlsafe(18)}"
         auth = AuthStore(data_dir, database=database)
         user_id = auth.create_user(username, password, "owner", None)
         authenticated = auth.authenticate(username, password, "127.0.0.1", "smoke")
@@ -50,7 +50,7 @@ def main() -> int:
         artifact.write_bytes(b"db-restore-mutated")
         auth.create_user(
             f"extra-{suffix}",
-            f"extra-test-password-{secrets.token_urlsafe(18)}",
+            f"extra-test-password-7{secrets.token_urlsafe(18)}",
             "viewer",
             user_id,
         )

@@ -18,7 +18,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import math
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -28,6 +30,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..logging_config import redact_text
+
+LOGGER = logging.getLogger(__name__)
 
 # Tests replace this with a factory returning e.g. httpx.MockTransport(handler).
 TRANSPORT_FACTORY: Callable[[], httpx.AsyncBaseTransport] | None = None
@@ -40,6 +44,11 @@ API_KEY_MAX = 512
 # Dokploy release) or the HTTP method is wrong. Service-level NOT_FOUND errors
 # carry their own message ("Application not found", ...).
 PROCEDURE_NOT_FOUND_MESSAGE = "Not found"
+# Messages Dokploy (better-auth / tRPC) gives a key it does not know at all, as opposed
+# to a known key refused one resource ("You are not authorized to access this project").
+GENERIC_UNAUTHORIZED = frozenset({"", "unauthorized", "not authorized", "unauthenticated"})
+NOT_FOUND_RE = re.compile(r"not found", re.IGNORECASE)
+MAX_MESSAGE = 300
 
 
 class DokployError(Exception):
@@ -53,6 +62,8 @@ class DokployError(Exception):
         *,
         upstream_status: int | None = None,
         procedure_missing: bool = False,
+        connection_failure: bool = False,
+        upstream_message: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -60,6 +71,11 @@ class DokployError(Exception):
         self.message = message
         self.upstream_status = upstream_status
         self.procedure_missing = procedure_missing
+        # True when Dokploy itself could not be talked to (network, timeout, redirect,
+        # unreadable reply): the only failures that say something about the connection.
+        self.connection_failure = connection_failure
+        # Dokploy's own words (already redacted), "" when it gave none.
+        self.upstream_message = upstream_message or ""
 
 
 def _is_forbidden_literal(host: str, allow_loopback: bool) -> bool:
@@ -167,6 +183,29 @@ class TokenBucket:
         await self._sleep(wait)
         return wait
 
+    async def acquire_background(self, max_wait: float, reserve: float = 1.0) -> float:
+        """Take a token only while ``reserve`` more stay free for interactive callers.
+
+        Background work (the poller) never queues ahead of a page load: it waits, without
+        holding a reservation, until the bucket has spare capacity.
+        """
+        waited = 0.0
+        need = 1.0 + min(max(reserve, 0.0), max(self.burst - 1.0, 0.0))
+        while True:
+            self._refill()
+            if self._tokens >= need:
+                self._tokens -= 1.0
+                return waited
+            step = max((need - self._tokens) / self.rate, 0.05)
+            if waited + step > max_wait:
+                raise DokployError(
+                    "dokploy_rate_limited",
+                    429,
+                    "Background Dokploy work is waiting for spare request capacity",
+                )
+            await self._sleep(step)
+            waited += step
+
 
 class TTLCache:
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
@@ -192,6 +231,9 @@ class TTLCache:
                 self._items.clear()
         self._items[key] = (self._clock() + ttl, value)
 
+    def pop(self, key: str) -> None:
+        self._items.pop(key, None)
+
     def clear(self) -> None:
         self._items.clear()
 
@@ -202,14 +244,57 @@ class Connection:
     api_key: str
 
 
-def _upstream_message(body: bytes) -> str:
+def _clip(value: str) -> str:
+    return redact_text(" ".join(value.split())[:MAX_MESSAGE])
+
+
+def _issues_text(issues: Any) -> str:
+    parts: list[str] = []
+    for issue in issues if isinstance(issues, list) else []:
+        if not isinstance(issue, dict) or not isinstance(issue.get("message"), str):
+            continue
+        path = issue.get("path")
+        where = ".".join(str(item) for item in path) if isinstance(path, list) and path else ""
+        parts.append(f"{where}: {issue['message']}" if where else issue["message"])
+        if len(parts) >= 5:
+            break
+    return "; ".join(parts)
+
+
+def parse_upstream_error(body: bytes) -> tuple[str, str | None]:
+    """(message, tRPC code) from any error body Dokploy produces.
+
+    Shapes: ``{"message"}`` (trpc-openapi), zod ``{"message": "Input validation failed",
+    "issues": [...]}``, and tRPC envelopes ``{"error": {"message"}}`` /
+    ``{"error": {"json": {"message", "data": {"code"}}}}``. The message is redacted.
+    """
     try:
         payload = json.loads(body)
     except ValueError:
-        return ""
-    if isinstance(payload, dict) and isinstance(payload.get("message"), str):
-        return redact_text(payload["message"][:300])
-    return ""
+        return "", None
+    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        payload = payload[0]  # batched tRPC reply
+    if not isinstance(payload, dict):
+        return "", None
+    code = payload.get("code") if isinstance(payload.get("code"), str) else None
+    node: dict[str, Any] = payload
+    error = payload.get("error")
+    if isinstance(error, dict):
+        node = error.get("json") if isinstance(error.get("json"), dict) else error
+    message = node.get("message") if isinstance(node.get("message"), str) else ""
+    data = node.get("data")
+    if isinstance(data, dict) and isinstance(data.get("code"), str):
+        code = data["code"]
+    elif isinstance(node.get("code"), str):
+        code = node["code"]
+    issues = _issues_text(node.get("issues") or payload.get("issues"))
+    if issues:
+        message = f"{message}: {issues}" if message else issues
+    return (_clip(message) if message else ""), (code[:64] if code else None)
+
+
+def _upstream_message(body: bytes) -> str:
+    return parse_upstream_error(body)[0]
 
 
 class DokployClient:
@@ -262,9 +347,19 @@ class DokployClient:
         body: dict[str, Any] | None = None,
         mutation: bool = False,
         parse: bool = True,
+        probe: bool = False,
+        background: bool = False,
     ) -> Any:
-        """Call one Dokploy procedure and return its JSON output (None for empty)."""
-        await self.bucket.acquire(self.max_wait_seconds)
+        """Call one Dokploy procedure and return its JSON output (None for empty).
+
+        ``probe`` marks the connection check (settings.getDokployVersion / project.all):
+        only there does any 401 certainly mean "this key is rejected". ``background``
+        calls yield the request budget to interactive ones.
+        """
+        if background:
+            await self.bucket.acquire_background(max(self.max_wait_seconds, 1.0) * 6)
+        else:
+            await self.bucket.acquire(self.max_wait_seconds)
         async with self._sem():
             self.request_count += 1
             path = f"/api/{procedure}"
@@ -289,10 +384,15 @@ class DokployClient:
                     finally:
                         await response.aclose()
                 except httpx.HTTPError as exc:
+                    LOGGER.info(
+                        "dokploy request failed",
+                        extra={"procedure": procedure, "error": type(exc).__name__},
+                    )
                     raise DokployError(
                         "dokploy_unreachable",
                         502,
                         f"Dokploy is unreachable ({type(exc).__name__})",
+                        connection_failure=True,
                     ) from None
         status = response.status_code
         if 200 <= status < 300:
@@ -300,7 +400,8 @@ class DokployClient:
                 return None
             if too_large:
                 raise DokployError(
-                    "dokploy_unreachable", 502, "The Dokploy response is too large"
+                    "dokploy_unreachable", 502, "The Dokploy response is too large",
+                    connection_failure=True,
                 )
             if not raw.strip():
                 return None
@@ -308,60 +409,79 @@ class DokployClient:
                 return json.loads(bytes(raw))
             except ValueError:
                 raise DokployError(
-                    "dokploy_unreachable", 502, "Dokploy returned invalid JSON"
+                    "dokploy_unreachable", 502, "Dokploy returned invalid JSON",
+                    connection_failure=True,
                 ) from None
-        raise self._map_status(status, bytes(raw[:4096]))
+        error = self._map_status(status, bytes(raw[:4096]), probe=probe)
+        if connection.api_key and connection.api_key in error.message:
+            error.message = error.message.replace(connection.api_key, "[REDACTED]")
+            error.upstream_message = error.upstream_message.replace(
+                connection.api_key, "[REDACTED]"
+            )
+            error.args = (error.message,)
+        LOGGER.info(
+            "dokploy answered with an error",
+            extra={
+                "procedure": procedure,
+                "upstream_status": status,
+                "error_code": error.code,
+                "upstream_message": error.upstream_message,
+            },
+        )
+        raise error
 
     @staticmethod
-    def _map_status(status: int, body: bytes) -> DokployError:
-        message = _upstream_message(body)
+    def _map_status(status: int, body: bytes, *, probe: bool = False) -> DokployError:
+        message, trpc_code = parse_upstream_error(body)
+
+        def said(prefix: str) -> str:
+            return f"{prefix}: {message}" if message else prefix
+
+        common: dict[str, Any] = {"upstream_status": status, "upstream_message": message}
         if 300 <= status < 400:
             return DokployError(
                 "dokploy_unreachable",
                 502,
                 f"Dokploy answered with a redirect (HTTP {status}); check the panel URL",
-                upstream_status=status,
+                connection_failure=True,
+                **common,
             )
-        if status == 401:
+        if status == 401 and (probe or message.strip().lower() in GENERIC_UNAUTHORIZED):
             return DokployError(
                 "dokploy_auth_failed",
                 502,
-                "Dokploy rejected the API key (invalid, expired or over its own rate limit)",
-                upstream_status=status,
+                said("Dokploy rejected the API key (invalid, expired or over its own limit)"),
+                **common,
             )
-        if status == 403:
+        if status in {401, 403}:
+            # The key is known, but its Dokploy user may not use this resource or action.
             return DokployError(
-                "dokploy_auth_failed",
+                "dokploy_forbidden",
                 502,
-                "The Dokploy API key lacks permission for this operation",
-                upstream_status=status,
+                said("Dokploy does not allow this API key to do this"),
+                **common,
             )
-        if status == 404:
-            missing = message == PROCEDURE_NOT_FOUND_MESSAGE
+        if status == 404 and message == PROCEDURE_NOT_FOUND_MESSAGE:
             return DokployError(
                 "dokploy_not_found",
                 404,
-                "Not supported by this Dokploy version" if missing else (message or "Not found"),
-                upstream_status=status,
-                procedure_missing=missing,
+                "Not supported by this Dokploy version",
+                procedure_missing=True,
+                **common,
             )
+        if status == 404 or (
+            status == 400 and (trpc_code == "NOT_FOUND" or NOT_FOUND_RE.search(message))
+        ):
+            # Dokploy v0.31 answers for a removed Compose/app with HTTP 400 "... not found".
+            return DokployError("dokploy_not_found", 404, message or "Not found", **common)
         if status == 429:
             return DokployError(
-                "dokploy_rate_limited", 429, "Dokploy is rate limiting requests",
-                upstream_status=status,
+                "dokploy_rate_limited", 429, said("Dokploy is rate limiting requests"), **common
             )
         if status in {400, 409, 412, 422}:
             return DokployError(
-                "dokploy_rejected",
-                409,
-                f"Dokploy rejected the request: {message}"
-                if message
-                else "Dokploy rejected the request",
-                upstream_status=status,
+                "dokploy_rejected", 409, said("Dokploy rejected the request"), **common
             )
         return DokployError(
-            "dokploy_unreachable",
-            502,
-            f"Dokploy returned HTTP {status}",
-            upstream_status=status,
+            "dokploy_failed", 502, said(f"Dokploy returned HTTP {status}"), **common
         )

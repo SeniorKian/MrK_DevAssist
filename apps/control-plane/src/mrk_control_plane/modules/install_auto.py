@@ -57,12 +57,24 @@ from .coolify_client import (
     validate_token,
 )
 from .dokploy_client import DokployError, TTLCache
+from .dokploy_locate import (
+    LocateError,
+    compose_detail,
+    deploy_mark,
+    env_value,
+    find_compose,
+    set_env_value,
+    wait_deployment,
+)
+from .dokploy_locate import sha256 as text_sha256
 from .install import STATE_FILE, WRITE_PERMISSION, InstallError, InstallService
 from .install_catalog import INSTALL_INDEX
 
 LOGGER = logging.getLogger(__name__)
 CONFIG_FILE = "coolify.json"
 PROJECT_NAME = "MrK DevAssist"
+# Existing Dokploy projects reused when no project is picked (never a second one).
+PROJECT_NAMES = ("MrK DevAssist", "DevAssist")
 DESCRIPTION = "Added by the MrK DevAssist panel"
 TARGETS = ("dokploy", "coolify")
 # Tunables (tests shorten them).
@@ -559,7 +571,7 @@ class AutoInstaller:
         except asyncio.CancelledError:
             job.set(status="failed", error_code="cancelled", message="The panel stopped")
             raise
-        except (DokployError, CoolifyError, AutoError, InstallError) as exc:
+        except (DokployError, CoolifyError, AutoError, InstallError, LocateError) as exc:
             await self._audit(job, f"install.auto.{job.phase}", "failure")
             job.set(status="failed", error_code=exc.code, message=redact_text(exc.message)[:300])
         except Exception as exc:  # never log the exception text: it could carry env values
@@ -569,6 +581,37 @@ class AutoInstaller:
                     message="The automatic install failed unexpectedly")
 
     # ----- Dokploy ---------------------------------------------------------
+    def _agent(self) -> Any | None:
+        from . import services as services_module
+
+        service = services_module.ACTIVE_SERVICE
+        if service is None or getattr(service, "ctx", None) is not self.ctx:
+            return None
+        try:
+            return service.routing.agent()
+        except Exception:  # noqa: BLE001 - the agent is optional
+            return None
+
+    @staticmethod
+    def _merge_env(current: str, wanted: str) -> str:
+        """The wizard's env on top of the one in Dokploy, keeping the admin's own lines.
+
+        Every wizard value is set (the pairing key must match the panel), except a line
+        whose current value points at a Dokploy variable such as ${{project.MRK_VERSION}}.
+        """
+        merged = current
+        for line in wanted.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            name, value = stripped.split("=", 1)
+            name = name.strip()
+            existing = env_value(merged, name)
+            if existing is not None and "${{" in existing:
+                continue
+            merged = set_env_value(merged, name, value)
+        return merged
+
     async def _run_dokploy(self, job: Job, body: AutoRequest, compose: str, env_text: str) -> None:
         service = self.dokploy()
         if service is None:
@@ -576,6 +619,29 @@ class AutoInstaller:
         name = f"mrk-{job.service_id}"
         project_id, environment_id = body.project_id, body.environment_id
         job.set(phase="creating")
+        # Already running somewhere in Dokploy (installed before, or pasted by hand)?
+        recorded = deployment_for(self.ctx.data_dir, job.service_id) or {}
+        found = await find_compose(service, name, known=(recorded.get("compose_id"),),
+                                   agent=self._agent())
+        if found is not None and found.get("project_id"):
+            same_place = (project_id in {None, found["project_id"]}
+                          and environment_id in {None, found.get("environment_id")})
+            if not same_place:
+                where = found.get("project_name") or found["project_id"]
+                raise AutoError(
+                    "already_installed", 409,
+                    f"{name} already runs in the Dokploy project {where}; "
+                    "pick that project or remove the other one first",
+                )
+            project_id = found["project_id"]
+            environment_id = found.get("environment_id")
+        if project_id is None:
+            tree = await service._projects_raw()  # noqa: SLF001 - cached loader
+            mine = next((item for wanted in PROJECT_NAMES for item in _list(tree)
+                         if str(item.get("name") or "").strip().lower() == wanted.lower()
+                         and isinstance(item.get("projectId"), str)), None)
+            if mine is not None:
+                project_id = mine["projectId"]
         if project_id is None:
             created = await service.call(
                 "project.create", body={"name": PROJECT_NAME, "description": DESCRIPTION},
@@ -610,13 +676,30 @@ class AutoInstaller:
             holder = match
         else:
             environment_id = None  # Dokploy before environments: services hang off the project
-        existing = next((item for item in _list(holder.get("compose"))
-                         if item.get("name") == name and isinstance(item.get("composeId"), str)),
-                        None)
+        existing_id = found["compose_id"] if found is not None else next(
+            (item["composeId"] for item in _list(holder.get("compose"))
+             if item.get("name") == name and isinstance(item.get("composeId"), str)), None)
         job.set(project_id=project_id)
-        if existing is not None:
-            compose_id = existing["composeId"]
+        update: dict[str, Any]
+        if existing_id is not None:
+            compose_id = str(existing_id)
             job.set(reused=True)
+            one = await compose_detail(service, compose_id)
+            if one is None:
+                raise AutoError("service_missing", 404, "The Dokploy service was not found")
+            current_env = one.get("env") if isinstance(one.get("env"), str) else ""
+            current_file = one.get("composeFile") if isinstance(one.get("composeFile"), str) \
+                else ""
+            del one
+            update = {"composeId": compose_id, "env": self._merge_env(current_env, env_text)}
+            del current_env
+            written = recorded.get("compose_sha256")
+            compose_hash = text_sha256(compose)
+            if not current_file.strip() or (written and written == text_sha256(current_file)):
+                update["composeFile"] = compose  # empty, or still the panel's own file
+            elif text_sha256(current_file) != compose_hash:
+                compose_hash = written or text_sha256(current_file)
+                job.warnings.append("compose_customized")
         else:
             payload: dict[str, Any] = {
                 "name": name, "description": DESCRIPTION, "composeType": "docker-compose",
@@ -630,9 +713,13 @@ class AutoInstaller:
             if not isinstance(compose_id, str):
                 raise AutoError("dokploy_rejected", 409, "Dokploy did not return the new service")
             await self._audit(job, "install.auto.create")
+            update = {"composeId": compose_id, "sourceType": "raw",
+                      "composeType": "docker-compose", "composeFile": compose, "env": env_text}
+            compose_hash = text_sha256(compose)
         await self.record(job.service_id, {
             "target": "dokploy", "compose_id": compose_id, "service_name": name,
             "project_id": project_id, "environment_id": environment_id,
+            "compose_sha256": compose_hash,
         })
         panel = service.panel_url()
         job.set(
@@ -642,13 +729,10 @@ class AutoInstaller:
                 "type": "compose", "id": compose_id,
             }) if panel else None,
         )
-        await service.call(
-            "compose.update",
-            body={"composeId": compose_id, "sourceType": "raw", "composeType": "docker-compose",
-                  "composeFile": compose, "env": env_text},
-            mutation=True, parse=False,
-        )
+        await service.call("compose.update", body=update, mutation=True, parse=False)
+        update.clear()
         job.set(phase="deploying")
+        mark = await deploy_mark(service, compose_id)
         await service.call(
             "compose.deploy",
             body={"composeId": compose_id, "title": "Install from MrK DevAssist"},
@@ -657,20 +741,8 @@ class AutoInstaller:
         service.cache.clear()
         await self._audit(job, "install.auto.deploy")
         job.set(phase="waiting")
-        deadline = time.monotonic() + DEPLOY_TIMEOUT_SECONDS
-        while True:
-            await asyncio.sleep(POLL_SECONDS)
-            one = await service.call("compose.one", params={"composeId": compose_id})
-            status = one.get("composeStatus") if isinstance(one, dict) else None
-            del one  # the detail carries the env; keep only the status
-            if status == "done":
-                break
-            if status == "error":
-                raise AutoError("deploy_failed", 502,
-                                "Dokploy could not deploy the service; see its deployment log")
-            if time.monotonic() > deadline:
-                raise AutoError("deploy_timeout", 504,
-                                "Dokploy did not finish the deployment in time")
+        await wait_deployment(service, compose_id, mark,
+                              timeout=DEPLOY_TIMEOUT_SECONDS, poll=POLL_SECONDS)
         job.set(deployed=True)
 
     # ----- Coolify ---------------------------------------------------------

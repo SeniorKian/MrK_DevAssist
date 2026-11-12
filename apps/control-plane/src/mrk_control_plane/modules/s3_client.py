@@ -7,6 +7,7 @@ module does not depend on the engine package being importable in the control pla
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import hmac
@@ -20,6 +21,8 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from ..components import NETWORK_FIX, is_name_resolution_error
+
 ALGORITHM = "AWS4-HMAC-SHA256"
 UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -28,6 +31,10 @@ DEFAULT_ADMIN_URL = "http://127.0.0.1:9001"
 ADMIN_TOKEN_HEADER = "X-MRK-Admin-Token"  # noqa: S105 - header name, not a secret
 _MAX_ERROR_BODY = 64 * 1024
 _MAX_XML_BODY = 16 * 1024 * 1024
+# Health: 5 s per attempt, one retry (a busy engine may miss one answer).
+HEALTH_TIMEOUT_SECONDS = 5.0
+HEALTH_ATTEMPTS = 2
+HEALTH_RETRY_DELAY_SECONDS = 0.5
 
 # Tests replace this with a factory returning e.g. httpx.MockTransport(fake_engine).
 TRANSPORT_FACTORY: Callable[[], httpx.AsyncBaseTransport] | None = None
@@ -118,6 +125,10 @@ class EngineError(Exception):
 
 
 def unreachable(exc: Exception | None = None) -> EngineError:
+    if exc is not None and is_name_resolution_error(exc):
+        # Split install (docs/44): the panel cannot even resolve the engine's name.
+        return EngineError("s3_name_unresolved", 503,
+                           f"the S3 engine's host name does not resolve; {NETWORK_FIX}")
     detail = f" ({type(exc).__name__})" if exc is not None else ""
     return EngineError("engine_unreachable", 503, f"the S3 engine is not reachable{detail}")
 
@@ -626,12 +637,29 @@ class EngineAdmin:
                 "engine_error", 502, "S3 engine admin API returned invalid JSON"
             ) from None
 
+    async def probe(self) -> tuple[bool, str | None]:
+        """``(ok, error_code)``. A failed attempt is retried once: a single slow answer
+        from a busy engine must not flip the engine to "degraded"."""
+        code: str | None = None
+        for attempt in range(HEALTH_ATTEMPTS):
+            try:
+                response = await self.request("GET", "/admin/health",
+                                              timeout=HEALTH_TIMEOUT_SECONDS)
+            except EngineError as exc:
+                code = exc.code
+                if code == "s3_name_unresolved" or attempt + 1 >= HEALTH_ATTEMPTS:
+                    break  # an unknown name will not resolve on a retry either
+                await asyncio.sleep(HEALTH_RETRY_DELAY_SECONDS)
+                continue
+            if response.status_code == 200:
+                return True, None
+            code = "engine_error"
+            break
+        return False, code
+
     async def health(self) -> bool:
-        try:
-            response = await self.request("GET", "/admin/health", timeout=2.0)
-        except EngineError:
-            return False
-        return response.status_code == 200
+        ok, _code = await self.probe()
+        return ok
 
     async def bucket_stats(self, bucket: str) -> dict[str, int] | None:
         try:

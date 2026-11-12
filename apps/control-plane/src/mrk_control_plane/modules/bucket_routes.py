@@ -12,7 +12,9 @@ routes in line with the verified bucket domains; it runs after ownership changes
 and on the domain-verification tick.
 
 States: ``ok`` (routed), ``pending`` (Dokploy has the domain; a Compose redeploy by
-the server admin is still needed), ``manual`` (the server admin follows steps),
+the server admin is still needed; it turns ``ok`` once Dokploy reports a deployment of
+that Compose finished after the domain was added), ``manual`` (the server admin
+follows steps),
 ``failed`` (the change was rolled back; ``error_code`` says why), ``conflict`` (the
 host is used elsewhere; nothing was changed), ``stale`` (removal still to finish),
 ``off`` (``route_bucket_domains`` is turned off).
@@ -29,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 
 from ..models import ResourceOwner, ServiceDomain, SystemSetting, Workspace
+from .domains_routing import RoutingError
 
 if TYPE_CHECKING:
     from .services import ServicesService
@@ -39,6 +42,11 @@ ADMIN_DOMAINS_KEY = "s3.admin_bucket_domains"
 S3_SERVICE = "s3"
 # States that keep a route in place (the host is served or being served).
 LIVE_STATES = frozenset({"ok", "pending", "manual"})
+# Failures worth trying again on the next tick without anyone pressing retry.
+RETRY_CODES = frozenset({"routing_detection_failed"})
+# Routing errors that say more than "Dokploy failed" (shown as they are).
+SPECIFIC_CODES = frozenset({"dokploy_target_missing", "service_in_own_stack",
+                            "routing_unavailable"})
 # Serialises the read-modify-write of the admin host map inside this process.
 _ADMIN_DOMAINS_LOCK = threading.Lock()
 
@@ -180,11 +188,11 @@ class BucketRoutes:
                     "redeploy_required": False, "suggested_action": None, "instructions": None,
                     "updated_at": None}
         view = {key: record.get(key) for key in (
-            "state", "mode", "error_code", "upstream_code", "redeploy_required", "updated_at",
-            "conflict")}
+            "state", "mode", "error_code", "upstream_code", "upstream_message",
+            "redeploy_required", "updated_at", "conflict")}
         view["https"] = bool(record.get("https", True))
         view["suggested_action"] = (
-            self.service.routing.redeploy_hint(detected)
+            self.service.routing.redeploy_hint(detected, record.get("dokploy_compose_id"))
             if record.get("redeploy_required") and detected else None)
         view["instructions"] = (
             self.service.routing.instructions(S3_SERVICE, host, view["https"], detected)
@@ -257,14 +265,42 @@ class BucketRoutes:
                     record.update(want)
                     await asyncio.to_thread(self._put, host, record)
             records = await asyncio.to_thread(self.records)
+            deployed = 0
             for host in sorted(desired):
-                state = (records.get(host) or {}).get("state")
+                record = records.get(host) or {}
+                state = record.get("state")
                 if state is None or (state == "off") == enabled or (
-                        retry and state not in {"ok", "off"}):
+                        retry and state not in {"ok", "off"}) or (
+                        state == "failed" and record.get("error_code") in RETRY_CODES):
                     # _ensure removes live routes and records "off" while turned off.
                     await self._ensure(host, retry=retry)
                     added += 1
-            return {"added": added, "removed": removed}
+                elif state == "pending" and await self._deployed(host, record) is True:
+                    deployed += 1
+            return {"added": added, "removed": removed, "deployed": deployed}
+
+    async def _deployed(self, host: str, record: dict[str, Any]) -> bool | None:
+        """Pending -> ok once a deployment of the Compose finished after the domain came.
+
+        True: switched to ok; False: not yet; None: Dokploy cannot tell.
+        """
+        routing = self.service.routing
+        compose_id = record.get("dokploy_compose_id")
+        if not compose_id:
+            compose_id = routing.panel_compose(await routing.detect())
+        if not compose_id:
+            return None
+        marker = record.get("deploy_marker")
+        done = await routing.deployed_since(marker) if isinstance(marker, dict) else None
+        if done is None:
+            # No marker (adopted from Dokploy) or no deployment list: compare with the
+            # time Dokploy got the domain.
+            done = await routing.domain_deployed(str(compose_id), host)
+        if done:
+            record.update({"state": "ok", "redeploy_required": False, "deploy_marker": None,
+                           "updated_at": _now()})
+            await asyncio.to_thread(self._put, host, record)
+        return done
 
     def reconcile_soon(self) -> None:
         """Run ``reconcile`` in the background (after ownership changes)."""
@@ -296,8 +332,8 @@ class BucketRoutes:
         https = bool(settings.get("bucket_domains_https", True))
         base: dict[str, Any] = {
             **want, "https": https, "mode": None, "state": "failed", "error_code": None,
-            "upstream_code": None, "dokploy_domain_id": None, "redeploy_required": False,
-            "conflict": None, "updated_at": _now(),
+            "upstream_code": None, "upstream_message": None, "dokploy_domain_id": None,
+            "redeploy_required": False, "conflict": None, "updated_at": _now(),
         }
         if not settings.get("route_bucket_domains", True):
             if current is not None and current.get("state") != "off":
@@ -309,9 +345,15 @@ class BucketRoutes:
             if not retry or current.get("state") == "ok":
                 return current
             if current.get("state") == "pending" and current.get("dokploy_domain_id"):
-                # The admin redeployed: Dokploy still has the domain -> routed.
+                done = await self._deployed(host, current)
+                if done is not None:
+                    # Dokploy says whether a deployment finished after the domain came.
+                    return current
+                # Dokploy cannot list deployments: the admin redeployed and asks again;
+                # Dokploy still has the domain -> routed.
                 detected = await routing.detect()
-                if await routing.dokploy_find_id(host, detected):
+                if await routing.dokploy_find_id(host, detected,
+                                                 current.get("dokploy_compose_id")):
                     current.update({"state": "ok", "redeploy_required": False,
                                     "updated_at": _now()})
                     await asyncio.to_thread(self._put, host, current)
@@ -327,6 +369,21 @@ class BucketRoutes:
             await asyncio.to_thread(self._put, host, record)
             return record
         owner, _check = await routing.dokploy_conflict(host)
+        stack = await routing.stack_compose(S3_SERVICE) if owner is not None else None
+        if (owner is not None and stack is not None and owner.get("service_type") == "compose"
+                and owner.get("service_id") == stack):
+            # Already on the S3 stack itself (added by hand): adopt it, never refuse it.
+            detected = await routing.detect()
+            domain_id = await routing.dokploy_find_id(host, detected, stack)
+            hint = routing.redeploy_hint(detected, stack)
+            record = {**base, "mode": "dokploy_api", "dokploy_domain_id": domain_id,
+                      "dokploy_compose_id": stack, "state": "pending" if hint else "ok",
+                      "redeploy_required": hint is not None, "adopted": True}
+            await asyncio.to_thread(self._put, host, record)
+            if hint is not None:
+                # Usually deployed long ago: then it is routed already.
+                await self._deployed(host, record)
+            return record
         if owner is not None:
             record = {**base, "state": "conflict", "error_code": "domain_in_use",
                       "conflict": {"kind": "dokploy", "name": owner.get("name"),
@@ -334,11 +391,17 @@ class BucketRoutes:
             await asyncio.to_thread(self._put, host, record)
             return record
         detected = await routing.detect()
-        mode = routing.effective_mode(detected)
+        stack = await routing.stack_compose(S3_SERVICE)
+        mode = routing.effective_mode(detected, None, stack)
         record = {**base, "mode": mode}
-        if not routing.available_modes(detected).get(mode):
+        if not routing.available_modes(detected, stack).get(mode):
             record["error_code"] = (
                 "traefik_dir_unavailable" if mode == "traefik_file" else "routing_unavailable")
+            await asyncio.to_thread(self._put, host, record)
+            return record
+        if routing.auto_detection_failed(detected, None, mode):
+            # Dokploy is set up but could not be read: try again later, not "manual".
+            record["error_code"] = "routing_detection_failed"
             await asyncio.to_thread(self._put, host, record)
             return record
         if mode == "manual":
@@ -349,13 +412,17 @@ class BucketRoutes:
             try:
                 domain_id = await routing.dokploy_create(S3_SERVICE, host, https, detected)
             except Exception as exc:  # noqa: BLE001 - recorded, nothing was created
-                record.update({"error_code": "dokploy_domain_failed",
-                               "upstream_code": _code(exc)})
+                specific = isinstance(exc, RoutingError) and exc.code in SPECIFIC_CODES
+                record.update({"error_code": exc.code if specific else "dokploy_domain_failed",
+                               "upstream_code": _code(exc),
+                               "upstream_message": _message(exc)})
                 await asyncio.to_thread(self._put, host, record)
                 return record
-            hint = routing.redeploy_hint(detected)
+            hint = routing.redeploy_hint(detected, stack)
             record.update({"state": "pending" if hint else "ok", "dokploy_domain_id": domain_id,
-                           "redeploy_required": hint is not None})
+                           "dokploy_compose_id": stack, "redeploy_required": hint is not None,
+                           "deploy_marker": (await routing.deploy_marker(hint["service_id"])
+                                             if hint is not None else None)})
             try:
                 await asyncio.to_thread(self._put, host, record)
             except Exception:
@@ -371,7 +438,7 @@ class BucketRoutes:
             await self.service._apply_traefik(detected)  # noqa: SLF001 - shared writer
         except Exception as exc:  # noqa: BLE001 - roll back to the file without it
             record.update({"state": "failed", "error_code": "traefik_write_failed",
-                           "upstream_code": _code(exc)})
+                           "upstream_code": _code(exc), "upstream_message": _message(exc)})
             await asyncio.to_thread(self._put, host, record)
             await _quiet(self.service._apply_traefik(detected))  # noqa: SLF001
         return record
@@ -386,9 +453,10 @@ class BucketRoutes:
             try:
                 await routing.dokploy_delete(str(record["dokploy_domain_id"]))
             except Exception as exc:  # noqa: BLE001
-                if getattr(exc, "code", None) != "dokploy_not_found":
+                if not _is_missing(exc):  # already gone in Dokploy counts as removed
                     record.update({"state": "stale", "error_code": "dokploy_domain_failed",
-                                   "upstream_code": _code(exc), "updated_at": _now()})
+                                   "upstream_code": _code(exc),
+                                   "upstream_message": _message(exc), "updated_at": _now()})
                     await asyncio.to_thread(self._put, host, record)
                     return {"removed": False, "ok": False, "error_code": "dokploy_domain_failed"}
         await asyncio.to_thread(self._put, host, None)
@@ -405,6 +473,23 @@ class BucketRoutes:
 
 def _code(exc: BaseException) -> str:
     return str(getattr(exc, "code", None) or type(exc).__name__)[:64]
+
+
+def _message(exc: BaseException) -> str | None:
+    """Dokploy's (or the agent's) own words, redacted, for the admin page."""
+    from ..logging_config import redact_text
+
+    extra = getattr(exc, "extra", None)
+    text = (extra or {}).get("upstream_message") if isinstance(extra, dict) else None
+    text = text or getattr(exc, "message", None)
+    return redact_text(str(text))[:300] if text else None
+
+
+def _is_missing(exc: BaseException) -> bool:
+    from .dokploy_client import DokployError
+    from .dokploy_locate import is_missing
+
+    return isinstance(exc, DokployError) and is_missing(exc)
 
 
 async def _quiet(awaitable: Any) -> None:

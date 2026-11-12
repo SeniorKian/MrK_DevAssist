@@ -12,6 +12,8 @@ MRK_DOKPLOY_API_KEY_FILE are set, from the environment (env wins, read-only).
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import importlib
 import json
 import logging
 import os
@@ -41,6 +43,8 @@ from .dokploy_client import (
 LOGGER = logging.getLogger(__name__)
 MODULE_NAME = "dokploy"
 CONFIG_FILE = "dokploy.json"
+# Deployment failures already announced, so a restart does not announce them again.
+STATE_FILE = "dokploy-state.json"
 REACHABILITY_DEDUPE_KEY = "dokploy.reachability"
 SERVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ACTIONS = ("deploy", "redeploy", "start", "stop")
@@ -48,8 +52,54 @@ DOMAIN_TTL_SECONDS = 300.0
 DOMAIN_FETCH_BUDGET = 6
 MAX_SEEN_FAILURES = 2000
 MAX_LOG_LINES = 5000
-# project.one calls spent per (cached) appName index build.
-APP_INDEX_PROJECT_BUDGET = 25
+# project.one calls spent per (cached) appName index build; the rest wait for the next
+# build (project.one answers are cached for PROJECT_ONE_TTL_SECONDS meanwhile).
+APP_INDEX_PROJECT_BUDGET = 8
+PROJECT_ONE_TTL_SECONDS = 180.0
+# Consecutive connection failures before Dokploy counts as unreachable (and is announced).
+UNREACHABLE_AFTER = 2
+# Procedures that check the connection itself: an auth failure here means the key is bad.
+PROBE_PROCEDURES = frozenset({"settings.getDokployVersion", "project.all"})
+# Docker labels naming a Dokploy appName, most specific first: a Compose of composeType
+# "stack" runs as `docker stack deploy <appName>`, a plain Compose as project <appName>,
+# an Application as swarm service <appName>.
+APP_NAME_LABELS = (
+    "com.docker.stack.namespace",
+    "com.docker.compose.project",
+    "com.docker.swarm.service.name",
+)
+
+# Set while the poller runs, so its calls yield the request budget to page loads.
+_BACKGROUND: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "mrk_dokploy_background", default=False
+)
+
+
+def app_name_candidates(labels: Any) -> list[str]:
+    """The Dokploy appNames a container's labels may carry, in the order to try them."""
+    if not isinstance(labels, dict):
+        return []
+    names: list[str] = []
+    for key in APP_NAME_LABELS:
+        value = labels.get(key)
+        if isinstance(value, str) and value and value not in names:
+            names.append(value)
+    swarm = labels.get("com.docker.swarm.service.name")
+    if isinstance(swarm, str) and "_" in swarm:
+        # A stack service is "<namespace>_<service>" (older agents lack the namespace label).
+        prefix = swarm.rsplit("_", 1)[0]
+        if prefix and prefix not in names:
+            names.append(prefix)
+    return names
+
+
+def ref_for_labels(labels: Any, index: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """The Dokploy service ref (from :meth:`DokployService.app_index`) for these labels."""
+    for name in app_name_candidates(labels):
+        ref = index.get(name)
+        if ref is not None:
+            return ref
+    return None
 
 
 def _env_number(name: str, default: float, low: float, high: float) -> float:
@@ -76,11 +126,19 @@ TUNABLES: tuple[tuple[str, str, float, float, float], ...] = (
 )
 
 
+def _fatal(exc: DokployError) -> bool:
+    """Whether a failure inside a multi-call load must abort it (vs. skip one item)."""
+    return exc.connection_failure or exc.code == "dokploy_auth_failed"
+
+
 class DokployConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: str = Field(min_length=8, max_length=2048)
     api_key: str | None = Field(default=None, min_length=16, max_length=512)
+    # The address people open Dokploy at, when ``url`` is an internal one
+    # (http://dokploy:3000). Used only for "open in Dokploy" links; "" clears it.
+    public_url: str | None = Field(default=None, max_length=2048)
     rate_limit_per_second: float | None = Field(default=None, ge=0.1, le=20)
     poll_interval_seconds: int | None = Field(default=None, ge=0, le=3600)
     cache_seconds: int | None = Field(default=None, ge=0, le=600)
@@ -116,12 +174,59 @@ class DokployService:
         self.reachable: bool | None = None
         self.last_checked_at: float | None = None
         self.last_error: str | None = None
+        self.last_error_code: str | None = None
+        self.failure_streak = 0
+        self.down_announced = False
         self.version: str | None = None
+        self.state_path = ctx.data_dir / "control-plane" / STATE_FILE
         self.seen_failures: OrderedDict[str, None] = OrderedDict()
         self.failures_seeded = False
         self.status_failed: set[tuple[str, str]] = set()
+        self.status_seeded = False
+        self._state_dirty = False
+        self._load_state()
         self.started_at = time.time()
         self._task: asyncio.Task[None] | None = None
+
+    # ----- announced failures (survive restarts) ---------------------------
+    def _load_state(self) -> None:
+        try:
+            if not self.state_path.exists():
+                return
+            payload = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            LOGGER.warning("dokploy state file is unreadable; starting fresh")
+            return
+        if not isinstance(payload, dict):
+            return
+        seen = payload.get("seen_failures")
+        for item in seen[-MAX_SEEN_FAILURES:] if isinstance(seen, list) else []:
+            if isinstance(item, str) and item:
+                self.seen_failures[item[:128]] = None
+        failed = payload.get("status_failed")
+        for item in failed if isinstance(failed, list) else []:
+            if (isinstance(item, list) and len(item) == 2
+                    and all(isinstance(part, str) for part in item)):
+                self.status_failed.add((item[0][:32], item[1][:64]))
+        # A saved state means the "what failed before" baseline is already known.
+        self.failures_seeded = bool(payload.get("seeded"))
+        self.status_seeded = bool(payload.get("status_seeded"))
+
+    def _save_state(self) -> None:
+        payload = {
+            "seeded": self.failures_seeded,
+            "status_seeded": self.status_seeded,
+            "seen_failures": list(self.seen_failures),
+            "status_failed": sorted([list(item) for item in self.status_failed]),
+        }
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.state_path.with_name(f".{STATE_FILE}.{secrets.token_hex(4)}.tmp")
+            temporary.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+            temporary.chmod(0o600)
+            os.replace(temporary, self.state_path)
+        except OSError:
+            LOGGER.warning("dokploy state file could not be written")
 
     # ----- configuration -------------------------------------------------
     def env_managed(self) -> bool:
@@ -218,6 +323,11 @@ class DokployService:
             "secret_ref": reference,
             "updated_at": int(time.time()),
         }
+        if body.public_url is None:
+            if isinstance(stored.get("public_url"), str):
+                payload["public_url"] = stored["public_url"]
+        elif body.public_url.strip():
+            payload["public_url"] = self._validate_public_url(body.public_url)
         for key_name, *_rest in TUNABLES:
             value = getattr(body, key_name)
             if value is None:
@@ -234,30 +344,96 @@ class DokployService:
             self.ctx.secret_store.delete(reference)
         self.config_path.unlink(missing_ok=True)
         self.reset()
+        # Another Dokploy may be connected next: its deployment ids start a new history.
+        self.seen_failures.clear()
+        self.status_failed.clear()
+        self.failures_seeded = False
+        self.status_seeded = False
+        try:
+            self.state_path.unlink(missing_ok=True)
+        except OSError:
+            LOGGER.warning("dokploy state file could not be removed")
 
     def reset(self) -> None:
+        """Forget cached answers and connection health (config saved, reset or replaced).
+
+        Announced deployment failures are kept: the same Dokploy keeps its deployment ids,
+        and announcing them again after re-saving the settings would only be noise.
+        """
         self.cache.clear()
         self.domains.clear()
         self.features.clear()
         self.reachable = None
         self.last_checked_at = None
         self.last_error = None
+        self.last_error_code = None
+        self.failure_streak = 0
+        self.down_announced = False
         self.version = None
-        self.seen_failures.clear()
-        self.failures_seeded = False
-        self.status_failed.clear()
+        self._invalidate_routing()
+
+    @staticmethod
+    def _invalidate_routing() -> None:
+        """Let domain routing re-detect "inside Dokploy" after the connection changed."""
+        try:
+            services = importlib.import_module(f"{__package__}.services")
+            active = getattr(services, "ACTIVE_SERVICE", None)
+            changed = getattr(active, "on_dokploy_changed", None)
+            if callable(changed):
+                changed()  # forgets the detection and reads Dokploy's domains back soon
+                return
+            routing = getattr(active, "routing", None)
+            invalidate = getattr(routing, "invalidate", None)
+            if callable(invalidate):
+                invalidate()
+        except Exception:  # noqa: BLE001 - a stale detection is refreshed on its own later
+            LOGGER.info("domain routing invalidation skipped", exc_info=True)
+
+    def _validate_public_url(self, value: str) -> str:
+        # Only a link for the browser, so loopback is fine here; credentials, queries and
+        # metadata addresses are still refused.
+        try:
+            return validate_dokploy_url(value, allow_loopback=True)
+        except ValueError as exc:
+            raise ValueError(f"Public {exc}") from None
+
+    def public_url(self) -> str | None:
+        """The address people open Dokploy at (for links), if one is set."""
+        # Panel-saved only for now; an env-managed setup links to its API URL.
+        stored = None if self.env_managed() else (self._panel_file() or {}).get("public_url")
+        raw = stored.strip() if isinstance(stored, str) else ""
+        if not raw:
+            return None
+        try:
+            return self._validate_public_url(raw)
+        except ValueError:
+            LOGGER.warning("ignoring an invalid public Dokploy URL")
+            return None
+
+    def status_view(self) -> dict[str, Any]:
+        """Connection health as of the latest call (sent with every /projects answer)."""
+        return {
+            "reachable": self.reachable,
+            "last_error": self.last_error,
+            "last_error_code": self.last_error_code,
+            "last_checked_at": self.last_checked_at,
+        }
 
     def config_view(self) -> dict[str, Any]:
         source, url, key = self.resolve()
         configured = source is not None and url is not None
+        public = self.public_url() if configured else None
         return {
             "configured": configured,
             "url": url,
-            # Base of the Dokploy web panel (same as url: a trailing /api is
-            # stripped on save); the UI builds "open in Dokploy" links from it.
-            "panel_url": url if configured else None,
+            "public_url": public,
+            # Base of the Dokploy web panel for "open in Dokploy" links: the public
+            # address when one is set, else the API address (a trailing /api is
+            # stripped on save).
+            "panel_url": (public or url) if configured else None,
             "source": source,
             "last_error": self.last_error if source is not None else None,
+            "last_error_code": self.last_error_code if source is not None else None,
             "api_key_configured": key is not None,
             "reachable": self.reachable if configured else None,
             "last_checked_at": self.last_checked_at,
@@ -270,31 +446,59 @@ class DokployService:
     # ----- calls ---------------------------------------------------------
     async def call(self, procedure: str, **kwargs: Any) -> Any:
         connection = self.connection()
+        probe = bool(kwargs.pop("probe", False)) or procedure in PROBE_PROCEDURES
+        kwargs.setdefault("background", _BACKGROUND.get())
         try:
-            result = await self.client.call(connection, procedure, **kwargs)
+            result = await self.client.call(connection, procedure, probe=probe, **kwargs)
         except DokployError as exc:
-            if exc.code in {"dokploy_unreachable", "dokploy_auth_failed"}:
-                self._mark(False, exc.message, exc.code)
+            self._record_failure(exc, probe)
             raise
         self._mark(True)
         return result
 
+    def _record_failure(self, exc: DokployError, probe: bool) -> None:
+        """Decide what one failed call says about the connection as a whole."""
+        if exc.connection_failure or (
+            probe and exc.code in {"dokploy_auth_failed", "dokploy_forbidden"}
+        ):
+            self._mark(False, exc.message, exc.code)
+        elif exc.upstream_status is not None and exc.code not in {
+            "dokploy_auth_failed", "dokploy_forbidden"
+        }:
+            # Dokploy answered (404, 400, 500 ...): the connection itself works.
+            self._mark(True)
+        # Otherwise (MRK's own rate limit, a refused item): nothing new is known.
+
     def _mark(self, ok: bool, message: str | None = None, code: str | None = None) -> None:
-        previous = self.reachable
-        self.reachable = ok
         self.last_checked_at = time.time()
-        self.last_error = None if ok else message
-        if ok and previous is False:
-            self.ctx.events.publish(
-                Event(
-                    type="dokploy.reachable",
-                    severity="info",
-                    title="Dokploy is reachable again",
-                    module=MODULE_NAME,
-                    dedupe_key=REACHABILITY_DEDUPE_KEY,
+        if ok:
+            previous = self.reachable
+            self.failure_streak = 0
+            self.reachable = True
+            self.last_error = None
+            self.last_error_code = None
+            if previous is not True:
+                self._invalidate_routing()
+            if self.down_announced:
+                self.down_announced = False
+                self.ctx.events.publish(
+                    Event(
+                        type="dokploy.reachable",
+                        severity="info",
+                        title="Dokploy is reachable again",
+                        module=MODULE_NAME,
+                        dedupe_key=REACHABILITY_DEDUPE_KEY,
+                    )
                 )
-            )
-        elif not ok and previous is not False:
+            return
+        self.failure_streak += 1
+        self.last_error = message
+        self.last_error_code = code
+        if self.failure_streak < UNREACHABLE_AFTER:
+            return  # one blip (a restart, a slow answer) is not an outage
+        self.reachable = False
+        if not self.down_announced:
+            self.down_announced = True
             self.ctx.events.publish(
                 Event(
                     type="dokploy.unreachable",
@@ -368,7 +572,13 @@ class DokployService:
             if exc.code in {"dokploy_not_configured", "dokploy_api_key_required"}:
                 raise
             latency = round((time.perf_counter() - started) * 1000, 1)
-            return {"ok": False, "latency_ms": latency, "error_code": exc.code}
+            return {
+                "ok": False,
+                "latency_ms": latency,
+                "error_code": exc.code,
+                # Dokploy's own reason (redacted), shown under "technical details".
+                "message": exc.message,
+            }
         latency = round((time.perf_counter() - started) * 1000, 1)
         if not candidate:
             self.version = version
@@ -380,8 +590,8 @@ class DokployService:
     async def _version(self, connection: Connection, track: bool = False) -> str | None:
         async def run(procedure: str) -> Any:
             if track:
-                return await self.call(procedure)
-            return await self.client.call(connection, procedure)
+                return await self.call(procedure, probe=True)
+            return await self.client.call(connection, procedure, probe=True)
 
         try:
             value = await run("settings.getDokployVersion")
@@ -414,7 +624,7 @@ class DokployService:
             except DokployError as exc:
                 if exc.code == "dokploy_rate_limited":
                     return False
-                if exc.code in {"dokploy_unreachable", "dokploy_auth_failed"}:
+                if _fatal(exc):
                     raise
                 payload = []
             self.domains[key] = (time.monotonic(), norm.domain_strings(payload))
@@ -437,23 +647,65 @@ class DokployService:
         return (await self._cached("projects:all", load))["items"]
 
     def panel_url(self) -> str | None:
+        """Base for "open in Dokploy" links: the public address if set, else the API one."""
         source, url, _key = self.resolve()
-        return url if source is not None else None
+        if source is None or url is None:
+            return None
+        return self.public_url() or url
+
+    @staticmethod
+    def project_url(panel_url: str, project_id: str, environment_id: str | None) -> str:
+        """Deep link to a project; Dokploy >= 0.25 routes projects by environment."""
+        path = f"/dashboard/project/{quote(str(project_id), safe='')}"
+        if environment_id:
+            path += f"/environment/{quote(str(environment_id), safe='')}"
+        return panel_url.rstrip("/") + path
 
     @staticmethod
     def service_url(panel_url: str, ref: dict[str, Any]) -> str:
-        """Deep link to a service page in the Dokploy panel (best effort)."""
-        path = f"/dashboard/project/{quote(str(ref['project_id']), safe='')}"
-        if ref.get("environment_id"):
-            path += f"/environment/{quote(str(ref['environment_id']), safe='')}"
-        path += f"/services/{ref['type']}/{quote(str(ref['id']), safe='')}"
-        return panel_url.rstrip("/") + path
+        """Deep link to a service page in the Dokploy panel.
+
+        Dokploy >= 0.25: ``/dashboard/project/<pid>/environment/<eid>/services/<type>/<id>``;
+        older releases have no environment segment.
+        """
+        base = DokployService.project_url(
+            panel_url, str(ref["project_id"]), ref.get("environment_id")
+        )
+        return f"{base}/services/{ref['type']}/{quote(str(ref['id']), safe='')}"
+
+    async def project_detail(self, project_id: str) -> dict[str, Any] | None:
+        """project.one reduced to names/appNames/statuses, cached per project.
+
+        The full answer carries project/environment variables; only the whitelisted
+        service fields are kept (and cached) here. None when Dokploy refused this one.
+        """
+        if not SERVICE_ID_RE.fullmatch(project_id):
+            return None
+        key = f"project-one:{project_id}"
+        hit = self.cache.get(key)
+        if hit is not None:
+            return hit["item"]
+        try:
+            one = await self.call("project.one", params={"projectId": project_id})
+        except DokployError as exc:
+            if _fatal(exc):
+                raise
+            if exc.code != "dokploy_rate_limited":
+                # Refused for this key: do not ask again on every page load.
+                self.cache.set(key, {"item": None}, 60.0)
+            return None
+        item = norm.project_outline({**one, "projectId": project_id}) if isinstance(
+            one, dict
+        ) else None
+        del one
+        self.cache.set(key, {"item": item}, PROJECT_ONE_TTL_SECONDS)
+        return item
 
     async def app_index(self) -> dict[str, dict[str, Any]]:
         """Map Dokploy ``appName`` -> {type, id, name, project_id, environment_id}.
 
         project.all does not always carry ``appName``; project.one is asked for
-        those projects (bounded). Only these whitelisted ids leave this method.
+        those projects (bounded, cached). Only these whitelisted ids leave this method.
         """
 
         async def load() -> Any:
@@ -464,17 +716,20 @@ class DokployService:
             ]
             for project in incomplete[:APP_INDEX_PROJECT_BUDGET]:
                 project_id = project.get("projectId")
-                try:
-                    one = await self.call("project.one", params={"projectId": project_id})
-                except DokployError as exc:
-                    if exc.code in {"dokploy_unreachable", "dokploy_auth_failed"}:
-                        raise
+                if not isinstance(project_id, str):
                     continue
-                if isinstance(one, dict):
-                    norm.app_name_index({**one, "projectId": project_id}, index)
+                one = await self.project_detail(project_id)
+                if one is not None:
+                    norm.app_name_index(one, index)
             return {"items": index}
 
         return (await self._cached("projects:app-index", load))["items"]
+
+    def ref_for_labels(
+        self, labels: Any, index: dict[str, dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """The service a container belongs to, from its Docker labels (see APP_NAME_LABELS)."""
+        return ref_for_labels(labels, index)
 
     async def projects(self) -> dict[str, Any]:
         async def build() -> Any:
@@ -483,21 +738,29 @@ class DokployService:
             for project in raw:
                 project_id = project.get("projectId") if isinstance(project, dict) else None
                 if isinstance(project_id, str) and norm.services_missing_names(project):
-                    try:
-                        one = await self.call("project.one", params={"projectId": project_id})
-                    except DokployError as exc:
-                        if exc.code in {"dokploy_unreachable", "dokploy_auth_failed"}:
-                            raise
-                        continue
-                    if isinstance(one, dict):
+                    one = await self.project_detail(project_id)
+                    if one is not None:
                         details[project_id] = one
             try:
                 recent = await self.recent_deployments()
             except DokployError as exc:
-                if exc.code == "dokploy_unreachable":
+                if _fatal(exc):
                     raise
                 recent = None
             tree = norm.project_tree(raw, details=details, latest=norm.latest_by_service(recent))
+            panel = self.panel_url()
+            for project in tree:
+                environment_id = project.get("default_environment_id")
+                project["url"] = (
+                    self.project_url(panel, project["id"], environment_id) if panel else None
+                )
+                for service in project["services"]:
+                    service["url"] = self.service_url(panel, {
+                        "project_id": project["id"],
+                        "environment_id": service.get("environment_id"),
+                        "type": service["type"],
+                        "id": service["id"],
+                    }) if panel else None
             keys = [
                 (service["type"], service["id"])
                 for project in tree
@@ -529,8 +792,12 @@ class DokployService:
                 payload = await self.call(f"{router}.one", params={id_field: service_id})
             except DokployError as exc:
                 if exc.code == "dokploy_not_found":
+                    # Removed in Dokploy: the cached list still shows it, so drop that too.
+                    for key in ("projects:tree", "projects:all", "projects:app-index"):
+                        self.cache.pop(key)
                     raise DokployError(
-                        "dokploy_service_not_found", 404, "Dokploy service not found"
+                        "dokploy_service_not_found", 404,
+                        "Dokploy service not found; it may have been removed. Refresh the list",
                     ) from None
                 raise
             if not isinstance(payload, dict):
@@ -566,7 +833,8 @@ class DokployService:
         except DokployError as exc:
             if exc.code == "dokploy_not_found":
                 raise DokployError(
-                    "dokploy_service_not_found", 404, "Dokploy service not found"
+                    "dokploy_service_not_found", 404,
+                    "Dokploy service not found; it may have been removed. Refresh the list",
                 ) from None
             raise
         finally:
@@ -601,6 +869,7 @@ class DokployService:
         if deployment_id in self.seen_failures:
             return False
         self.seen_failures[deployment_id] = None
+        self._state_dirty = True
         while len(self.seen_failures) > MAX_SEEN_FAILURES:
             self.seen_failures.popitem(last=False)
         return True
@@ -651,7 +920,10 @@ class DokployService:
             )
             if self.failures_seeded or (stamp is not None and stamp >= horizon):
                 self._publish_failure(item)
-        self.failures_seeded = True
+        if self._state_dirty or not self.failures_seeded:
+            self.failures_seeded = True
+            self._state_dirty = False
+            await asyncio.to_thread(self._save_state)
 
     async def _poll_statuses(self) -> None:
         """Older Dokploy (no deployment.allCentralized): watch service status instead."""
@@ -662,7 +934,7 @@ class DokployService:
                 if service["type"] in norm.DEPLOYABLE_TYPES and service["status"] == "error":
                     key = (service["type"], service["id"])
                     current.add(key)
-                    if key not in self.status_failed and self.failures_seeded:
+                    if key not in self.status_failed and self.status_seeded:
                         self.ctx.events.publish(
                             Event(
                                 type="dokploy.deploy_failed",
@@ -678,10 +950,14 @@ class DokployService:
                                 },
                             )
                         )
+        changed = current != self.status_failed or not self.status_seeded
         self.status_failed = current
-        self.failures_seeded = True
+        self.status_seeded = True
+        if changed:
+            await asyncio.to_thread(self._save_state)
 
     async def _loop(self) -> None:
+        _BACKGROUND.set(True)  # this task's calls never queue ahead of page loads
         while True:
             interval = self.tunable("poll_interval_seconds")
             if interval > 0:
@@ -752,7 +1028,11 @@ def register(ctx: ModuleContext) -> None:
             return failure(exc)
         except ValueError as exc:
             message = str(exc)
-            code = "invalid_dokploy_api_key" if "key" in message else "invalid_dokploy_url"
+            code = (
+                "invalid_dokploy_public_url" if message.startswith("Public")
+                else "invalid_dokploy_api_key" if "key" in message
+                else "invalid_dokploy_url"
+            )
             return ctx.error_payload(code, message, 422)
         await audit(principal, "dokploy.config.update", "dokploy")
         return service.config_view()
@@ -799,9 +1079,11 @@ def register(ctx: ModuleContext) -> None:
     async def list_projects(request: Request):
         ctx.require_principal(request, "dokploy:read")
         try:
-            return await service.projects()
+            result = await service.projects()
         except DokployError as exc:
             return failure(exc)
+        # Health as of this very load, so the page never shows the previous poll's warning.
+        return {**result, **service.status_view()}
 
     @router.get("/services/{service_type}/{service_id}")
     async def get_service(service_type: str, service_id: str, request: Request):

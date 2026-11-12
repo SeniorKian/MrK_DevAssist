@@ -142,6 +142,9 @@ _ALLOWLIST: tuple[_Rule, ...] = (
 LABEL_SUBSET_KEYS = (
     "com.docker.compose.project",
     "com.docker.compose.service",
+    # Dokploy runs a Compose with composeType "stack" as `docker stack deploy <appName>`;
+    # the namespace label is the only label carrying that appName verbatim.
+    "com.docker.stack.namespace",
     "com.docker.swarm.service.name",
     "org.opencontainers.image.title",
     "org.opencontainers.image.version",

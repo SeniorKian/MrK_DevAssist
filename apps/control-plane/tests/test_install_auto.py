@@ -37,11 +37,20 @@ class FakeDokploy:
         self.deploy_result = "done"
         self.existing = False
         self.env_text = ""
+        self.compose_file = ""
+        self.created: dict[str, str] = {}  # composeId -> projectId
+        self.after_running: str | None = None
+        self.project_env = ""
 
-    def project(self) -> dict[str, Any]:
-        compose = [{"composeId": "c-old", "name": "mrk-agent"}] if self.existing else []
-        return {"projectId": "p1", "name": "Apps", "environments": [
-            {"environmentId": "e1", "name": "production", "compose": compose}]}
+    def project(self, project_id: str = "p1") -> dict[str, Any]:
+        compose = [{"composeId": "c-old", "name": "mrk-agent"}] if (
+            self.existing and project_id == "p1") else []
+        compose += [{"composeId": cid, "name": "mrk-agent"}
+                    for cid, where in self.created.items() if where == project_id]
+        env = "e1" if project_id == "p1" else "e2"
+        return {"projectId": project_id, "name": "Apps" if project_id == "p1" else "MrK DevAssist",
+                "env": self.project_env if project_id == "p1" else "",
+                "environments": [{"environmentId": env, "name": "production", "compose": compose}]}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         assert request.url.host == "dokploy.lan"
@@ -53,29 +62,40 @@ class FakeDokploy:
         if procedure == "settings.getDokployVersion":
             return httpx.Response(200, json="v0.25.3")
         if procedure == "project.all":
-            return httpx.Response(200, json=[self.project()])
+            ids = ["p1"] + (["p2"] if "p2" in self.created.values() else [])
+            return httpx.Response(200, json=[self.project(pid) for pid in ids])
         if procedure == "project.one":
-            if body.get("projectId") == "p2":
-                return httpx.Response(200, json={"projectId": "p2", "environments": [
-                    {"environmentId": "e2", "name": "production", "compose": []}]})
-            return httpx.Response(200, json=self.project())
+            return httpx.Response(200, json=self.project(body.get("projectId") or "p1"))
         if procedure == "project.create":
             return httpx.Response(200, json={"project": {"projectId": "p2"},
                                              "environment": {"environmentId": "e2"}})
+        if procedure == "project.update":
+            assert body["projectId"] == "p1" and body["name"]
+            self.project_env = body["env"]
+            return httpx.Response(200, json=True)
         if procedure == "compose.create":
+            self.created["c1"] = "p2" if body.get("environmentId") == "e2" else "p1"
             return httpx.Response(200, json={"composeId": "c1", "appName": "mrk-agent-abc"})
         if procedure == "compose.update":
-            self.env_text = body["env"]
+            self.env_text = body.get("env", self.env_text)
+            self.compose_file = body.get("composeFile", self.compose_file)
             return httpx.Response(200, json={"composeId": body["composeId"], "env": body["env"]})
         if procedure == "compose.deploy":
-            self.status = self.deploy_result
+            # Like Dokploy: the queued deploy shows "running" once, then its result.
+            self.status, self.after_running = "running", self.deploy_result
             if self.deploy_result == "done":
                 key = env_value(self.env_text, "MRK_AGENT_PAIRING_KEY")
                 self.start_agent(signing.decode_key(key))
             return httpx.Response(200, json={"success": True, "message": "Deployment queued"})
         if procedure == "compose.one":
+            status = self.status
+            if status == "running" and self.after_running:
+                self.status, self.after_running = self.after_running, None
             return httpx.Response(200, json={"composeId": body["composeId"],
-                                             "composeStatus": self.status, "env": self.env_text})
+                                             "composeStatus": status, "env": self.env_text,
+                                             "composeFile": self.compose_file,
+                                             "environment": {"environmentId": "e1",
+                                                             "project": {"projectId": "p1"}}})
         return httpx.Response(404, json={"message": "Not found"})
 
 
@@ -291,6 +311,8 @@ def test_dokploy_auto_install_creates_deploys_and_connects(tmp_path: Path, fakes
         assert client.get("/api/v1/agent/status").json()["configured"] is True
         assert install_auto.deployment_for(tmp_path / "cp", "agent") == {
             "target": "dokploy", "compose_id": "c1", "service_name": "mrk-agent",
+            "compose_sha256": install_auto.deployment_for(
+                tmp_path / "cp", "agent")["compose_sha256"],
             "project_id": "p1", "environment_id": "e1",
             "updated_at": install_auto.deployment_for(tmp_path / "cp", "agent")["updated_at"],
         }
@@ -298,7 +320,9 @@ def test_dokploy_auto_install_creates_deploys_and_connects(tmp_path: Path, fakes
         actions = [item["action"] for item in client.get("/api/v1/audit-events").json()["items"]]
     procedures = [name for name, _body in dokploy.requests]
     assert procedures.index("compose.create") < procedures.index("compose.update") < \
-        procedures.index("compose.deploy") < procedures.index("compose.one")
+        procedures.index("compose.deploy")
+    # The status is read after the deploy (and once before, to tell the new run apart).
+    assert "compose.one" in procedures[procedures.index("compose.deploy"):]
     create = next(body for name, body in dokploy.requests if name == "compose.create")
     assert create["environmentId"] == "e1" and create["name"] == "mrk-agent"
     update = next(body for name, body in dokploy.requests if name == "compose.update")
@@ -326,17 +350,37 @@ def test_dokploy_new_project_reuse_and_failed_deploy(tmp_path: Path, fakes) -> N
         create = next(body for name, body in dokploy.requests if name == "compose.create")
         assert create["environmentId"] == "e2"
 
-        dokploy.existing = True
+        # The agent's stack already lives in p2: another project is refused, not doubled.
         dokploy.deploy_result = "done"
+        elsewhere = client.post("/api/v1/install/agent/auto", headers=headers,
+                                json={"target": "dokploy", "project_id": "p1"}).json()
+        job = wait_job(client, elsewhere["id"])
+        assert job["status"] == "failed" and job["error_code"] == "already_installed"
+        # No project picked: the existing stack is updated in place.
         dokploy.requests.clear()
+        again = client.post("/api/v1/install/agent/auto", headers=headers,
+                            json={"target": "dokploy"}).json()
+        job = wait_job(client, again["id"])
+        assert job["status"] == "succeeded" and job["reused"] is True, job
+        assert job["resource_id"] == "c1" and job["project_id"] == "p2"
+        names = [name for name, _ in dokploy.requests]
+        assert "compose.create" not in names and "project.create" not in names
+        missing = client.get("/api/v1/install/auto/jobs/nope-nope-nope")
+        assert missing.status_code == 404
+
+
+def test_dokploy_reuses_a_stack_named_after_the_service(tmp_path: Path, fakes) -> None:
+    dokploy = fakes["dokploy"]
+    dokploy.existing = True
+    with TestClient(create_app(Settings.for_test(tmp_path / "cp"))) as client:
+        headers = owner(client)
+        connect_dokploy(client, headers)
         started = client.post("/api/v1/install/agent/auto", headers=headers,
                               json={"target": "dokploy", "project_id": "p1"}).json()
         job = wait_job(client, started["id"])
-        assert job["status"] == "succeeded" and job["reused"] is True
+        assert job["status"] == "succeeded" and job["reused"] is True, job
         assert job["resource_id"] == "c-old"
         assert "compose.create" not in [name for name, _ in dokploy.requests]
-        missing = client.get("/api/v1/install/auto/jobs/nope-nope-nope")
-        assert missing.status_code == 404
 
 
 def test_coolify_auto_install_creates_deploys_and_connects(tmp_path: Path, fakes, caplog) -> None:

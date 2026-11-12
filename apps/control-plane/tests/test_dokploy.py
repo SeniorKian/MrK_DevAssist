@@ -191,6 +191,8 @@ class FakeDokploy:
         self.old_version = False
         self.deployments = centralized()
         self.projects = json.loads(json.dumps(PROJECT_ALL))
+        # procedure -> (status, json body): answer that procedure this way instead.
+        self.overrides: dict[str, tuple[int, Any]] = {}
 
     def calls(self, procedure: str | None = None) -> list[httpx.Request]:
         if procedure is None:
@@ -207,6 +209,9 @@ class FakeDokploy:
         if self.status_override is not None:
             return httpx.Response(self.status_override, json={"message": "nope"})
         procedure = request.url.path.removeprefix("/api/")
+        if procedure in self.overrides:
+            status, payload = self.overrides[procedure]
+            return httpx.Response(status, json=payload)
         query = dict(request.url.params)
         body = json.loads(request.content) if request.method == "POST" else None
         not_found = httpx.Response(404, json={"message": "Not found", "code": "NOT_FOUND"})
@@ -337,8 +342,9 @@ def test_normalize_project_tree_and_old_shape() -> None:
     )
     assert len(tree) == 1
     project = tree[0]
-    assert set(project) == {"id", "name", "description", "services"}
+    assert set(project) == {"id", "name", "description", "default_environment_id", "services"}
     assert project["id"] == "proj1" and project["description"] == "storefront"
+    assert project["default_environment_id"] == "env1"
     by_id = {service["id"]: service for service in project["services"]}
     assert set(by_id) == {"app1", "cmp1", "pg1", "rd1"}  # libsql is outside the contract
     assert by_id["app1"] == {
@@ -346,6 +352,7 @@ def test_normalize_project_tree_and_old_shape() -> None:
         "type": "application",
         "name": "web",
         "environment": "production",
+        "environment_id": "env1",
         "status": "done",
         "domains": ["shop.example.com"],
         "last_deployment": {
@@ -367,6 +374,18 @@ def test_normalize_project_tree_and_old_shape() -> None:
     old_tree = norm.project_tree(old)
     assert old_tree[0]["services"][0]["status"] == "unknown"
     assert old_tree[0]["services"][0]["environment"] is None
+    assert old_tree[0]["services"][0]["environment_id"] is None
+    assert old_tree[0]["default_environment_id"] is None
+
+    # project.one outline keeps what the tree / appName index need and drops secrets.
+    outline = norm.project_outline({**PROJECT_ONE, "env": "PROJECT_SECRET=hunter2"})
+    assert "hunter2" not in json.dumps(outline)
+    assert norm.project_tree(PROJECT_ALL, details={"proj1": outline}) == norm.project_tree(
+        PROJECT_ALL, details={"proj1": PROJECT_ONE}
+    )
+    index: dict[str, Any] = {}
+    norm.app_name_index(outline, index)
+    assert index["shop-pg-abc"]["environment_id"] == "env1"
 
 
 def test_normalize_service_detail_is_whitelisted() -> None:
@@ -638,6 +657,7 @@ def test_error_mapping(tmp_path: Path, fake: FakeDokploy) -> None:
         failed = client.get("/api/v1/dokploy/projects")
         assert failed.status_code == 502
         assert failed.json()["error"]["code"] == "dokploy_auth_failed"
+        assert "nope" in failed.json()["error"]["message"]  # Dokploy's own words are kept
         assert API_KEY not in failed.text
 
         fake.status_override = 429
@@ -650,13 +670,31 @@ def test_error_mapping(tmp_path: Path, fake: FakeDokploy) -> None:
             "dokploy_unreachable"
         )
         fake.status_override = 500
-        assert client.get("/api/v1/dokploy/projects").status_code == 502
+        broken = client.get("/api/v1/dokploy/projects")
+        assert broken.status_code == 502
+        assert broken.json()["error"]["code"] == "dokploy_failed"
+        assert broken.json()["error"]["message"] == "Dokploy returned HTTP 500: nope"
+        # Dokploy answered, so the connection itself is fine.
+        assert client.get("/api/v1/dokploy/config").json()["reachable"] is True
 
         fake.status_override = None
         fake.online = False
         down = client.get("/api/v1/dokploy/projects")
         assert down.status_code == 502 and down.json()["error"]["code"] == "dokploy_unreachable"
+        view = client.get("/api/v1/dokploy/config").json()
+        # One failure is a blip: reported, but not yet "unreachable".
+        assert view["reachable"] is True and view["last_error_code"] == "dokploy_unreachable"
+        assert view["last_error"].startswith("Dokploy is unreachable")
+        client.get("/api/v1/dokploy/projects")
         assert client.get("/api/v1/dokploy/config").json()["reachable"] is False
+
+        fake.online = True
+        back = client.get("/api/v1/dokploy/projects")
+        assert back.status_code == 200
+        # The health comes with the list, so the page needs no second round trip.
+        assert back.json()["reachable"] is True and back.json()["last_error"] is None
+        assert back.json()["last_error_code"] is None
+        assert client.get("/api/v1/dokploy/config").json()["last_error"] is None
 
         # MRK-side rate limit protects Dokploy: an exhausted bucket answers 429 at once.
         fake.online = True
@@ -797,3 +835,252 @@ def test_rbac(tmp_path: Path, fake: FakeDokploy) -> None:
             assert (write == 200) is expected[2], (role, write)
             if not expected[2]:
                 assert configure(client, headers).status_code == 403
+
+
+# ----- harmony with Dokploy v0.31 ---------------------------------------------------
+
+
+def test_upstream_error_shapes_and_mapping() -> None:
+    parse = dokploy_client.parse_upstream_error
+    assert parse(b'{"message": "Service not found"}') == ("Service not found", None)
+    zod = json.dumps({"message": "Input validation failed", "issues": [
+        {"path": ["composeId"], "message": "Required"}, {"path": [], "message": "Bad"}]})
+    assert parse(zod.encode())[0] == "Input validation failed: composeId: Required; Bad"
+    envelope = json.dumps({"error": {"json": {"message": "Compose not found", "data": {
+        "code": "NOT_FOUND", "httpStatus": 404}}}})
+    assert parse(envelope.encode()) == ("Compose not found", "NOT_FOUND")
+    assert parse(b'{"error": {"message": "boom"}}') == ("boom", None)
+    assert parse(b"<html>") == ("", None)
+    assert "hunter2" not in parse(b'{"message": "failed: password=hunter2"}')[0]
+
+    mapped = dokploy_client.DokployClient._map_status  # noqa: SLF001
+    gone = mapped(400, b'{"message": "Service not found"}')
+    assert gone.code == "dokploy_not_found" and gone.status_code == 404
+    assert not gone.procedure_missing and gone.message == "Service not found"
+    assert mapped(400, envelope.encode()).code == "dokploy_not_found"
+    missing = mapped(404, b'{"message": "Not found", "code": "NOT_FOUND"}')
+    assert missing.procedure_missing and missing.code == "dokploy_not_found"
+    rejected = mapped(400, zod.encode())
+    assert rejected.code == "dokploy_rejected" and "composeId: Required" in rejected.message
+    # A known key refused one resource is not "the key was rejected".
+    refused = mapped(401, b'{"message": "You are not authorized to access this project"}')
+    assert refused.code == "dokploy_forbidden" and "not authorized" in refused.message
+    assert mapped(401, b'{"message": "Unauthorized"}').code == "dokploy_auth_failed"
+    assert mapped(401, b'{"message": "You are not authorized"}', probe=True).code == (
+        "dokploy_auth_failed"
+    )
+    assert mapped(403, b'{"message": "Permission denied"}').code == "dokploy_forbidden"
+    server = mapped(500, b'{"message": "column x does not exist"}')
+    assert server.code == "dokploy_failed" and server.message.endswith("column x does not exist")
+    assert not server.connection_failure and mapped(302, b"").connection_failure
+
+
+class _Records(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def test_one_failed_procedure_is_not_an_outage(tmp_path: Path, fake: FakeDokploy) -> None:
+    app = create_app(Settings.for_test(tmp_path / "cp"))
+    captured = _Records()
+    client_logger = logging.getLogger(dokploy_client.__name__)
+    client_logger.addHandler(captured)
+    client_logger.setLevel(logging.INFO)
+    events: list[Any] = []
+    with TestClient(app) as client:
+        async def collect(event) -> None:
+            events.append(event)
+
+        app.state.events.subscribe(collect)
+        headers = owner_headers(client)
+        assert configure(client, headers, cache_seconds=0).status_code == 200
+        assert client.get("/api/v1/dokploy/projects").status_code == 200
+
+        # Item procedures failing (500, forbidden) leave Dokploy reachable and quiet.
+        fake.overrides["application.one"] = (500, {"message": "db hiccup"})
+        broken = client.get("/api/v1/dokploy/services/application/app1")
+        assert broken.status_code == 502 and broken.json()["error"]["code"] == "dokploy_failed"
+        fake.overrides["application.one"] = (401, {"message": "You are not authorized"})
+        refused = client.get("/api/v1/dokploy/services/application/app1")
+        assert refused.json()["error"]["code"] == "dokploy_forbidden"
+        view = client.get("/api/v1/dokploy/config").json()
+        assert view["reachable"] is True and view["last_error"] is None
+        client.portal.call(asyncio.sleep, 0.05)
+        assert not [e for e in events if "reach" in e.type]
+        # One INFO line per non-2xx answer, with Dokploy's words but never the key.
+        lines = [r for r in captured.records
+                 if r.getMessage() == "dokploy answered with an error"]
+        assert any(getattr(r, "procedure", "") == "application.one"
+                   and getattr(r, "upstream_message", "") == "db hiccup" for r in lines)
+        assert all(API_KEY not in str(r.__dict__) for r in captured.records)
+
+        # Removed in Dokploy: v0.31 answers HTTP 400 "Service not found".
+        fake.overrides["application.one"] = (400, {"message": "Service not found"})
+        gone = client.get("/api/v1/dokploy/services/application/app1")
+        assert gone.status_code == 404
+        assert gone.json()["error"]["code"] == "dokploy_service_not_found"
+        fake.overrides["compose.deploy"] = (400, {"message": "Compose not found"})
+        action = client.post("/api/v1/dokploy/services/compose/cmp1/deploy", headers=headers)
+        assert action.status_code == 404
+        assert action.json()["error"]["code"] == "dokploy_service_not_found"
+
+        # Test returns Dokploy's reason with the code.
+        fake.overrides["settings.getDokployVersion"] = (401, {"message": "Invalid API key"})
+        tested = client.post("/api/v1/dokploy/test", headers=headers).json()
+        assert tested["ok"] is False and tested["error_code"] == "dokploy_auth_failed"
+        assert "Invalid API key" in tested["message"]
+        fake.overrides.clear()
+
+        # Two connection failures in a row are an outage, announced once; then recovery.
+        fake.online = False
+        for _ in range(3):
+            client.get("/api/v1/dokploy/projects")
+        fake.online = True
+        assert client.get("/api/v1/dokploy/projects").status_code == 200
+        client.portal.call(asyncio.sleep, 0.05)
+        assert [e.type for e in events if "reach" in e.type] == [
+            "dokploy.unreachable", "dokploy.reachable"
+        ]
+    client_logger.removeHandler(captured)
+
+
+def test_failure_notifications_survive_restart(tmp_path: Path, fake: FakeDokploy) -> None:
+    def run(collect_into: list[Any], configure_first: bool) -> None:
+        app = create_app(Settings.for_test(tmp_path / "cp"))
+        with TestClient(app) as client:
+            async def collect(event) -> None:
+                collect_into.append(event)
+
+            app.state.events.subscribe(collect)
+            headers = owner_headers(client) if configure_first else None
+            if headers is not None:
+                assert configure(client, headers, cache_seconds=0).status_code == 200
+            client.portal.call(dokploy.ACTIVE_SERVICE.poll_once, 60.0)
+            client.portal.call(asyncio.sleep, 0.05)
+
+    first: list[Any] = []
+    run(first, True)
+    assert [e.details["deployment_id"] for e in first if e.type == "dokploy.deploy_failed"] == [
+        "dep-recent-err"
+    ]
+    state = json.loads((tmp_path / "cp" / "control-plane" / "dokploy-state.json").read_text())
+    assert "dep-recent-err" in state["seen_failures"]
+
+    fake.deployments.append({
+        "deploymentId": "dep-while-down", "status": "error", "createdAt": iso(10),
+        "composeId": "cmp1", "compose": {"name": "workers"},
+    })
+    second: list[Any] = []
+    run(second, False)  # a restart: same data dir, config already saved
+    failed = [e.details["deployment_id"] for e in second if e.type == "dokploy.deploy_failed"]
+    assert failed == ["dep-while-down"]  # only the new failure, not dep-recent-err again
+
+
+def test_links_public_url_and_routing_invalidation(
+    tmp_path: Path, fake: FakeDokploy, monkeypatch
+) -> None:
+    from mrk_control_plane.modules import services as services_module
+
+    invalidated: list[int] = []
+
+    class Routing:
+        def invalidate(self) -> None:
+            invalidated.append(1)
+
+    class Active:
+        routing = Routing()
+
+    app = create_app(Settings.for_test(tmp_path / "cp"))
+    with TestClient(app) as client:
+        monkeypatch.setattr(services_module, "ACTIVE_SERVICE", Active())
+        headers = owner_headers(client)
+        view = configure(client, headers).json()
+        assert invalidated, "saving the Dokploy config re-checks domain routing"
+        assert view["panel_url"] == PANEL and view["public_url"] is None
+
+        bad = configure(client, headers, public_url="ftp://x.lan")
+        assert bad.status_code == 422
+        assert bad.json()["error"]["code"] == "invalid_dokploy_public_url"
+        view = configure(client, headers, public_url="https://dokploy.example.com/").json()
+        assert view["public_url"] == "https://dokploy.example.com"
+        assert view["panel_url"] == "https://dokploy.example.com" and view["url"] == PANEL
+        # A save without public_url keeps it; "" clears it.
+        kept = client.put("/api/v1/dokploy/config", headers=headers, json={"url": PANEL})
+        assert kept.json()["public_url"] == "https://dokploy.example.com"
+
+        tree = client.get("/api/v1/dokploy/projects").json()
+        project = tree["items"][0]
+        assert project["url"] == (
+            "https://dokploy.example.com/dashboard/project/proj1/environment/env1"
+        )
+        services = {s["id"]: s for s in project["services"]}
+        assert services["cmp1"]["url"] == (
+            "https://dokploy.example.com/dashboard/project/proj1/environment/env1"
+            "/services/compose/cmp1"
+        )
+        assert all(r.url.host == "dokploy.lan" for r in fake.calls())  # API stays internal
+
+        cleared = configure(client, headers, public_url="").json()
+        assert cleared["public_url"] is None and cleared["panel_url"] == PANEL
+
+
+def test_project_one_is_cached_and_budgeted(tmp_path: Path, fake: FakeDokploy) -> None:
+    app = create_app(Settings.for_test(tmp_path / "cp"))
+    with TestClient(app) as client:
+        headers = owner_headers(client)
+        assert configure(client, headers, cache_seconds=0).status_code == 200
+        for _ in range(3):
+            assert client.get("/api/v1/dokploy/projects").status_code == 200
+        index = client.portal.call(dokploy.ACTIVE_SERVICE.app_index)
+        assert index["shop-pg-abc"]["id"] == "pg1"
+        # Page loads and the appName index share one cached (secret-free) project.one.
+        assert len(fake.calls("project.one")) == 1
+        cached = dokploy.ACTIVE_SERVICE.cache.get("project-one:proj1")
+        assert "hunter2" not in json.dumps(cached)
+    assert dokploy.APP_INDEX_PROJECT_BUDGET <= 10
+
+
+def test_background_calls_yield_to_page_loads() -> None:
+    now = [0.0]
+
+    async def fake_sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    async def scenario() -> None:
+        bucket = TokenBucket(2.0, clock=lambda: now[0], sleep=fake_sleep)
+        # Full bucket (2): background may take one and leaves one for a page load.
+        assert await bucket.acquire_background(10) == 0.0
+        assert await bucket.acquire(0) == 0.0
+        # Empty: background waits for spare capacity instead of reserving a slot.
+        waited = await bucket.acquire_background(10)
+        assert waited > 0
+        with pytest.raises(DokployError) as info:
+            await bucket.acquire_background(0.01)
+        assert info.value.code == "dokploy_rate_limited"
+
+    asyncio.run(scenario())
+
+
+def test_container_labels_map_to_dokploy_services() -> None:
+    from mrk_control_plane.agent.docker_client import labels_subset
+
+    stack = {
+        "com.docker.stack.namespace": "devassist-mrkpanel-x1",
+        "com.docker.swarm.service.name": "devassist-mrkpanel-x1_mrk-panel",
+        "traefik.http.middlewares.auth.basicauth.users": "admin:$apr1$secret",
+    }
+    subset = labels_subset(stack, ())
+    assert subset["com.docker.stack.namespace"] == "devassist-mrkpanel-x1"
+    assert "traefik.http.middlewares.auth.basicauth.users" not in subset
+    assert dokploy.app_name_candidates(subset)[0] == "devassist-mrkpanel-x1"
+    index = {"devassist-mrkpanel-x1": {"type": "compose", "id": "c1"}}
+    assert dokploy.ref_for_labels(subset, index) == {"type": "compose", "id": "c1"}
+    # Without the namespace label the swarm name's prefix still finds it.
+    older = {"com.docker.swarm.service.name": "devassist-mrkpanel-x1_mrk-panel"}
+    assert dokploy.ref_for_labels(older, index) == {"type": "compose", "id": "c1"}
+    plain = {"com.docker.compose.project": "shop-workers-9z"}
+    assert dokploy.app_name_candidates(plain) == ["shop-workers-9z"]

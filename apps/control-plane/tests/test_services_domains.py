@@ -43,21 +43,30 @@ class FakeProbes:
         self.dns: dict[str, list[str]] = {}
         self.tls: dict[str, dict[str, Any]] = {}
         self.http: dict[str, dict[str, Any]] = {}
+        # Docker-network names that resolve here (internal Traefik).
+        self.local: set[str] = set()
+        self.calls: list[tuple[str, str, str, int]] = []
 
     def probes(self) -> Probes:
         async def resolve(host: str) -> list[str]:
             return list(self.dns.get(host, []))
 
-        async def tls(host: str, _address: str) -> dict[str, Any]:
+        async def tls(host: str, address: str, port: int = 443) -> dict[str, Any]:
+            self.calls.append(("tls", host, address, port))
             return self.tls.get(host, {"connected": True, "verified": True,
                                        "expires_at": int(time.time()) + 60 * 86400,
                                        "issuer": "Let's Encrypt", "hostname_match": True})
 
-        async def http(host: str, _address: str, _path: str, _https: bool) -> dict[str, Any]:
+        async def http(host: str, address: str, _path: str, _https: bool,
+                       port: int = 443) -> dict[str, Any]:
+            self.calls.append(("http", host, address, port))
             return self.http.get(host, {"ok": False, "status_code": None,
                                         "matched_service": None})
 
-        return Probes(resolve, tls, http)
+        async def local(name: str) -> bool:
+            return name in self.local
+
+        return Probes(resolve, tls, http, local)
 
 
 class FakeSupervisor:
@@ -422,10 +431,20 @@ def test_verification_problem_codes(isolated: FakeProbes) -> None:
     isolated.tls["b.example.com"] = {"connected": True, "verified": False,
                                      "error": "self-signed", "expires_at": int(now) + 90 * 86400}
     assert run("b.example.com")["problem_code"] == "tls_invalid"
+    # Nothing answers on the port: unreachable (not "no certificate").
     isolated.tls["b.example.com"] = {"connected": False, "verified": False}
     isolated.http["b.example.com"] = {"ok": False}
-    assert run("b.example.com")["problem_code"] == "tls_missing"
+    assert run("b.example.com")["problem_code"] == "unreachable"
     assert run("b.example.com", https=False)["problem_code"] == "unreachable"
+    # It answers, but without a TLS handshake.
+    isolated.tls["b.example.com"] = {"connected": True, "verified": False,
+                                     "error": "ssl_error:WRONG_VERSION_NUMBER"}
+    assert run("b.example.com")["problem_code"] == "tls_missing"
+    # Traefik's own default certificate: the real one is not issued yet.
+    isolated.tls["b.example.com"] = {"connected": True, "verified": False,
+                                     "error": "self-signed certificate", "default_cert": True,
+                                     "expires_at": int(now) + 365 * 86400}
+    assert run("b.example.com")["problem_code"] == "tls_pending"
     assert identify(httpx.Headers({"x-mrk-service": "panel"}), b"") == "panel"
     assert identify(httpx.Headers({"x-powered-by": "verdaccio/6.1.2"}), b"") == "npm"
     assert identify(httpx.Headers({"server": "MRK", "x-amz-request-id": "1"}), b"") == "s3"

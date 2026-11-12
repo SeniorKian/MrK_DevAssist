@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from mrk_control_plane import pypi_router
 from mrk_control_plane.auth import AuthStore
+from mrk_control_plane.components import Probe
 from mrk_control_plane.config import Settings
 from mrk_control_plane.database import Database
 from mrk_control_plane.healthcheck import probe_host
@@ -130,10 +131,10 @@ def test_readiness_reports_dead_pypi_router(tmp_path: Path, monkeypatch) -> None
     object.__setattr__(settings, "pypi_enabled", True)
     object.__setattr__(settings, "pypi_bootstrap_state_file", None)
 
-    def fake_check(_host: str, port: int, _path: str) -> bool:
-        return port != settings.pypi_router_health_port
+    def fake_check(_host: str, port: int, _path: str, _timeout: float = 1.0) -> Probe:
+        return Probe(port != settings.pypi_router_health_port)
 
-    monkeypatch.setattr("mrk_control_plane.main.check_http_component", fake_check)
+    monkeypatch.setattr("mrk_control_plane.components.probe_http_component", fake_check)
     with TestClient(create_app(settings)) as client:
         ready = client.get("/health/ready")
     assert ready.status_code == 503

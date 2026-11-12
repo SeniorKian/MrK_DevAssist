@@ -48,7 +48,9 @@ def broken_facts() -> dict:
         "firewall": {"configured": True, "mode": "dry_run", "since": NOW - 10 * DAY},
         "notifications": {"channels": 0},
         "tasks": {"failed_24h": 1},
-        "s3": {"buckets": 2, "public_endpoint": False},
+        "s3": {"buckets": 2, "public_endpoint": False,
+               "engine": {"expected": True, "reachable": False, "code": "s3_name_unresolved",
+                          "last_ok_at": NOW - 120}},
         "people": {"users": 1, "cached_packages": 0},
         "domains": {"count": 1, "problems": [{"id": "d1", "host": "npm.example.com",
                                               "service_id": "npm", "problem_code": "dns_missing"}]},
@@ -88,6 +90,7 @@ def test_every_rule_triggers() -> None:
         "backup_overdue:j2", "updates_available", "vulnerabilities_found",
         "firewall_dry_run", "no_notification_channel", "jobs_failed",
         "s3_public_endpoint_missing", "domain_problem:d1", "dns_unreachable",
+        "s3_unreachable",
     }
     assert by_id["dns_unreachable"]["severity"] == "error"
     assert by_id["dns_unreachable"]["params"] == {"error_code": "dns_unreachable",
@@ -97,6 +100,8 @@ def test_every_rule_triggers() -> None:
         "host": "npm.example.com", "problem_code": "dns_missing", "service_id": "npm"}
     assert {item["rule"] for item in items} | {
         "agent_not_paired", "no_backup_jobs",
+        # mutually exclusive with firewall_dry_run; covered below
+        "firewall_forced_dry_run", "firewall_unreachable",
         # need a reachable engine; covered in test_dns_d2.py
         "dns_under_pressure", "dns_attack_detected",
         # need a reachable engine; covered in test_dns_d4.py
@@ -190,7 +195,7 @@ def test_filtering_by_permission() -> None:
     # viewer: system, upstream, metrics, updates, vuln, task read only
     assert seen == {"component_unavailable", "disk_almost_full", "ecosystem_offline",
                     "upstreams_all_failing", "updates_available", "vulnerabilities_found",
-                    "jobs_failed", "domain_problem", "dns_unreachable"}
+                    "jobs_failed", "domain_problem", "dns_unreachable", "s3_unreachable"}
     assert all("_any_of" not in item for item in viewer["attention"])
     assert [action["id"] for action in viewer["quick_actions"]] == [
         "connect_project", "search_package", "view_server_usage", "my_services"
@@ -199,7 +204,7 @@ def test_filtering_by_permission() -> None:
     assert viewer["verdict"] == {"level": "problem", "count": len(viewer["attention"])}
 
     owner = home.build_summary(facts, principal("owner"), {}, NOW)
-    assert len(owner["attention"]) == 15
+    assert len(owner["attention"]) == 16
     assert [step["id"] for step in owner["checklist"]] == [
         step["id"] for step in home.CHECKLIST_STEPS
     ]
@@ -307,3 +312,86 @@ def test_failing_or_slow_sources_never_fail_the_response(tmp_path: Path, monkeyp
         service.invalidate()
         client.get("/api/v1/home")
         assert calls["count"] == 2
+
+
+def test_component_routes_follow_where_the_component_runs() -> None:
+    facts = healthy_facts()
+    facts["core"] = {
+        "components": {"npm_registry": "unavailable", "pypi_registry": "unavailable",
+                       "database": "unavailable", "pypi_upstream_router": "stopped"},
+        "details": {"npm_registry": {"state": "unavailable", "remote": True,
+                                     "code": "registry_name_unresolved"},
+                    "pypi_registry": {"state": "unavailable", "remote": False,
+                                      "code": "registry_unreachable"},
+                    "database": {"state": "unavailable", "remote": False,
+                                 "code": "database_unreachable"}},
+    }
+    by_id = {item["id"]: item for item in home.evaluate(facts, NOW)}
+    assert set(by_id) == {"component_unavailable:npm_registry",
+                          "component_unavailable:pypi_registry",
+                          "component_unavailable:database"}
+    npm = by_id["component_unavailable:npm_registry"]
+    assert npm["action"]["route"] == "#/services"
+    assert npm["params"] == {"component": "npm_registry", "remote": True,
+                             "code": "registry_name_unresolved"}
+    assert by_id["component_unavailable:pypi_registry"]["action"]["route"] == (
+        "#/packages/sources")
+    assert by_id["component_unavailable:database"]["action"]["route"] == "#/about"
+
+
+def test_one_failed_component_probe_is_not_an_alarm(tmp_path: Path, monkeypatch) -> None:
+    from mrk_control_plane.components import ComponentHealth
+
+    results = iter([("unavailable", "registry_timeout"), ("ready", None),
+                    ("unavailable", "registry_timeout"), ("unavailable", "registry_timeout")])
+
+    async def fake_health(_settings, _engine, **_kwargs):
+        state, code = next(results)
+        return {"database": ComponentHealth("ready"),
+                "npm_registry": ComponentHealth(state, True, code),
+                "pypi_registry": ComponentHealth("not_configured"),
+                "pypi_upstream_router": ComponentHealth("not_configured")}, None
+
+    monkeypatch.setattr(home, "component_health", fake_health)
+    with TestClient(create_app(Settings.for_test(tmp_path))) as client:
+        service = home.LAST_SERVICE
+        assert service is not None
+        states = [client.portal.call(service._core)["components"]["npm_registry"]
+                  for _ in range(4)]
+    assert states == ["checking", "ready", "checking", "unavailable"]
+
+
+def test_firewall_rules_use_the_helpers_real_mode() -> None:
+    def rules(firewall: dict) -> list[str]:
+        facts = healthy_facts()
+        facts["firewall"] = firewall
+        return [item["rule"] for item in home.evaluate(facts, NOW)]
+
+    old = NOW - 10 * DAY
+    # Panel setting says enforce, helper effectively runs dry-run (forced by env).
+    assert rules({"configured": True, "mode": "enforce", "effective_mode": "dry_run",
+                  "force_dry_run": True, "reachable": True, "since": old}) == [
+        "firewall_forced_dry_run"]
+    # The helper's effective mode wins over a stale panel setting.
+    assert rules({"configured": True, "mode": "enforce", "effective_mode": "enforce",
+                  "reachable": True, "since": old}) == []
+    assert rules({"configured": True, "mode": "dry_run", "effective_mode": "dry_run",
+                  "reachable": True, "since": old}) == ["firewall_dry_run"]
+    # Unreachable (already confirmed by the module's hysteresis) hides mode rules.
+    assert rules({"configured": True, "mode": "dry_run", "reachable": False,
+                  "error_code": "firewall_unreachable", "since": old}) == [
+        "firewall_unreachable"]
+    assert rules({"configured": True, "mode": "dry_run", "reachable": None,
+                  "since": NOW - DAY}) == []
+    assert rules({"configured": False, "mode": "dry_run", "reachable": False}) == []
+
+
+def test_s3_engine_rule_only_when_a_separate_engine_is_expected() -> None:
+    facts = healthy_facts()
+    facts["s3"]["engine"] = {"expected": False, "reachable": None}
+    assert home.evaluate(facts, NOW) == []
+    facts["s3"]["engine"] = {"expected": True, "reachable": None}
+    assert home.evaluate(facts, NOW) == []  # not confirmed yet
+    facts["s3"]["engine"] = {"expected": True, "reachable": False, "code": "engine_unreachable"}
+    [item] = home.evaluate(facts, NOW)
+    assert item["rule"] == "s3_unreachable" and item["action"]["route"] == "#/services"

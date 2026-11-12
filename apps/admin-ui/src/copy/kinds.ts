@@ -57,6 +57,10 @@ export const STATUS_WORDS: Record<string, { tone: Tone; label: Bi }> = {
   // deployments / updates
   done: { tone: "ok", label: { fa: "انجام شد", en: "Done" } },
   idle: { tone: "off", label: { fa: "بی‌کار", en: "Idle" } },
+  // Dokploy app states (DokployPanel maps Dokploy's done/running/idle/error to these)
+  deployed: { tone: "ok", label: { fa: "منتشر شده", en: "Deployed" } },
+  deploying: { tone: "busy", label: { fa: "در حال انتشار", en: "Deploying" } },
+  deploy_failed: { tone: "warn", label: { fa: "آخرین انتشار ناموفق بود", en: "Last deploy failed" } },
   update_available: { tone: "warn", label: { fa: "نسخه تازه آمده", en: "Update available" } },
   up_to_date: { tone: "ok", label: { fa: "به‌روز", en: "Up to date" } },
   // firewall

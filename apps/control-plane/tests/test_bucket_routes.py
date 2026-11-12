@@ -440,3 +440,134 @@ def test_bucket_delete_and_ownership_transfer_remove_routes(
     assert removed.status_code == 200, removed.text
     assert file_hosts(agent) == []
     assert routes().records() == {}
+
+
+class StackDokploy(FakeDokploy):
+    """Dokploy with S3 in its own Compose ``cmp-s3``; ``cmp-old`` was deleted."""
+
+    FILES = {"cmp1": "services:\n  mrk-panel:\n    image: p\n",
+             "cmp-s3": "services:\n  mrk-s3:\n    image: s\n"}
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        procedure = request.url.path.removeprefix("/api/")
+        params = dict(request.url.params)
+        if procedure == "compose.one":
+            self.requests.append(request)
+            if params["composeId"] not in self.FILES:
+                return httpx.Response(400, json={"message": "Service not found"})
+            return httpx.Response(200, json={"composeId": params["composeId"],
+                                             "composeFile": self.FILES[params["composeId"]]})
+        if procedure == "domain.byComposeId":
+            self.requests.append(request)
+            return httpx.Response(200, json=[
+                {"host": item["host"], "path": "/", "domainId": item["domainId"]}
+                for item in self.created if item.get("composeId", "cmp1") == params["composeId"]
+            ])
+        response = super().handler(request)
+        if procedure == "project.all":
+            projects = json.loads(response.content)
+            projects[0]["environments"][0]["compose"].append(
+                {"composeId": "cmp-s3", "name": "s3", "appName": "s3-x", "composeStatus": "done"})
+            return httpx.Response(200, json=projects)
+        return response
+
+
+def test_dokploy_route_goes_to_the_s3_stack_even_with_a_stale_id(
+    space: Space, dokploy: FakeDokploy, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = StackDokploy()
+    monkeypatch.setattr(dokploy_client, "TRANSPORT_FACTORY",
+                        lambda: httpx.MockTransport(stack.handler))
+    monkeypatch.setattr(domains_routing, "own_stack", lambda _data, service: {
+        "host": "mrk-s3", "port": 9000, "service_name": "mrk-s3", "compose_id": "cmp-old",
+    } if service == "s3" else None)
+    alice = owner_with_bucket(space)
+
+    created = attach(alice, "cdn.alice.example")
+    assert created["route"]["state"] == "pending"
+    sent = stack.created[0]
+    assert (sent["composeId"], sent["serviceName"], sent["port"]) == ("cmp-s3", "mrk-s3", 9000)
+    route = admin_item(space, "cdn.alice.example")["route"]
+    # Redeploy the S3 stack, not the panel.
+    assert route["suggested_action"]["endpoint"].endswith("/compose/cmp-s3/redeploy")
+    retried = space.client.post(f"{DOMAINS}/bucket-routes/cdn.alice.example/retry",
+                                headers=space.headers)
+    assert retried.json()["route"]["state"] == "ok"
+
+    # A domain already put on the S3 stack by hand is adopted, not a conflict.
+    stack.created.append({"host": "s3.sedamod.example", "domainId": "manual1",
+                          "composeId": "cmp-s3"})
+    made = space.client.post("/api/v1/s3/buckets", headers=space.headers,
+                             json={"name": "sedamod"})
+    assert made.status_code == 201, made.text
+    adopted = space.client.post("/api/v1/s3/buckets/sedamod/domains", headers=space.headers,
+                                json={"host": "s3.sedamod.example"})
+    assert adopted.status_code == 201, adopted.text
+    assert adopted.json()["route"]["state"] == "pending"
+    assert adopted.json()["route"]["conflict"] is None
+    assert len(stack.created) == 2
+    gone = space.client.request("DELETE", "/api/v1/s3/buckets/sedamod/domains/s3.sedamod.example",
+                                headers=space.headers)
+    assert gone.status_code == 200, gone.text
+    assert [item["host"] for item in stack.created] == ["cdn.alice.example"]
+
+
+class DeployingDokploy(FakeDokploy):
+    """Dokploy that lists deployments of cmp1 and can refuse a delete as "not found"."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.deployments = [{"deploymentId": "d1", "status": "done",
+                             "createdAt": "2026-01-01T00:00:00.000Z"}]
+        self.delete_missing = False
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        procedure = request.url.path.removeprefix("/api/")
+        if procedure == "deployment.allByCompose":
+            self.requests.append(request)
+            return httpx.Response(200, json=self.deployments)
+        if procedure == "domain.delete" and self.delete_missing:
+            self.requests.append(request)
+            return httpx.Response(400, json={"message": "Domain not found"})
+        return super().handler(request)
+
+
+def test_pending_route_turns_ok_after_a_new_deployment(
+    space: Space, dokploy: FakeDokploy, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = DeployingDokploy()
+    monkeypatch.setattr(dokploy_client, "TRANSPORT_FACTORY",
+                        lambda: httpx.MockTransport(fake.handler))
+    alice = owner_with_bucket(space)
+    assert attach(alice, "cdn.alice.example")["route"]["state"] == "pending"
+    # The reconcile tick: no new deployment yet -> still pending.
+    space.client.post(f"{DOMAINS}/reconcile", headers=space.headers)
+    assert admin_item(space, "cdn.alice.example")["route"]["state"] == "pending"
+    fake.deployments.append({"deploymentId": "d2", "status": "done",
+                             "createdAt": "2026-03-01T00:00:00.000Z"})
+    done = space.client.post(f"{DOMAINS}/reconcile", headers=space.headers)
+    assert done.status_code == 200, done.text
+    assert done.json()["bucket_routes"]["deployed"] == 1
+    assert admin_item(space, "cdn.alice.example")["route"]["state"] == "ok"
+
+    # Already gone in Dokploy (400 "not found"): the removal still counts.
+    fake.delete_missing = True
+    gone = alice.call("DELETE", "/s3/buckets/alice-files/domains/cdn.alice.example")
+    assert gone.status_code == 200
+    assert "cdn.alice.example" not in routes().records()
+
+
+def test_dokploy_failure_keeps_its_message_for_the_admin(
+    space: Space, dokploy: FakeDokploy, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("domain.create"):
+            return httpx.Response(400, json={"message": "Port 9000 is not exposed"})
+        return dokploy.handler(request)
+
+    monkeypatch.setattr(dokploy_client, "TRANSPORT_FACTORY", lambda: httpx.MockTransport(refuse))
+    alice = owner_with_bucket(space)
+    assert attach(alice, "cdn.alice.example")["route"]["state"] == "failed"
+    route = admin_item(space, "cdn.alice.example")["route"]
+    assert route["error_code"] == "dokploy_domain_failed"
+    assert "Port 9000 is not exposed" in route["upstream_message"]

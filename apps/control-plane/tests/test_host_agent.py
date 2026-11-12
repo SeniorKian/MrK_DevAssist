@@ -112,7 +112,9 @@ def agent_app(tmp_path: Path, seen: list[httpx.Request] | None = None):
     proc, root = fake_proc(tmp_path)
     config = AgentConfig(key=KEY, proc_dir=proc, root_paths=[root])
     return create_agent_app(
-        config, docker_transport=httpx.MockTransport(fake_docker_handler(seen or []))
+        config, docker_transport=httpx.MockTransport(
+            fake_docker_handler(seen if seen is not None else [])
+        )
     )
 
 
@@ -337,6 +339,59 @@ def test_agent_info_containers_and_summary(tmp_path: Path) -> None:
     assert all(request.method == "GET" for request in seen)
 
 
+def test_agent_info_serves_docker_facts_from_a_short_cache(tmp_path: Path) -> None:
+    seen: list[httpx.Request] = []
+    with TestClient(agent_app(tmp_path, seen)) as client:
+        first = signed_get(client, "/v1/info").json()
+
+        def docker_calls() -> int:
+            return len([item for item in seen if item.url.path.endswith(("/version", "/info"))])
+
+        assert docker_calls() == 2
+        for _ in range(3):
+            assert signed_get(client, "/v1/info").json()["docker"] == first["docker"]
+        # The panel's reachability probe must not hit the (slow) daemon every time.
+        assert docker_calls() == 2
+
+
+def test_name_resolution_errors_are_detected() -> None:
+    import socket
+
+    from mrk_control_plane.components import is_name_resolution_error
+
+    wrapped = httpx.ConnectError("[Errno -2] Name or service not known")
+    assert is_name_resolution_error(wrapped)
+    try:
+        try:
+            raise socket.gaierror(11001, "getaddrinfo failed")
+        except socket.gaierror as inner:
+            raise httpx.ConnectError("connect failed") from inner
+    except httpx.ConnectError as outer:
+        assert is_name_resolution_error(outer)
+    assert not is_name_resolution_error(httpx.ConnectError("[Errno 111] Connection refused"))
+    error = host_agent.HostAgentService._connection_error("http://mrk-agent:7070", wrapped)
+    assert error.code == "agent_name_unresolved" and "mrk-net" in error.message
+    assert host_agent.HostAgentService._connection_error(
+        "http://mrk-agent:7070", httpx.ConnectError("refused")).code == "agent_unreachable"
+
+
+def test_reachability_hysteresis() -> None:
+    from mrk_control_plane.components import Reachability
+
+    now = [0.0]
+    health = Reachability(3, 20.0, clock=lambda: now[0])
+    assert health.record(False) is None and health.reachable is None
+    now[0] = 10
+    assert health.record(False) is None
+    assert health.record(False) is None  # 3 failures, but only 10 s apart
+    now[0] = 25
+    assert health.record(False) == "offline" and health.reachable is False
+    assert health.record(False) is None  # published once
+    assert health.record(True) == "online" and health.failures == 0
+    assert health.record(False) is None and health.reachable is True  # one blip
+    assert health.record(False, immediate=True) == "offline"
+
+
 def test_agent_without_docker_reports_capability_false(tmp_path: Path) -> None:
     proc, root = fake_proc(tmp_path)
     config = AgentConfig(
@@ -436,6 +491,14 @@ def test_control_plane_pairing_status_events_and_unpair(tmp_path: Path, agent_tr
             "agent_unreachable"
         )
         assert client.post("/api/v1/agent/test", headers=headers).json()["ok"] is False
+        # Hysteresis: two failed probes are not an outage yet (no flip, no event).
+        still = client.get("/api/v1/agent/status").json()
+        assert still["reachable"] is True and still["consecutive_failures"] == 2
+        assert still["error_code"] == "agent_unreachable"
+        assert not [event for event in events if event.type == "agent.offline"]
+        assert client.post("/api/v1/agent/test", headers=headers).json()["ok"] is False
+        down = client.get("/api/v1/agent/status").json()
+        assert down["reachable"] is False and down["consecutive_failures"] == 3
         agent_transport["online"] = True
         assert client.post("/api/v1/agent/test", headers=headers).json()["ok"] is True
 
@@ -463,7 +526,8 @@ def test_control_plane_pairing_status_events_and_unpair(tmp_path: Path, agent_tr
         assert KEY_TEXT not in json.dumps(audit)
 
     types = [event.type for event in events]
-    # online->offline once (deduped), offline->online, online->offline (auth failure).
+    # online->offline once after 3 failures, offline->online, then online->offline at
+    # once for an auth failure (a retry cannot fix a rejected key).
     assert types == ["agent.offline", "agent.online", "agent.offline"]
     assert all(event.dedupe_key == "agent.reachability" for event in events)
     assert events[0].severity == "error" and events[1].severity == "info"

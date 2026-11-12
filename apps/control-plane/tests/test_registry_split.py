@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
@@ -155,7 +156,7 @@ def test_domains_route_to_the_service_own_stack(tmp_path: Path) -> None:
     routing = Routing(Ctx(), lambda: {"cert_resolver": "letsencrypt"})
     detected = {"dokploy_service_type": "compose", "dokploy_service_id": "panel-compose"}
     with pytest.raises(RoutingError) as caught:
-        routing._dokploy_body("npm", "npm.example.com", True, detected)  # noqa: SLF001
+        asyncio.run(routing._dokploy_body("npm", "npm.example.com", True, detected))  # noqa: SLF001
     assert caught.value.code == "service_in_own_stack"
     steps = routing.instructions("npm", "npm.example.com", True, detected)
     assert steps["dokploy"]["service_name"] == "mrk-npm" and steps["dokploy"]["port"] == 4873
@@ -164,9 +165,67 @@ def test_domains_route_to_the_service_own_stack(tmp_path: Path) -> None:
     state = settings.data_dir / "control-plane" / "install.json"
     state.write_text(json.dumps({"npm": {"deployment": {
         "target": "dokploy", "compose_id": "cmp-npm", "service_name": "mrk-npm"}}}))
-    body = routing._dokploy_body("npm", "npm.example.com", True, detected)  # noqa: SLF001
+    body = asyncio.run(
+        routing._dokploy_body("npm", "npm.example.com", True, detected))  # noqa: SLF001
     assert body["composeId"] == "cmp-npm" and body["serviceName"] == "mrk-npm"
     assert body["port"] == 4873
+
+
+def test_own_stack_compose_is_found_when_the_recorded_one_is_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stack re-created in Dokploy (stale id) or pasted by hand (no id) is found by name."""
+    from mrk_control_plane.modules import dokploy
+    from mrk_control_plane.modules.dokploy_client import DokployError
+    from mrk_control_plane.modules.domains_routing import Routing
+
+    settings = Settings.for_test(tmp_path / "cp")
+    remote_services.connect(settings, "npm", "mrk-npm", 4873)
+    files = {
+        "cmp-panel": "services:\n  mrk-panel:\n    image: x\n",
+        "cmp-new": "services:\n  mrk-npm:  # registry\n    image: x\n",
+    }
+    asked: list[str] = []
+
+    class FakeDokploy:
+        async def call(self, procedure: str, params: dict[str, str]) -> dict[str, str]:
+            assert procedure == "compose.one"
+            asked.append(params["composeId"])
+            if params["composeId"] not in files:
+                raise DokployError("dokploy_rejected", 409, "Service not found")
+            return {"composeFile": files[params["composeId"]]}
+
+        async def _projects_raw(self) -> list[dict[str, object]]:
+            return [{"projectId": "p1", "name": "DevAssist", "environments": [{
+                "name": "production",
+                "compose": [{"composeId": key, "name": "panel" if key == "cmp-panel" else "npm"}
+                            for key in files],
+            }]}]
+
+    monkeypatch.setattr(dokploy, "ACTIVE_SERVICE", FakeDokploy())
+
+    class Ctx:
+        data_dir = settings.data_dir
+
+    routing = Routing(Ctx(), lambda: {"cert_resolver": "letsencrypt"})
+    detected = {"dokploy_service_type": "compose", "dokploy_service_id": "cmp-panel"}
+    state = settings.data_dir / "control-plane" / "install.json"
+    for recorded in ("cmp-deleted", None):
+        state.write_text(json.dumps({"npm": {"deployment": {
+            "target": "dokploy", "compose_id": recorded, "service_name": "mrk-npm"}}}))
+        routing._own_compose.clear()  # noqa: SLF001
+        body = asyncio.run(
+            routing._dokploy_body("npm", "npm.example.com", True, detected))  # noqa: SLF001
+        assert body["composeId"] == "cmp-new" and body["serviceName"] == "mrk-npm"
+
+    # Remembered: the next domain within a minute asks Dokploy nothing at all ...
+    asked.clear()
+    asyncio.run(routing._dokploy_body("npm", "cdn.example.com", True, detected))  # noqa: SLF001
+    assert asked == []
+    # ... and later checks only the Compose it found.
+    routing._own_hit.clear()  # noqa: SLF001
+    asyncio.run(routing._dokploy_body("npm", "cdn.example.com", True, detected))  # noqa: SLF001
+    assert asked == ["cmp-new"]
 
 
 def test_native_registry_stacks_use_the_host_data_path(monkeypatch) -> None:
