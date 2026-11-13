@@ -7,6 +7,8 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-13
+
 ### Added
 - Builds from the internal mirrors (docs/48, phase 1): a wizard under «Server & apps → Builds
   from local mirrors» makes Dokploy builds take Docker images and npm/PyPI packages from this
