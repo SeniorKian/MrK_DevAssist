@@ -105,6 +105,7 @@ def _flatten(payload: dict, prefix: tuple[str, ...] = ()) -> dict[tuple[str, ...
 
 def test_every_module_setting_has_a_spec_with_the_same_default() -> None:
     from mrk_control_plane.modules import (
+        build_mirror,
         dbadmin_policy,
         dns,
         dokploy,
@@ -136,6 +137,7 @@ def test_every_module_setting_has_a_spec_with_the_same_default() -> None:
         "server_backups": {"timezone": server_backups_cron.DEFAULT_TIMEZONE},
         "services": domains_settings.DEFAULT_SETTINGS,
         "dns": dns.DEFAULT_SETTINGS,
+        "build_mirror": build_mirror.DEFAULT_SETTINGS,
         "network": {"dns": DnsConfig().public()},
     }
     for module, defaults in modules.items():

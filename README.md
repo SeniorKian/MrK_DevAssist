@@ -20,6 +20,7 @@ to the server.
 ## Features
 
 - **Package mirrors** — private npm and PyPI registries with automatic upstream failover; cached packages install even offline.
+- **Builds from local mirrors** — Dokploy builds take Docker images and npm/PyPI packages from these mirrors first: one command per server and one click for the apps, with a health check for every layer ([docs/48](docs/48-build-mirrors.md)).
 - **S3 storage** — native S3-compatible object store with a file manager, presigned links, versioning and lifecycle rules.
 - **DNS server** — authoritative and recursive DNS with DNSSEC, DoT/DoH/DoQ, zone transfer, ad/malware blocking, domain templates and flood protection.
 - **My space** — workspaces for users and teams with plans and quotas: their own domains, buckets, keys and packages, fully isolated.

@@ -30,6 +30,7 @@ def _load() -> None:
         "services",  # after dokploy/s3/host_agent/firewall: it reads their services
         "git_service",  # Git (Gitea), docs/46
         "registry_service",  # Docker image registry (Zot), docs/46
+        "build_mirror",  # builds from the internal mirrors, docs/48: reads the three above
         "install",  # add-service wizard (docs/44): reads agent/firewall/dns
         "install_auto",  # docs/44 phase 6: installs through the Dokploy/Coolify API
         "releases",  # panel/service versions and updates: reads install + services

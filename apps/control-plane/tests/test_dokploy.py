@@ -193,6 +193,8 @@ class FakeDokploy:
         self.projects = json.loads(json.dumps(PROJECT_ALL))
         # procedure -> (status, json body): answer that procedure this way instead.
         self.overrides: dict[str, tuple[int, Any]] = {}
+        # docs/48: env text written through saveEnvironment / compose.update.
+        self.saved_env: dict[str, str] = {}
 
     def calls(self, procedure: str | None = None) -> list[httpx.Request]:
         if procedure is None:
@@ -222,9 +224,11 @@ class FakeDokploy:
             "deployment.allCentralized": lambda: self.deployments,
             "domain.byApplicationId": lambda: APPLICATION_ONE["domains"],
             "domain.byComposeId": lambda: [{"host": "workers.example.com", "path": "/"}],
-            "application.one": lambda: APPLICATION_ONE,
+            "application.one": lambda: {**APPLICATION_ONE, **(
+                {"env": self.saved_env["app1"]} if "app1" in self.saved_env else {})},
             "compose.one": lambda: {"composeId": "cmp1", "name": "devassist-s3",
-                                    "composeStatus": "done", "domains": []},
+                                    "composeStatus": "done", "domains": [],
+                                    "env": self.saved_env.get("cmp1", "")},
             "postgres.one": lambda: POSTGRES_ONE,
             "deployment.readLogs": lambda: "step 1\nAuthorization: Bearer abc.def\nstep 3\n",
         }
@@ -243,6 +247,15 @@ class FakeDokploy:
         if request.method == "POST":
             assert request.headers["content-type"].startswith("application/json")
             router, _, action = procedure.partition(".")
+            if procedure == "application.saveEnvironment":
+                assert isinstance(body, dict) and body.get("applicationId") == "app1"
+                assert "buildArgs" in body  # resent, never dropped
+                self.saved_env["app1"] = body["env"]
+                return httpx.Response(200, json=True)
+            if procedure == "compose.update":
+                assert isinstance(body, dict) and set(body) == {"composeId", "env"}
+                self.saved_env[body["composeId"]] = body["env"]
+                return httpx.Response(200, json=True)
             if action in {"deploy", "redeploy", "start", "stop", "reload"}:
                 assert isinstance(body, dict)
                 if router == "application" and body.get("applicationId") != "app1":

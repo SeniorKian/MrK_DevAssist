@@ -7,6 +7,33 @@ No version has been tagged yet; everything below is in the first release, 0.1.0.
 
 ## [Unreleased]
 
+### Added
+- Builds from the internal mirrors (docs/48, phase 1): a wizard under «Server & apps → Builds
+  from local mirrors» makes Dokploy builds take Docker images and npm/PyPI packages from this
+  server's Zot, npm and PyPI services first, without changing Dokploy itself.
+  - One copy-paste command per server (`install`, `status`, `undo`, safe to rerun): adds the
+    image mirror as Docker's registry mirror (reload, no restart unless allowed), writes BuildKit
+    mirrors for docker.io, ghcr.io, quay.io and registry.k8s.io into Dokploy's volume (read by
+    every new builder, such as Railpack's), backs every file up and tests a real pull through
+    the mirror. `--registry-ca` supports a mirror with a private certificate.
+  - npm/PyPI variables (`NPM_CONFIG_REGISTRY`, `YARN_NPM_REGISTRY_SERVER`, `PIP_INDEX_URL`,
+    `UV_DEFAULT_INDEX`) are kept in a marked block on every Nixpacks, Railpack and buildpack
+    app through Dokploy's API, also for apps created later; removing it leaves the rest of the
+    app's variables as they were.
+  - A health list checks every layer separately (Dokploy, mirrors, server command, Docker's
+    live mirrors, builder, real test, apps) and estimates each app's real coverage from its
+    build log, naming tools that ignore the variables (Yarn 1, Poetry, uv.lock). A full text
+    report can be copied for bug reports.
+- Image registry token service (`/api/v1/registry/token`): when on, Zot sends Docker to the
+  panel for a short-lived RS256 token instead of asking for a password. Users keep their rights;
+  callers without a password from trusted address ranges (this server, build servers) may pull
+  only (the mirrors and official images, or everything if chosen); nobody pushes without a
+  password. Zot answers Docker with 401 whenever users exist and Docker sends no password to a
+  mirror, so without it the registry could never be Docker's mirror. The latest decisions are
+  listed for debugging (`/api/v1/registry/token-log`).
+- Server agent: read-only `GET /v1/build-mirror/facts` (Docker's mirrors in daemon.json and
+  live, the `mrk-mirror` builder, the server command's result file).
+
 ## [0.3.1] - 2026-11-12
 
 ### Fixed

@@ -25,7 +25,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import AGENT_VERSION, cgroups, dns_facts, host_facts, host_metrics
+from . import AGENT_VERSION, build_facts, cgroups, dns_facts, host_facts, host_metrics
 from . import backup as backup_sources
 from . import traefik as traefik_files
 from .docker_client import (
@@ -343,6 +343,7 @@ def create_agent_app(
                 "firewall": False,
                 "traefik_file": traefik_files.resolve_dir() is not None,
                 "dns_facts": True,
+                "build_mirror_facts": True,
             },
             "docker": docker_data,
             "host": host,
@@ -908,6 +909,27 @@ def create_agent_app(
             except DockerUnavailable:
                 gateway = None
         facts["docker_bridge_gateway"] = gateway
+        return facts
+
+    # ----- docs/48: read-only facts for the build-mirror health page ---------------
+
+    @app.get("/v1/build-mirror/facts")
+    async def build_mirror_facts() -> dict[str, Any]:
+        facts = await asyncio.to_thread(build_facts.collect, config.host_root)
+        facts["docker"] = False
+        facts["live_mirrors"] = None
+        facts["builder"] = None
+        facts["docker_version"] = None
+        if docker_possible:
+            try:
+                info = await docker.info()
+                facts["live_mirrors"] = build_facts.live_mirrors(info)
+                version = info.get("ServerVersion")
+                facts["docker_version"] = version[:32] if isinstance(version, str) else None
+                facts["builder"] = build_facts.builder_state(await docker.containers())
+                facts["docker"] = True
+            except DockerUnavailable:
+                facts["docker"] = False
         return facts
 
     return app

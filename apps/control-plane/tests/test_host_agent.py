@@ -310,7 +310,8 @@ def test_agent_info_containers_and_summary(tmp_path: Path) -> None:
     with TestClient(agent_app(tmp_path, seen)) as client:
         info = signed_get(client, "/v1/info").json()
         assert info["capabilities"] == {"docker": True, "host_metrics": True, "firewall": False,
-                                        "traefik_file": False, "dns_facts": True}
+                                        "traefik_file": False, "dns_facts": True,
+                                        "build_mirror_facts": True}
         assert info["docker"] == {
             "version": "27.3.1",
             "api_version": "1.47",

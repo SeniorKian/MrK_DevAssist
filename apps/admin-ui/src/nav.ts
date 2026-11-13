@@ -59,6 +59,7 @@ export type PanelKey =
   | "ServerPanel"
   | "MonitoringPanel"
   | "DokployPanel"
+  | "BuildMirrorPanel"
   | "UpdatesPanel"
   | "DbAdminPanel"
   | "S3Panel"
@@ -319,6 +320,17 @@ export const NAV_GROUPS: NavGroup[] = [
         anyOf: ["dokploy:read"],
         panel: "DokployPanel",
         keywords: ["dokploy", "deploy", "انتشار"]
+      },
+      {
+        key: "builds",
+        label: { fa: "ساخت از مخزن داخلی", en: "Builds from local mirrors" },
+        hint: {
+          fa: "ساخت برنامه‌های Dokploy پکیج‌ها و ایمیج‌ها را اول از مخزن‌های همین سرور بگیرد.",
+          en: "Dokploy builds take packages and images from this server's mirrors first."
+        },
+        anyOf: ["dokploy:read"],
+        panel: "BuildMirrorPanel",
+        keywords: ["build", "mirror", "npm", "pip", "docker", "آینه", "مخزن", "ساخت"]
       },
       {
         key: "updates",

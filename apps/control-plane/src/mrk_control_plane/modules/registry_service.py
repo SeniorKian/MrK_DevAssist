@@ -17,6 +17,7 @@ kept in the SecretStore) for status, the image list and tags.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -34,10 +35,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..auth import FieldError
 from ..credential_policy import check_password
 from ..module_context import ModuleContext
+from . import registry_token as tokens
 
 STATE_FILE = "registry.json"
 PANEL_USER = "mrk-panel"
 PANEL_SECRET_REF = "registry-panel"  # noqa: S105 - SecretStore reference, not a secret
+TOKEN_SECRET_REF = "registry-token-key"  # noqa: S105 - SecretStore reference, not a secret
 DEFAULT_URL = "http://mrk-registry:5000"
 CONTAINER_CONFIG_DIR = "/etc/zot"
 _USER = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
@@ -164,8 +167,14 @@ def validate_settings(payload: Any) -> dict[str, Any]:
             "upstreams": upstreams}
 
 
-def render_config(settings: dict[str, Any], users: list[dict[str, Any]]) -> dict[str, Any]:
-    """Zot's config.json (paths are the Zot container's own view)."""
+def render_config(settings: dict[str, Any], users: list[dict[str, Any]],
+                  bearer_realm: str | None = None) -> dict[str, Any]:
+    """Zot's config.json (paths are the Zot container's own view).
+
+    ``bearer_realm`` (docs/48): the panel's token address. Zot then challenges Docker
+    with "get a token there" instead of "password required"; htpasswd stays for
+    clients that send Basic credentials directly (the panel itself).
+    """
     pushers = sorted(user["name"] for user in users if user.get("access") == "push")
     pullers = sorted(user["name"] for user in users if user.get("access") == "pull")
     policies = []
@@ -182,18 +191,7 @@ def render_config(settings: dict[str, Any], users: list[dict[str, Any]]) -> dict
         # The users keep the same rights there, whichever matching pattern Zot applies.
         repositories[pattern] = {"policies": policies, "defaultPolicy": [],
                                  "anonymousPolicy": ["read"]}
-    registries = [
-        {
-            "urls": upstream["urls"],
-            "onDemand": True,
-            "tlsVerify": True,
-            "maxRetries": 3,
-            "retryDelay": "30s",
-            "content": [{"prefix": "**", "destination": upstream["destination"]}],
-        }
-        for upstream in settings.get("upstreams", [])
-        if upstream.get("enabled")
-    ]
+    registries = _sync_registries(settings)
     config: dict[str, Any] = {
         "distSpecVersion": "1.1.1",
         "storage": {
@@ -228,7 +226,25 @@ def render_config(settings: dict[str, Any], users: list[dict[str, Any]]) -> dict
     }
     if registries:
         config["extensions"]["sync"] = {"enable": True, "registries": registries}
+    if bearer_realm:
+        config["http"]["auth"]["bearer"] = {"realm": bearer_realm, "service": tokens.SERVICE,
+                                            "cert": tokens.CONTAINER_CERT}
     return config
+
+
+def _sync_registries(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "urls": upstream["urls"],
+            "onDemand": True,
+            "tlsVerify": True,
+            "maxRetries": 3,
+            "retryDelay": "30s",
+            "content": [{"prefix": "**", "destination": upstream["destination"]}],
+        }
+        for upstream in settings.get("upstreams", [])
+        if upstream.get("enabled")
+    ]
 
 
 class RegistryService:
@@ -249,6 +265,8 @@ class RegistryService:
         payload.setdefault("settings", {"anonymous_pull": False, "public_repositories": [],
                                         "upstreams": [dict(item) for item in DEFAULT_UPSTREAMS]})
         payload.setdefault("users", [])
+        if not isinstance(payload.get("token"), dict):
+            payload["token"] = tokens.default_settings()
         return payload
 
     def _write(self, payload: dict[str, Any]) -> None:
@@ -277,7 +295,12 @@ class RegistryService:
                     lines.append(f"{user['name']}:{user['hash']}")
             # htpasswd first: config.json names its users, and Zot reloads each file.
             _atomic_write(self.config_dir / "htpasswd", "\n".join(lines) + "\n", 0o644)
-            config = render_config(state["settings"], state["users"])
+            token = state["token"]
+            realm = self.effective_realm(token) if token.get("enabled") else None
+            # The certificate first: config.json points Zot at it.
+            _atomic_write(self.config_dir / tokens.CERT_FILE,
+                          tokens.certificate_pem(self.token_key()), 0o644)
+            config = render_config(state["settings"], state["users"], realm)
             _atomic_write(self.config_dir / "config.json",
                           json.dumps(config, indent=2, sort_keys=True) + "\n", 0o644)
 
@@ -292,6 +315,70 @@ class RegistryService:
             state["remote"] = {"url": url.strip().rstrip("/"), "connected_at": int(time.time())}
             self._write(state)
         self.write_files()
+
+    # ------------------------------------------------------------------ token service
+    def token_key(self) -> str:
+        try:
+            return self.ctx.secret_store.get(TOKEN_SECRET_REF)["pem"]
+        except (KeyError, ValueError):
+            pem = tokens.new_key_pem()
+            self.ctx.secret_store.replace(TOKEN_SECRET_REF, {"pem": pem})
+            return pem
+
+    @staticmethod
+    def derived_realm() -> str | None:
+        """The panel's main domain + the token path (None without a panel domain)."""
+        from . import services as services_module
+
+        service = services_module.ACTIVE_SERVICE
+        if service is None:
+            return None
+        try:
+            base = services_module.public_url(service.primary("panel"))
+        except Exception:  # noqa: BLE001 - no database row yet
+            return None
+        return base.rstrip("/") + tokens.TOKEN_PATH if base else None
+
+    def effective_realm(self, token: dict[str, Any] | None = None) -> str | None:
+        token = token if token is not None else self._read()["token"]
+        return token.get("realm") or self.derived_realm()
+
+    def get_token_settings(self) -> dict[str, Any]:
+        token = self._read()["token"]
+        return {**token, "effective_realm": self.effective_realm(token),
+                "derived_realm": self.derived_realm(), "service": tokens.SERVICE}
+
+    def put_token_settings(self, payload: Any) -> dict[str, Any]:
+        with self.lock:
+            state = self._read()
+            try:
+                token = tokens.validate(payload, state["token"])
+            except ValueError as exc:
+                raise RegistryError("validation_error", 422, str(exc)) from None
+            if token["enabled"] and not self.effective_realm(token):
+                raise RegistryError(
+                    "registry_token_realm_missing", 409,
+                    "Give the panel a domain (or set the token address) before turning this on")
+            state["token"] = token
+            self._write(state)
+        self.write_files()
+        return self.get_token_settings()
+
+    def check_user(self, name: str, password: str) -> str | None:
+        """"admin" / "push" / "pull" for a correct password, else None."""
+        import bcrypt
+
+        if name == PANEL_USER:
+            return "admin" if secrets.compare_digest(password, self.panel_password()) else None
+        for user in self._read()["users"]:
+            if user.get("name") == name and isinstance(user.get("hash"), str):
+                try:
+                    ok = bcrypt.checkpw(password.encode("utf-8")[:BCRYPT_MAX_BYTES],
+                                        user["hash"].encode("ascii"))
+                except ValueError:
+                    ok = False
+                return str(user.get("access")) if ok else None
+        return None
 
     # ------------------------------------------------------------------ settings/users
     def get_settings(self) -> dict[str, Any]:
@@ -385,6 +472,33 @@ class RegistryService:
                 raise RegistryError("registry_unreachable", 503,
                                     "The registry does not answer") from exc
 
+    async def docker_view(self) -> dict[str, Any]:
+        """What a Docker client without a password gets from Zot's ``/v2/`` (docs/48).
+
+        ``{"state": "token"|"password"|"open"|"unreachable"|"not_installed", "realm"}``:
+        ``token`` = Zot points Docker at a token address (``realm``), the only answer
+        Docker can follow without a password.
+        """
+        remote = self.connected()
+        if remote is None:
+            return {"state": "not_installed", "realm": None}
+        transport = TRANSPORT_FACTORY() if TRANSPORT_FACTORY is not None else None
+        async with httpx.AsyncClient(transport=transport, timeout=6.0, trust_env=False,
+                                     follow_redirects=False) as client:
+            try:
+                response = await client.get(remote["url"] + "/v2/",
+                                            headers={"User-Agent": "docker/28.5.2 mrk-check"})
+            except httpx.HTTPError:
+                return {"state": "unreachable", "realm": None}
+        if response.status_code == 200:
+            return {"state": "open", "realm": None}
+        challenge = response.headers.get("www-authenticate", "")
+        if response.status_code == 401 and challenge.lower().startswith("bearer"):
+            found = re.search(r'realm="([^"]+)"', challenge)
+            return {"state": "token", "realm": found.group(1) if found else None}
+        return {"state": "password" if response.status_code == 401 else "unreachable",
+                "realm": None}
+
     async def reachable(self) -> bool:
         try:
             response = await self._get("/v2/")
@@ -445,11 +559,64 @@ class PasswordBody(BaseModel):
     password: str | None = Field(default=None, max_length=256)
 
 
+class TokenSettingsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool | None = None
+    realm: str | None = Field(default=None, max_length=300)
+    trusted_ranges: list[str] | None = Field(default=None, max_length=tokens.MAX_RANGES)
+    scope: str | None = Field(default=None, pattern=r"^(mirrors|all)$")
+
+
+def _basic(header: str | None) -> tuple[str, str] | None:
+    if not header or not header.lower().startswith("basic "):
+        return None
+    try:
+        raw = base64.b64decode(header[6:].strip(), validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    name, sep, password = raw.partition(":")
+    return (name, password) if sep and name and len(raw) <= 512 else None
+
+
 def register(ctx: ModuleContext) -> None:
     global ACTIVE_SERVICE
     service = RegistryService(ctx)
     ACTIVE_SERVICE = service
     router = APIRouter(prefix="/api/v1/registry", tags=["registry"])
+    decisions = tokens.DecisionLog()
+
+    # ----- docs/48: the token service Docker asks (no panel session, by design) -----
+    @router.get("/token")
+    async def registry_token(request: Request):
+        from ..auth_api import client_ip
+
+        token_settings = service.get_token_settings()
+        ip = client_ip(request)
+        scopes = [item for item in request.query_params.getlist("scope") if item][
+            :tokens.MAX_SCOPES]
+        who = tokens.Who(user=None, access=None, ip=ip,
+                         trusted=tokens.ip_trusted(ip, token_settings["trusted_ranges"]))
+        if not token_settings["enabled"]:
+            decisions.add(who, scopes, [], "disabled")
+            return ctx.error_payload("registry_token_disabled", "The token service is off", 404)
+        credentials = _basic(request.headers.get("authorization"))
+        if credentials is not None:
+            access = await asyncio.to_thread(service.check_user, *credentials)
+            who.user = credentials[0][:64]
+            if access is None:
+                decisions.add(who, scopes, [], "bad_password")
+                await asyncio.sleep(1.0)  # slows guessing down
+                response = ctx.error_payload("unauthorized", "Wrong user name or password", 401)
+                response.headers["WWW-Authenticate"] = 'Basic realm="MrK DevAssist"'
+                return response
+            who.access = access
+        registry_settings = service.get_settings()
+        access_list = tokens.grant(scopes, who, registry_settings, token_settings)
+        token, issued = tokens.sign(service.token_key(), who.user or "", access_list)
+        decisions.add(who, scopes, access_list, "granted" if access_list else "nothing")
+        issued_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(issued))
+        return {"token": token, "access_token": token, "expires_in": tokens.TOKEN_TTL_SECONDS,
+                "issued_at": issued_at}
 
     def failure(exc: RegistryError):
         return ctx.error_payload(exc.code, exc.message, exc.status_code, **exc.extra)  # type: ignore[call-arg]
@@ -458,6 +625,30 @@ def register(ctx: ModuleContext) -> None:
         principal = ctx.require_principal(request, "registry:write")
         ctx.require_csrf(request, principal)
         return principal
+
+    @router.get("/token-settings")
+    async def registry_token_settings(request: Request):
+        ctx.require_principal(request, "registry:read")
+        return await asyncio.to_thread(service.get_token_settings)
+
+    @router.put("/token-settings")
+    async def registry_put_token_settings(request: Request, body: TokenSettingsBody):
+        principal = writer(request)
+        try:
+            result = await asyncio.to_thread(service.put_token_settings,
+                                             body.model_dump(exclude_none=True))
+        except RegistryError as exc:
+            return failure(exc)
+        await asyncio.to_thread(ctx.audit, principal.user_id, "registry.token.update",
+                                "registry", "on" if result["enabled"] else "off")
+        return result
+
+    @router.get("/token-log")
+    async def registry_token_log(request: Request):
+        ctx.require_principal(request, "registry:read")
+        return {"items": decisions.recent()}
+
+    service.decisions = decisions
 
     @router.get("/status")
     async def registry_status(request: Request):

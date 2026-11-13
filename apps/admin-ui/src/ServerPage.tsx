@@ -15,6 +15,7 @@ import { findGroup, parseHash, visibleTabs, type GroupKey } from "./nav";
 
 const ServerPanel = lazy(() => import("./ServerPanel").then((module) => ({ default: module.ServerPanel })));
 const MonitoringPanel = lazy(() => import("./MonitoringPanel").then((module) => ({ default: module.MonitoringPanel })));
+const BuildMirrorPanel = lazy(() => import("./BuildMirrorPanel").then((module) => ({ default: module.BuildMirrorPanel })));
 const DokployPanel = lazy(() => import("./DokployPanel").then((module) => ({ default: module.DokployPanel })));
 const UpdatesPanel = lazy(() => import("./UpdatesPanel").then((module) => ({ default: module.UpdatesPanel })));
 const DbAdminPanel = lazy(() => import("./DbAdminPanel").then((module) => ({ default: module.DbAdminPanel })));
@@ -93,6 +94,7 @@ export default function ServerPage({ user, permissions: permissionsProp, onUnaut
         {tab === "overview" && <ServerPanel {...panelProps} section="overview" />}
         {tab === "resources" && <MonitoringPanel {...panelProps} />}
         {tab === "apps" && <DokployPanel {...panelProps} />}
+        {tab === "builds" && <BuildMirrorPanel {...panelProps} />}
         {tab === "updates" && <UpdatesPanel {...panelProps} />}
         {tab === "databases" && <DbAdminPanel {...panelProps} />}
         {tab === "docker" && <ServerPanel {...panelProps} section="docker" />}

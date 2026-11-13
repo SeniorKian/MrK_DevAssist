@@ -33,7 +33,8 @@
 | image | `ghcr.io/project-zot/zot:v2.1.23` (با digest ثابت) |
 | داده | volume ‏`mrk-registry-data` |
 | تنظیمات | پنل `config.json` و `htpasswd` (bcrypt) را در volume مشترک `mrk-registry-config` می‌نویسد؛ Zot خودش reload می‌کند |
-| آینه‌ها | ghcr.io → `/ghcr.io`، quay.io → `/quay.io`، registry.k8s.io → `/registry.k8s.io`، Docker Hub → ریشه (برای `registry-mirrors` در `daemon.json`) |
+| آینه‌ها | ghcr.io → `/ghcr.io`، quay.io → `/quay.io`، registry.k8s.io → `/registry.k8s.io`، Docker Hub → ریشه |
+| دسترسی Docker از راه پنل | اختیاری: Zot برای مجوز Docker را به پنل می‌فرستد؛ از رنج IP مورد اعتماد (خود سرور، سرورهای ساخت) دریافت بدون رمز، بقیه با رمز. برای `registry-mirrors` در `daemon.json` لازم است چون Docker برای آینه رمز نمی‌فرستد ([سند 48](48-build-mirrors.md)) |
 | کاربران | `mrk-panel` (مدیر، برای پنل)، و کاربران pull یا push که پنل می‌سازد؛ رمز یک بار نشان داده می‌شود |
 | پورت | 5000، پیش‌فرض فقط روی `127.0.0.1`؛ Docker فقط با HTTPS وصل می‌شود، پس دامنه بدهید |
 

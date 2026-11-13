@@ -840,6 +840,54 @@ class DokployService:
         finally:
             self.cache.clear()
 
+    # ----- env of a service (docs/48, layer C) -------------------------------
+    async def build_env_source(self, service_type: str, service_id: str) -> dict[str, Any]:
+        """The fields layer C reads, straight from ``<router>.one`` (never cached).
+
+        Only these keys leave this method; the rest of the answer (secrets of other
+        kinds, mounts, ...) is dropped here.
+        """
+        if service_type not in norm.DEPLOYABLE_TYPES:
+            raise DokployError("invalid_service_type", 422, "Only applications and compose")
+        self.check_ref(service_type, service_id)
+        router, id_field, _status = norm.SERVICE_TYPES[service_type]
+        try:
+            payload = await self.call(f"{router}.one", params={id_field: service_id})
+        except DokployError as exc:
+            if exc.code == "dokploy_not_found":
+                raise DokployError(
+                    "dokploy_service_not_found", 404,
+                    "Dokploy service not found; it may have been removed. Refresh the list",
+                ) from None
+            raise
+        if not isinstance(payload, dict):
+            raise DokployError("dokploy_service_not_found", 404, "Dokploy service not found")
+        keep = ("env", "buildArgs", "buildSecrets", "createEnvFile", "buildType",
+                "sourceType", "composeType", "appName", "name")
+        return {key: payload[key] for key in keep if key in payload}
+
+    async def save_build_env(
+        self, service_type: str, service_id: str, env: str, source: dict[str, Any]
+    ) -> None:
+        """Write a new env text; every other field of saveEnvironment keeps its value."""
+        if service_type not in norm.DEPLOYABLE_TYPES:
+            raise DokployError("invalid_service_type", 422, "Only applications and compose")
+        self.check_ref(service_type, service_id)
+        if service_type == "application":
+            body: dict[str, Any] = {"applicationId": service_id, "env": env}
+            # saveEnvironment wants these too; resend what Dokploy holds now.
+            for key in ("buildArgs", "buildSecrets", "createEnvFile"):
+                if key in source:
+                    body[key] = source[key]
+            procedure = "application.saveEnvironment"
+        else:
+            body = {"composeId": service_id, "env": env}
+            procedure = "compose.update"
+        try:
+            await self.call(procedure, body=body, mutation=True, parse=False)
+        finally:
+            self.cache.pop(f"service:{service_type}:{service_id}")
+
     async def deployment_log(self, deployment_id: str, tail: int) -> dict[str, Any]:
         if not SERVICE_ID_RE.fullmatch(deployment_id):
             raise DokployError("invalid_deployment_id", 422, "Invalid Dokploy deployment id")

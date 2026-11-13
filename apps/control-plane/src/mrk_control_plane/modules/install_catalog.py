@@ -600,6 +600,8 @@ REGISTRY_COMPOSE = (
 # registry.k8s.io, each with fallback URLs. Images stay in this stack's volume.
 # Port 5000 is published on loopback by default: give it a domain in the panel
 # (Docker clients need HTTPS), or set MRK_REGISTRY_BIND.
+# Docker clients without a password (e.g. the server's own "registry-mirrors")
+# get a short-lived pull token from the panel when the token service is on (docs/48).
 services:
   mrk-registry:
     image: """ + ZOT_IMAGE + """
