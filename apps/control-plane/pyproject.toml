@@ -35,7 +35,7 @@ dev = [
   "httpx==0.28.1",
   "httpx2==2.16.0",
   # S3 engine end-to-end tests only (real SDK client against the engine).
-  "boto3==1.43.126",
+  "boto3==1.44.2",
   "pytest==9.2.0",
   "ruff==0.17.4",
 ]
