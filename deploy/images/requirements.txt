@@ -11,7 +11,7 @@ devpi-server==6.21.0
 devpi-web==5.2.0
 devpi-client==7.3.0
 socksio==1.0.0
-awscrt==0.38.1
+awscrt==0.38.2
 PyMySQL==1.2.3
 pymongo==4.19.0
 dnspython==2.9.2
